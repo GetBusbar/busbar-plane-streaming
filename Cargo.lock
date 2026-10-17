@@ -68,7 +68,6 @@ name = "busbar-plane-streaming"
 version = "1.6.0"
 dependencies = [
  "busbar-contract",
- "busbar-plugin-loader",
  "bytes",
  "serde",
  "serde_json",
@@ -82,6 +81,7 @@ dependencies = [
  "busbar-contract",
  "busbar-plane-streaming",
  "busbar-plugin-loader",
+ "serde_json",
 ]
 
 [[package]]
