@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE STREAMING PLANE'S DOOR: the one function a compiled-in row holds and a dropped-in image
-//! exports (`examples/streaming_door.rs`), and everything it states and answers.
+//! exports (the `busbar-plane-streaming-plugin` cdylib twin), and everything it states and answers.
 //!
 //! The composition root links [`door`] on its `plane-door` axis (the `plane-streaming` row,
 //! `BUSBAR-1.6.0.md` Part 3, section 12) and binds it through the loader's one load beside the
