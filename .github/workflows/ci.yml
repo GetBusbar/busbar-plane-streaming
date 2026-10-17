@@ -29,10 +29,10 @@ permissions:
 
 jobs:
   ci:
-    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@68df8203a98da0c71ec6049bbe92fc83fde25ae6
+    uses: GetBusbar/busbar/.github/workflows/plugin-ci.yml@46dfcc91eab87c28595f95b6a319ac2a20a95173
     with:
       service: none
-      busbar_checkout: false
+      busbar_checkout: true
       macos_test: "cargo test --workspace --locked"
       extra_test: ""
       plugin_crate: busbar-plane-streaming-plugin

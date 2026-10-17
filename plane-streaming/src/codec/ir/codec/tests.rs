@@ -1039,12 +1039,19 @@ fn cached_input_tokens_are_not_billed_twice() {
 
 /// Load the committed OpenAI Realtime `response.done` capture.
 ///
-/// It lives in the voice-conformance fixture tree, not beside this file, because that is where it was
-/// recorded and where the conformance battery judges against it. Copying it in here would fork the
-/// evidence into two copies that can quietly disagree.
+/// It lives in busbar's voice-conformance fixture tree, not beside this file, because that is where it
+/// was recorded and where the conformance battery judges against it. Copying it in here would fork the
+/// evidence into two copies that can quietly disagree. It is read from busbar at the pin this repo
+/// names (`BUSBAR_CHECKOUT`, a checkout of GetBusbar/busbar at `.busbar-ref`, which plugin CI
+/// exports); an unset variable is a failure, never a skip.
 fn captured_response_done() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testing/voice-conformance/fixtures/openai/response.done.json");
+    let busbar = std::env::var_os("BUSBAR_CHECKOUT").expect(
+        "BUSBAR_CHECKOUT is unset: the capture is busbar's \
+         testing/voice-conformance/fixtures/openai/response.done.json at .busbar-ref (plugin CI \
+         exports it; locally, point it at a busbar checkout)",
+    );
+    let path = std::path::PathBuf::from(busbar)
+        .join("testing/voice-conformance/fixtures/openai/response.done.json");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("the captured response.done is missing at {path:?} ({e})"));
     serde_json::from_str(&text).expect("the capture is JSON")
