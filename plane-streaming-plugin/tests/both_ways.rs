@@ -3,8 +3,10 @@
 
 //! THE STREAMING PLANE'S DOOR, BOTH WAYS (#2 (4)/(5): the plugin's own both-ways witness, over the
 //! real loader): the same door compiled in (`busbar_plane_streaming::door::door`, through
-//! `load_linked`) and dropped in (this crate's `streaming_door` example `cdylib`, which `cargo test`
-//! builds, through `load_dropped`), driven by ONE script over the plane kind. Every answer is judged
+//! `load_linked`) and dropped in (this crate's cdylib, `busbar_plane_streaming_plugin`, which `cargo
+//! test` builds beside the test, through `load_dropped`), driven by ONE script over the plane kind.
+//! It moved here with the crate from busbar's `crates/busbar-plane-streaming/tests/conformance.rs`;
+//! the published suite is this crate's `tests/conformance.rs`. Every answer is judged
 //! by the kind's own checks on the way; the two transcripts must be identical, and each is pinned.
 
 use std::mem::zeroed;
@@ -117,24 +119,23 @@ fn linked(d: &Dispatcher) -> Plugin<Plane> {
     load_linked::<Plane>(&row(), bind(d, "linked")).expect("the linked streaming door loads")
 }
 
-/// The example `cdylib` in this target dir (`cargo test` builds examples). Under CI a missing
-/// artifact is a failure, never a skip.
+/// This crate's dropped-in image, the `busbar_plane_streaming_plugin` cdylib `cargo test` builds
+/// beside the test (uplifted to `target/<profile>`, or hashed in its `deps`). A missing artifact is
+/// a failure, never a skip: this test IS the dropped-in door's proof.
 fn dropped(d: &Dispatcher) -> Option<Plugin<Plane>> {
-    let exe = std::env::current_exe().ok()?;
-    let path = exe.parent()?.parent()?.join("examples").join(format!(
-        "{}streaming_door{}",
-        std::env::consts::DLL_PREFIX,
-        std::env::consts::DLL_SUFFIX
-    ));
-    assert!(
-        path.exists() || std::env::var_os("CI").is_none(),
-        "the streaming_door example cdylib is not built under CI; a both-ways proof must not skip"
-    );
+    let exe = std::env::current_exe().expect("the test binary has a path");
+    let deps = exe.parent().expect("target/<profile>/deps");
+    let profile = deps.parent().expect("target/<profile>");
+    let file = busbar_plugin_loader::plugin_library_filename("busbar_plane_streaming_plugin");
+    let path = [profile.join(&file), deps.join(&file)]
+        .into_iter()
+        .find(|p| p.exists())
+        .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
     let stated = row().statement;
-    path.exists().then(|| {
+    Some(
         load_dropped::<Plane>(&path, &stated, bind(d, "dropped"))
-            .expect("the dropped streaming door loads")
-    })
+            .expect("the dropped streaming door loads"),
+    )
 }
 
 fn validate(p: &Plugin<Plane>, settings: &'static [u8]) -> Outcome {
@@ -325,7 +326,7 @@ fn the_dropped_door_answers_as_the_linked_door_does() {
         // A fresh instance of each door per script: the script opens its instance, and an open
         // instance refuses a second open.
         let Some(dropped) = dropped(&d) else {
-            eprintln!("skip: the streaming_door example cdylib is not built");
+            eprintln!("skip: the plugin cdylib is not built");
             return;
         };
         assert_eq!(
@@ -616,7 +617,7 @@ fn the_one_request_doors_answer_their_pieces_through_the_door() {
 fn the_dropped_door_answers_the_one_request_doors_as_the_linked_door_does() {
     let d = Dispatcher::new(DispatchConfig::default());
     let Some(dropped) = dropped(&d) else {
-        eprintln!("skip: the streaming_door example cdylib is not built");
+        eprintln!("skip: the plugin cdylib is not built");
         return;
     };
     assert_eq!(
@@ -753,7 +754,7 @@ fn a_live_session_is_answered_through_the_door() {
 fn the_dropped_door_answers_a_live_session_as_the_linked_door_does() {
     let d = Dispatcher::new(DispatchConfig::default());
     let Some(dropped) = dropped(&d) else {
-        eprintln!("skip: the streaming_door example cdylib is not built");
+        eprintln!("skip: the plugin cdylib is not built");
         return;
     };
     assert_eq!(
