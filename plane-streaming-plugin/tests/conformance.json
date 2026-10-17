@@ -1,0 +1,181 @@
+{
+  "settings": {
+    "session": {
+      "model": "m-cap"
+    }
+  },
+  "plane": {
+    "bad_settings": [
+      {
+        "nonsense_key": 1
+      },
+      {
+        "session_max_secs": 0
+      }
+    ],
+    "refresh_settings": {
+      "session": {
+        "model": "m-cap"
+      },
+      "session_max_secs": 1800
+    },
+    "public_url": "https://gw.example.com",
+    "open_claims": [
+      [
+        "POST",
+        "/v1/realtime/client_secrets"
+      ],
+      [
+        "POST",
+        "/v1/realtime/calls"
+      ],
+      [
+        "GET",
+        "/v1/realtime/sideband/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime/gemini/{call_id}"
+      ],
+      [
+        "GET",
+        "/twilio/{call_id}"
+      ]
+    ],
+    "refresh_claims": [
+      [
+        "POST",
+        "/v1/realtime/client_secrets"
+      ],
+      [
+        "POST",
+        "/v1/realtime/calls"
+      ],
+      [
+        "GET",
+        "/v1/realtime/sideband/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime/gemini/{call_id}"
+      ],
+      [
+        "GET",
+        "/twilio/{call_id}"
+      ]
+    ],
+    "member": "m-cap",
+    "caller_ref": "c0ffee",
+    "claimed": {
+      "unit": 7,
+      "claim": 1,
+      "method": "POST",
+      "target": "/v1/realtime/calls"
+    },
+    "unclaimed": {
+      "unit": 8,
+      "claim": 9,
+      "method": "GET",
+      "target": "/v1/unpublished",
+      "status": 404
+    },
+    "request": "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=oracle-offer\r\nt=0 0\r\n",
+    "request_out": "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=oracle-offer\r\nt=0 0\r\n",
+    "far_end": {
+      "status": 201,
+      "fields": [
+        [
+          "location",
+          "/v1/realtime/calls/rtc_oracle0001"
+        ]
+      ],
+      "answer": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
+      "answer_out": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
+      "units": []
+    },
+    "narrow": {
+      "unit": 9,
+      "reply_cap": 16,
+      "more": 3
+    },
+    "short": {
+      "unit": 11,
+      "buffer": "fields"
+    },
+    "sessions": [
+      {
+        "name": "live",
+        "unit": 20,
+        "claim": 2,
+        "stream": 20,
+        "reply_cap": 262144,
+        "steps": [
+          {
+            "label": "caller audio",
+            "piece": {
+              "from": "caller",
+              "bytes": [
+                "{\"type\":\"input_audio_buffer.append\",\"audio\":\"",
+                {
+                  "repeat": "AAAA",
+                  "times": 32000
+                },
+                "\"}"
+              ]
+            },
+            "want": {
+              "outcome": "Ready",
+              "to_far_end": true
+            }
+          },
+          {
+            "label": "turn attempt",
+            "piece": {
+              "from": "kernel",
+              "attempt": 1
+            },
+            "want": {
+              "outcome": "Ready"
+            }
+          },
+          {
+            "label": "far tool call",
+            "piece": {
+              "from": "far_end",
+              "status": 101,
+              "bytes": "{\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"lookup\"}}"
+            },
+            "want": {
+              "outcome": "Ready"
+            }
+          },
+          {
+            "label": "far usage",
+            "piece": {
+              "from": "far_end",
+              "bytes": "{\"type\":\"response.done\",\"response\":{\"usage\":{\"input_token_details\":{\"audio_tokens\":10,\"text_tokens\":3},\"output_token_details\":{\"audio_tokens\":20,\"text_tokens\":4}}}}"
+            },
+            "want": {
+              "outcome": "Ready"
+            }
+          },
+          {
+            "label": "caller end",
+            "piece": {
+              "from": "caller",
+              "last": true
+            },
+            "want": {
+              "outcome": "Ready",
+              "done": true
+            }
+          }
+        ]
+      }
+    ],
+    "refusal": {
+      "status": 403,
+      "text": "denied"
+    }
+  }
+}
