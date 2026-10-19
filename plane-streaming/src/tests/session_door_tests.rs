@@ -273,9 +273,9 @@ fn the_fee_unit_is_incurred_when_the_far_end_first_answers() {
 }
 
 /// THE SESSION-OPEN REWRITE (ARCHITECT Q-L5B-PROJECT; the retired streams crate's projection,
-/// verbatim): a hook's rewrite is a PATCH over the locked params (a key it names wins, a key it does
-/// not keep the plane's value, `null` clears); output that is not JSON, not an object, or not a
-/// session config once merged is refused, never opened as if no rewrite had been made.
+/// verbatim): a hook's rewrite is a PATCH over the locked params (a key it names wins, a key it
+/// does not keep the plane's value, `null` clears); output that is not JSON, not an object, or not
+/// a session config once merged is refused, never opened as if no rewrite had been made.
 #[test]
 fn a_session_open_rewrite_patches_the_locked_params_or_refuses() {
     let locked = SessionConfig {
@@ -370,9 +370,9 @@ fn tool_calls() -> u32 {
         .expect("declared") as u32
 }
 
-/// RED-BEFORE-GREEN (MONEY, THE DESIGN §7: "`cut-stream` cuts it, and a cut bills what streamed";
-/// units are reported "as they happen"): the kernel bills a session from the last units it
-/// reported, however it ends, and a cancel (a `cut-stream` budget cut, a drain) reports none of
+/// RED-BEFORE-GREEN (MONEY, THE DESIGN section 7: "`cut-stream` cuts it, and a cut bills what
+/// streamed"; units are reported "as they happen"): the kernel bills a session from the last units
+/// it reported, however it ends, and a cancel (a `cut-stream` budget cut, a drain) reports none of
 /// its own. So every answer carries the OPEN turn's running counts. A caller that streamed 2.5 s
 /// while the far end opened one tool call, cut before any usage report, bills 3 `audio_seconds_in`
 /// and 1 `tool_calls` with its fee. RED: the answers reported closed turns only, the last
