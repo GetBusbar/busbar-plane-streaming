@@ -122,7 +122,7 @@ fn linked(d: &Dispatcher) -> Plugin<Plane> {
 /// This crate's dropped-in image, the `busbar_plane_streaming_plugin` cdylib `cargo test` builds
 /// beside the test (uplifted to `target/<profile>`, or hashed in its `deps`). A missing artifact is
 /// a failure, never a skip: this test IS the dropped-in door's proof.
-fn dropped(d: &Dispatcher) -> Option<Plugin<Plane>> {
+fn dropped(d: &Dispatcher) -> Plugin<Plane> {
     let exe = std::env::current_exe().expect("the test binary has a path");
     let deps = exe.parent().expect("target/<profile>/deps");
     let profile = deps.parent().expect("target/<profile>");
@@ -132,10 +132,8 @@ fn dropped(d: &Dispatcher) -> Option<Plugin<Plane>> {
         .find(|p| p.exists())
         .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
     let stated = row().statement;
-    Some(
-        load_dropped::<Plane>(&path, &stated, bind(d, "dropped"))
-            .expect("the dropped streaming door loads"),
-    )
+    load_dropped::<Plane>(&path, &stated, bind(d, "dropped"))
+        .expect("the dropped streaming door loads")
 }
 
 fn validate(p: &Plugin<Plane>, settings: &'static [u8]) -> Outcome {
@@ -325,10 +323,7 @@ fn the_dropped_door_answers_as_the_linked_door_does() {
     for url in [Some(PUBLIC), None] {
         // A fresh instance of each door per script: the script opens its instance, and an open
         // instance refuses a second open.
-        let Some(dropped) = dropped(&d) else {
-            eprintln!("skip: the plugin cdylib is not built");
-            return;
-        };
+        let dropped = dropped(&d);
         assert_eq!(
             script(&dropped, url),
             script(&linked(&d), url),
@@ -616,10 +611,7 @@ fn the_one_request_doors_answer_their_pieces_through_the_door() {
 #[test]
 fn the_dropped_door_answers_the_one_request_doors_as_the_linked_door_does() {
     let d = Dispatcher::new(DispatchConfig::default());
-    let Some(dropped) = dropped(&d) else {
-        eprintln!("skip: the plugin cdylib is not built");
-        return;
-    };
+    let dropped = dropped(&d);
     assert_eq!(
         unit_script(&dropped),
         unit_script(&linked(&d)),
@@ -753,10 +745,7 @@ fn a_live_session_is_answered_through_the_door() {
 #[test]
 fn the_dropped_door_answers_a_live_session_as_the_linked_door_does() {
     let d = Dispatcher::new(DispatchConfig::default());
-    let Some(dropped) = dropped(&d) else {
-        eprintln!("skip: the plugin cdylib is not built");
-        return;
-    };
+    let dropped = dropped(&d);
     assert_eq!(
         session_script(&dropped),
         session_script(&linked(&d)),
