@@ -32,7 +32,7 @@
 
 use crate::codec::ir::config::SessionConfig;
 use crate::codec::ir::control::IrVad;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Context-window ceiling default — 32768 tokens.
 fn default_context_window_tokens() -> u32 {
@@ -64,6 +64,67 @@ fn default_session() -> SessionConfig {
     }
 }
 
+/// The keys `streams.session` may name: the members of the GA `session` object the plane models
+/// ([`SessionConfig`]). The section is the operator's, read strictly; the same object on the wire
+/// is the caller's, read leniently.
+pub(crate) const SESSION_KEYS: &[&str] = &[
+    "model",
+    "modalities",
+    "instructions",
+    "voice",
+    "input_audio_format",
+    "output_audio_format",
+    "turn_detection",
+    "tools",
+    "tool_choice",
+    "max_output_tokens",
+];
+
+/// The keys a `streams.session.turn_detection` of each `type` may name ([`IrVad`]).
+pub(crate) const VAD_KEYS: &[(&str, &[&str])] = &[
+    (
+        "server_vad",
+        &[
+            "type",
+            "threshold",
+            "prefix_padding_ms",
+            "silence_duration_ms",
+            "create_response",
+            "interrupt_response",
+        ],
+    ),
+    ("semantic_vad", &["type", "eagerness"]),
+];
+
+/// The first key under `streams.session` the plane does not model, as its path; `None` when every
+/// key is one it models.
+fn unknown_session_key(session: &serde_json::Value) -> Option<String> {
+    let session = session.as_object()?;
+    if let Some(key) = session.keys().find(|k| !SESSION_KEYS.contains(&k.as_str())) {
+        return Some(format!("session.{key}"));
+    }
+    let vad = session.get("turn_detection")?.as_object()?;
+    let ty = vad.get("type")?.as_str()?;
+    let (_, keys) = VAD_KEYS.iter().find(|(t, _)| *t == ty)?;
+    vad.keys()
+        .find(|k| !keys.contains(&k.as_str()))
+        .map(|key| format!("session.turn_detection.{key}"))
+}
+
+/// `streams.session`, read strictly: a key the plane does not model is refused with its path,
+/// never dropped. A typo'd `instruction:` would otherwise open every session with no locked
+/// instructions while the governed splice still cut the caller's.
+fn strict_session<'de, D: Deserializer<'de>>(d: D) -> Result<SessionConfig, D::Error> {
+    use serde::de::Error as _;
+    let value = serde_json::Value::deserialize(d)?;
+    if let Some(path) = unknown_session_key(&value) {
+        return Err(D::Error::custom(format!(
+            "streams.{path}: not a key of the locked session"
+        )));
+    }
+    SessionConfig::deserialize(value).map_err(D::Error::custom)
+}
+
 /// THE `streams:` SECTION — the voice plane's owned config. Its VAD/session/media shape IS the GA
 /// `session` object ([`SessionConfig`]); the three limits are the only plane-imposed ceilings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,7 +133,7 @@ pub struct StreamsCfg {
     /// The locked session defaults every live session opens with (media formats, voice, instructions,
     /// turn_detection/VAD, tool set, per-response max_output_tokens). Absent ⇒ [`default_session`]
     /// (server_vad, 500ms silence).
-    #[serde(default = "default_session")]
+    #[serde(default = "default_session", deserialize_with = "strict_session")]
     pub session: SessionConfig,
     /// Hard session wall-clock ceiling, in seconds. OPTIONAL, with no default: absent ⇒ no ceiling.
     /// Zero is refused at parse (a ceiling that closes every session at its open is not a ceiling),
