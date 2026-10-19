@@ -158,38 +158,6 @@ fn a_session_past_its_ceiling_is_told_why_and_ends() {
 }
 
 #[test]
-fn the_sessions_record_is_written_at_open_on_its_call_id_and_at_its_end() {
-    let mut s = SessionUnit::open_as(
-        OpenAiRealtimeCodec,
-        SessionConfig::default(),
-        false,
-        5_000_000_000,
-        None,
-        "call-1",
-        "ref-abc",
-    );
-    let opened = s.take_writes();
-    assert_eq!(opened.len(), 1);
-    assert_eq!(
-        (
-            opened[0].id.as_str(),
-            opened[0].owner.as_str(),
-            opened[0].updated_at,
-            opened[0].terminal
-        ),
-        ("call-1", "ref-abc", 5, false)
-    );
-    s.set_rtc_call_id("rtc_9", 6);
-    let _ = s.end();
-    let _ = s.end();
-    let later = s.take_writes();
-    assert_eq!(later.len(), 2, "the call id once, the end once");
-    assert_eq!(later[0].rtc_call_id.as_deref(), Some("rtc_9"));
-    assert!(later[1].terminal && later[1].rtc_call_id.as_deref() == Some("rtc_9"));
-    assert!(s.take_writes().is_empty());
-}
-
-#[test]
 fn admitted_milliseconds_meter_as_whole_seconds_rounded_up() {
     assert_eq!(meta::audio_seconds_in(0), 0);
     assert_eq!(meta::audio_seconds_in(1), 1);

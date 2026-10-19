@@ -21,7 +21,6 @@ use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
 use crate::meta;
 use crate::session::{class_counts, TurnCounters};
 use crate::session_pump::{SessionPump, TurnSink};
-use crate::session_row::VoiceSessionRow;
 use crate::splice::LockedKeys;
 
 /// The billable classes a session reports, in the tail's order (their index is the class a unit
@@ -72,10 +71,6 @@ pub const FRAMES_ARE_TEXT: bool = true;
 #[derive(Debug)]
 pub struct SessionUnit<C> {
     pump: SessionPump<C>,
-    /// The session's record: opened, its turn cursor, its provider call id, its end.
-    row: VoiceSessionRow,
-    /// Record writes not yet handed to the kernel, oldest first.
-    writes: Vec<VoiceSessionRow>,
     units: CumulativeUnits,
     twilio: Option<TwilioBridge>,
     /// The far end has been sent the locked session the telephony carrier's start called for.
@@ -90,9 +85,7 @@ where
     C: DuplexReader + DuplexWriter + LockedKeys,
 {
     /// A session over `codec`, locked to `locked`, opened at `now_ns`, bounded by `ceiling_secs`.
-    /// `telephony` puts the telephony carrier's envelope on the caller's side. `id` names the
-    /// session and `owner` is the caller's reference (never the principal); the session's record is
-    /// written at open.
+    /// `telephony` puts the telephony carrier's envelope on the caller's side.
     pub fn open(
         codec: C,
         locked: SessionConfig,
@@ -100,30 +93,7 @@ where
         now_ns: u64,
         ceiling_secs: Option<u64>,
     ) -> Self {
-        Self::open_as(codec, locked, telephony, now_ns, ceiling_secs, "", "")
-    }
-
-    /// [`Self::open`], naming the session `id` for `owner`.
-    pub fn open_as(
-        codec: C,
-        locked: SessionConfig,
-        telephony: bool,
-        now_ns: u64,
-        ceiling_secs: Option<u64>,
-        id: &str,
-        owner: &str,
-    ) -> Self {
-        let row = VoiceSessionRow {
-            id: id.to_string(),
-            owner: owner.to_string(),
-            turns: 0,
-            updated_at: now_ns / 1_000_000_000,
-            terminal: false,
-            rtc_call_id: None,
-        };
         SessionUnit {
-            writes: vec![row.clone()],
-            row,
             pump: SessionPump::new(codec, Some(locked)),
             units: CumulativeUnits::default(),
             twilio: telephony.then(TwilioBridge::default),
@@ -147,18 +117,6 @@ where
             units.turn_closed(None, open);
         }
         units
-    }
-
-    /// The record writes not yet handed to the kernel, oldest first; taking them clears them.
-    pub fn take_writes(&mut self) -> Vec<VoiceSessionRow> {
-        std::mem::take(&mut self.writes)
-    }
-
-    /// The provider named the session's call: it goes on the session's record.
-    pub fn set_rtc_call_id(&mut self, rtc_call_id: &str, now_s: u64) {
-        self.row.rtc_call_id = Some(rtc_call_id.to_string());
-        self.row.updated_at = now_s;
-        self.writes.push(self.row.clone());
     }
 
     /// `true` once the session has ended.
@@ -257,13 +215,11 @@ where
         plan
     }
 
-    /// The session ends: its open turn settles once, and the session's record is written terminal.
+    /// The session ends: its open turn settles once.
     pub fn end(&mut self) -> Plan {
         if !self.ended {
             self.ended = true;
             self.pump.settle_open_turn(&mut self.units);
-            self.row.terminal = true;
-            self.writes.push(self.row.clone());
         }
         Plan {
             end: true,

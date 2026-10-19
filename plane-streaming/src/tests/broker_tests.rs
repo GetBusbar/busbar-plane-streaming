@@ -85,16 +85,3 @@ fn the_browser_is_answered_the_secret_and_its_expiry_only() {
         serde_json::json!({"value": "ek_1", "expires_at_unix": 5})
     );
 }
-
-#[test]
-fn the_call_id_is_the_rtc_segment_of_the_location() {
-    assert_eq!(
-        rtc_call_id_of("/v1/realtime/calls/rtc_abc?x=1"),
-        Some("rtc_abc".into())
-    );
-    assert_eq!(
-        rtc_call_id_of("https://p.example/v1/realtime/calls/rtc_z#f"),
-        Some("rtc_z".into())
-    );
-    assert_eq!(rtc_call_id_of("/v1/realtime/calls/abc"), None);
-}

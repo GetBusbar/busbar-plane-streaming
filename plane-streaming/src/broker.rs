@@ -129,16 +129,6 @@ pub fn minted_answer(minted: &Minted) -> Vec<u8> {
     .unwrap_or_default()
 }
 
-/// The provider's call id in an SDP answer's `Location`: the last path segment starting `rtc_`, less
-/// any query or fragment.
-#[must_use]
-pub fn rtc_call_id_of(location: &str) -> Option<String> {
-    location
-        .rsplit('/')
-        .find(|seg| seg.starts_with("rtc_"))
-        .map(|seg| seg.split(['?', '#']).next().unwrap_or(seg).to_string())
-}
-
 #[cfg(test)]
 #[path = "tests/broker_tests.rs"]
 mod tests;

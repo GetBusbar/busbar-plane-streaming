@@ -96,7 +96,6 @@ fn the_sdp_offer_is_relayed_and_its_answer_names_the_call() {
 
     let r = sdp_reply(201, Some("/v1/realtime/calls/rtc_abc"), b"v=0 answer");
     assert_eq!(r.status, 201);
-    assert_eq!(r.rtc_call_id.as_deref(), Some("rtc_abc"));
     assert_eq!(
         r.fields,
         vec![
@@ -104,7 +103,6 @@ fn the_sdp_offer_is_relayed_and_its_answer_names_the_call() {
             ("location", "/v1/realtime/calls/rtc_abc".to_string()),
         ]
     );
-    assert_eq!(sdp_reply(400, None, b"no").rtc_call_id, None);
 }
 
 #[test]

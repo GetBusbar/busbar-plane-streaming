@@ -32,7 +32,7 @@
 //!
 //! The door ([`door`]) is the plane's one declaration and its one face. A door instance holds its
 //! live generations; a live session's state (the codec's decode state, the open turn's counters,
-//! the session's cumulative units and record) is a [`session_unit::SessionUnit`].
+//! the session's cumulative units) is a [`session_unit::SessionUnit`].
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -53,7 +53,6 @@ pub mod session;
 pub mod session_door;
 pub mod session_params;
 pub mod session_pump;
-pub mod session_row;
 pub mod session_unit;
 pub mod splice;
 
