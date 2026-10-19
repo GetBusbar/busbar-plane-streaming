@@ -705,13 +705,14 @@ fn a_live_session_is_answered_through_the_door() {
             && caller.contains("input_audio_buffer.append")
             && caller.contains(&payload)
             && caller.contains("more=0")
-            && caller.ends_with("units=[]"),
-        "the caller's frame is one turn toward the far end, its audio unchanged: {caller}"
+            && caller.ends_with("units=[4:1=2]"),
+        "the caller's frame is one turn toward the far end, its audio unchanged, and the open \
+         turn's two running seconds are reported with it: {caller}"
     );
     assert_eq!(
         line("turn attempt"),
         "turn attempt Ready emitted= more=0 far=false done=false status=0 verb= target= \
-         fields=[] units=[]",
+         fields=[] units=[4:1=2]",
         "the turn's request is the caller side's answer"
     );
     let far = line("far usage");
@@ -730,8 +731,9 @@ fn a_live_session_is_answered_through_the_door() {
     let recall = line("short re-call");
     assert!(
         recall.contains("far=true")
-            && recall.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=2 6:1=1]"),
-        "the re-call answers the same piece once, its audio not counted twice: {recall}"
+            && recall.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=4 6:1=1]"),
+        "the re-call answers the same piece once, its audio not counted twice (the open turn's \
+         two running seconds over the closed turn's two): {recall}"
     );
     let end = line("caller end");
     assert!(
