@@ -29,8 +29,8 @@ publish = false
 repository = "https://github.com/GetBusbar/busbar-plane-streaming"
 
 [workspace.dependencies]
-busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "80fc859dc686fe3c11c0e07f65e796a6ff7586a6" }
-busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "80fc859dc686fe3c11c0e07f65e796a6ff7586a6" }
+busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "d41587120122823228292158622798cf4987616f" }
+busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "d41587120122823228292158622798cf4987616f" }
 # busbar's root [workspace.dependencies], third-party rows, at 46dfcc91eab87c28595f95b6a319ac2a20a95173
 arc-swap = "1"
 async-trait = "0.1"
