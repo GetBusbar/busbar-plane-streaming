@@ -7,8 +7,9 @@
 //!
 //! The driver pushes the caller's pieces ([`SessionUnit::from_caller`]) and the far end's
 //! ([`SessionUnit::from_far_end`]); each answers a [`Plan`] of bytes for each side and whether the
-//! session ends. Every closed turn adds to the session's cumulative units ([`SessionUnit::units`]),
-//! which each answer reports; the kernel checkpoints them and decides a cut. The plane never cuts a
+//! session ends. The session's cumulative units ([`SessionUnit::units`]) are every closed turn's
+//! and the open turn's running counts, which each answer reports; the kernel checkpoints them,
+//! decides a cut, and bills the last checkpoint however the session ends. The plane never cuts a
 //! session on money: a cut is the kernel's, and it reaches the caller through the refusal render.
 
 use bytes::Bytes;
@@ -89,9 +90,9 @@ where
     C: DuplexReader + DuplexWriter + LockedKeys,
 {
     /// A session over `codec`, locked to `locked`, opened at `now_ns`, bounded by `ceiling_secs`.
-    /// `telephony` puts the telephony carrier's envelope on the caller's side. `id` names the session
-    /// and `owner` is the caller's reference (never the principal); the session's record is written
-    /// at open.
+    /// `telephony` puts the telephony carrier's envelope on the caller's side. `id` names the
+    /// session and `owner` is the caller's reference (never the principal); the session's record is
+    /// written at open.
     pub fn open(
         codec: C,
         locked: SessionConfig,
@@ -133,10 +134,19 @@ where
         }
     }
 
-    /// The session's cumulative units, per class in [`CLASSES`] order.
+    /// The session's cumulative units, per class in [`CLASSES`] order: every closed turn's, and the
+    /// open turn's running counts (its uplink audio and the tool calls it opened so far). Each
+    /// answer reports these, so the last one before any end the kernel imposes (a `cut-stream` cut,
+    /// a cancel, a drain) carries what streamed; a turn's close only moves its counts into the
+    /// closed total, and the figure never falls.
     #[must_use]
     pub fn units(&self) -> CumulativeUnits {
-        self.units
+        let mut units = self.units;
+        let open = self.pump.open_turn();
+        if !open.is_empty() {
+            units.turn_closed(None, open);
+        }
+        units
     }
 
     /// The record writes not yet handed to the kernel, oldest first; taking them clears them.
