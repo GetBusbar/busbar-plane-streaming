@@ -74,13 +74,22 @@ use busbar_contract::abi::sdk::publish::{ClaimSpec, SnapshotSpec};
 use busbar_contract::abi::sdk::{Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, Wake};
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
-use crate::claims::{Dialect, HTTP_TRANSPORT, WS_TRANSPORT};
 use crate::config::StreamsCfg;
 use crate::driven::{Door, Steps, FIELD_CONTENT_LENGTH};
 use crate::meta;
-use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
 use crate::session_door::{committed_session_config, Live, Sessions, Side, CEILING_TICK_NS};
+
+/// The carrier the session doors' upgrade lines ride.
+pub const WS_TRANSPORT: &str = "ws";
+/// The carrier the one-request doors (the mint and the SDP offer) ride.
+pub const HTTP_TRANSPORT: &str = "http";
+/// The OpenAI Realtime dialect's name, as the per-call `dialect` index names it.
+pub const OPENAI_REALTIME: &str = "openai_realtime";
+/// The Gemini Live dialect's name, as the per-call `dialect` index names it.
+pub const GEMINI_LIVE: &str = "gemini_live";
+/// The Twilio Media Streams dialect's name, as the per-call `dialect` index names it.
+pub const TWILIO_MEDIA_STREAMS: &str = "twilio-media-streams";
 
 /// The name the plane's Statement carries.
 pub const NAME: &str = crate::codec::PLANE_KEY;
@@ -140,7 +149,7 @@ const SECTIONS: &[Section] = &[
 pub const DIALECTS_BY_NAME: &[&str] = &[
     OPENAI_REALTIME,
     GEMINI_LIVE,
-    Dialect::TwilioMediaStreams.name(),
+    TWILIO_MEDIA_STREAMS,
     OPENAI_PROVIDER,
     GEMINI_PROVIDER,
 ];
