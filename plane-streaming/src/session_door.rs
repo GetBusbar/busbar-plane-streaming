@@ -15,14 +15,17 @@
 //!   caller is that answer's emission.
 //! - ONE FRAME PER ANSWER. Every frame keeps its own message boundary, so a piece that leaves more
 //!   than one frame owed (the telephony carrier's start and the locked session it is translated
-//!   into, a ceiling's error and the end) answers the first and queues the rest. A queued frame is the session's unsolicited output: the door wakes
-//!   the instance's driver ticket, `drive` names the session, and each collection (`FROM_KERNEL`,
-//!   no bytes, no attempt) answers the next queued frame, toward the side it is bound for.
-//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the six classes the plane counts, and,
-//!   once the far end has first answered the session, its fee unit ([`PER_SESSION_CLASS`], `1`):
-//!   a session whose far end never answered (its open failed) reports none, and its fee is refunded.
-//!   The kernel checkpoints them and writes the session's one line at its end; the plane holds no
-//!   reservation and never cuts on money.
+//!   into, a ceiling's error and the end) answers the first and queues the rest. A queued frame is
+//!   the session's unsolicited output: the door wakes the instance's driver ticket, `drive` names
+//!   the session, and each collection (`FROM_KERNEL`, no bytes, no attempt) answers the next queued
+//!   frame, toward the side it is bound for.
+//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the six classes the plane counts over its
+//!   closed turns and its open turn's running counts (so a cancel or a cut, which reports nothing
+//!   of its own, bills what streamed from the last answer), and, once the far end has first
+//!   answered the session, its fee unit ([`PER_SESSION_CLASS`], `1`): a session whose far end never
+//!   answered (its open failed) reports none, and its fee is refunded. The kernel checkpoints them
+//!   and writes the session's one line at its end; the plane holds no reservation and never cuts on
+//!   money.
 //! - THE WALL-CLOCK CEILING (`streams.session_max_secs`, Q21a) is measured on the kernel's tick
 //!   clock: while a live generation configures one the door asks to be ticked every
 //!   [`CEILING_TICK_NS`], a session's clock starts at the first tick after its first piece, and a

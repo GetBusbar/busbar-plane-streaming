@@ -21,3 +21,81 @@ fn an_unknown_key_is_refused() {
         .expect_err("an unknown key is refused");
     assert!(err.to_string().contains("nonsense_key"), "{err}");
 }
+
+/// RED-BEFORE-GREEN (THE DESIGN section 2, "Validation refusals, every kind"): a key the plane does
+/// not model INSIDE `streams.session` is refused with its path. RED: `instruction:` (a typo of
+/// `instructions:`) was dropped, every session opened with no locked instructions, and the governed
+/// splice still cut the caller's own.
+#[test]
+fn an_unknown_key_inside_the_locked_session_is_refused_with_its_path() {
+    for (blob, path) in [
+        (
+            r#"{"session":{"instruction":"be terse"}}"#,
+            "streams.session.instruction",
+        ),
+        (
+            r#"{"session":{"turn_detection":{"type":"server_vad","silence_ms":300}}}"#,
+            "streams.session.turn_detection.silence_ms",
+        ),
+    ] {
+        let err = serde_json::from_str::<StreamsCfg>(blob).expect_err("refused");
+        assert!(err.to_string().contains(path), "{blob}: {err}");
+    }
+    let ok: StreamsCfg =
+        serde_json::from_str(r#"{"session":{"instructions":"be terse","voice":"verse"}}"#)
+            .expect("every modelled key reads");
+    assert_eq!(ok.session.instructions.as_deref(), Some("be terse"));
+}
+
+/// The strict key lists name exactly the members the session object serializes: a field added to
+/// [`SessionConfig`] or [`IrVad`] must be added to them (each literal below names every field, so
+/// a new one fails to compile here first).
+#[test]
+fn the_strict_key_lists_are_the_session_objects_own_members() {
+    use crate::codec::ir::config::MaxOutputTokens;
+    use crate::codec::ir::control::Eagerness;
+    use crate::codec::ir::media::AudioFormat;
+    let keys = |v: serde_json::Value| -> Vec<String> {
+        let mut k: Vec<String> = v.as_object().expect("object").keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let sorted = |list: &[&str]| -> Vec<String> {
+        let mut k: Vec<String> = list.iter().map(|s| (*s).to_string()).collect();
+        k.sort();
+        k
+    };
+    let full = SessionConfig {
+        model: Some("m".into()),
+        modalities: vec!["audio".into()],
+        instructions: Some("i".into()),
+        voice: Some("v".into()),
+        input_audio_format: Some(AudioFormat::Pcm16),
+        output_audio_format: Some(AudioFormat::Pcm16),
+        turn_detection: Some(None),
+        tools: vec![serde_json::json!({})],
+        tool_choice: Some(serde_json::json!("auto")),
+        max_output_tokens: Some(MaxOutputTokens::Inf),
+    };
+    assert_eq!(
+        keys(serde_json::to_value(&full).expect("json")),
+        sorted(SESSION_KEYS)
+    );
+    let server = IrVad::ServerVad {
+        threshold: 0.5,
+        prefix_padding_ms: 1,
+        silence_duration_ms: 1,
+        create_response: true,
+        interrupt_response: true,
+    };
+    let semantic = IrVad::SemanticVad {
+        eagerness: Eagerness::Auto,
+    };
+    for (vad, ty) in [(server, "server_vad"), (semantic, "semantic_vad")] {
+        let (_, list) = VAD_KEYS.iter().find(|(t, _)| *t == ty).expect("listed");
+        assert_eq!(
+            keys(serde_json::to_value(&vad).expect("json")),
+            sorted(list)
+        );
+    }
+}

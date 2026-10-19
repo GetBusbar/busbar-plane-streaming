@@ -7,20 +7,22 @@
 //! bytes with governed byte-level splices; a WRITER runs only when translating." The governance a
 //! live session splices is Part 2 #45's browser trust boundary: the caller "never authors tools or
 //! instructions, and cannot override the session's locked instructions". So a caller frame that
-//! configures the session, or asks for one response under its own settings, has its instructions and
-//! tool set cut out and the session's locked keys put in their place; every other member it wrote
-//! passes as the caller wrote it, byte for byte, and so does every frame that configures nothing.
+//! configures the session, or asks for one response under its own settings, has its instructions
+//! and tool set cut out and the session's locked keys put in their place; every other member it
+//! wrote passes as the caller wrote it, byte for byte, and so does every frame that configures
+//! nothing.
 //!
 //! The edit is made on the frame's own bytes: one object member is rebuilt from the members the
 //! caller wrote (their bytes unchanged, in their order) and the locked members after them, and the
-//! bytes around that object are copied as they arrived. Keys are compared as the far end reads them,
-//! escapes decoded, and a key the caller wrote twice is cut every time it appears.
+//! bytes around that object are copied as they arrived. Keys are compared as the far end reads
+//! them, escapes decoded, and a key the caller wrote twice is cut every time it appears.
 
 use serde_json::{Map, Value};
 
 use crate::codec::ir::codec::gemini::{setup_locked, GeminiLiveCodec};
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
 use crate::codec::ir::config::SessionConfig;
+use crate::codec::ir::media::AudioFormat;
 
 /// Where in a dialect's caller frame the governed object sits, and what is done to it.
 #[derive(Debug)]
@@ -34,20 +36,35 @@ pub struct Rule {
     pub set: Map<String, Value>,
 }
 
-/// THE DIALECT'S GOVERNED KEYS: which caller frames a session's lock splices, and how.
+/// THE DIALECT'S GOVERNED KEYS: which caller frames a session's lock splices, and how. Every rule
+/// is applied to EVERY caller frame, by the frame's bytes: a governed object is governed wherever
+/// it sits at the top level, whatever the frame's `type` says (a far end may read a `type` the
+/// caller wrote twice differently from this reader).
 pub trait LockedKeys {
-    /// The rule for a frame that configures the session (`session.update`, `setup`), locked to
-    /// `locked`.
+    /// The rule for the object that configures the session (`session.update`'s `session`, `setup`),
+    /// locked to `locked`.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule;
-    /// The rule for a frame that asks for one response under its own settings; `None` for a
-    /// dialect with no such frame.
+    /// The rule for the object that asks for one response under its own settings; `None` for a
+    /// dialect with no such object.
     fn response_rule(&self) -> Option<Rule>;
+    /// Whether `frame` carries an item the caller may never author: a conversation item, or a
+    /// per-response input item, in a role that instructs the model (`system`, `developer`). Such a
+    /// frame goes nowhere. A frame whose bytes cannot be read here is answered `true`.
+    fn authors_instructions(&self, frame: &[u8]) -> bool;
+    /// The uplink audio format `frame` configures the session to (`Ok(None)`: it names none), read
+    /// from every key the dialect's far end reads one from. `Err` when it names one the plane
+    /// cannot meter, or names two that disagree: such a frame goes nowhere, because the far end
+    /// would read audio at a rate the plane does not count it at.
+    fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable>;
 }
 
-/// OpenAI Realtime: `session.update`'s `session`, and `response.create`'s `response`.
-const REALTIME_CUT: &[&str] = &["instructions", "tools"];
+/// OpenAI Realtime: `session.update`'s `session`, and `response.create`'s `response`. A stored
+/// `prompt` is instructions by reference, so it is the caller's to author no more than they are.
+const REALTIME_CUT: &[&str] = &["instructions", "tools", "prompt"];
 /// Gemini Live: `setup`'s system instruction and tools.
 const LIVE_CUT: &[&str] = &["systemInstruction", "tools"];
+/// The roles an item instructs the model in: never the caller's to author.
+const INSTRUCTING_ROLES: &[&str] = &["system", "developer"];
 
 impl LockedKeys for OpenAiRealtimeCodec {
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
@@ -68,6 +85,194 @@ impl LockedKeys for OpenAiRealtimeCodec {
             set: Map::new(),
         })
     }
+
+    /// `conversation.item.create`'s `item`, and `response.create`'s `response.input` items, read
+    /// wherever they sit at the top level.
+    fn authors_instructions(&self, frame: &[u8]) -> bool {
+        let Some((top, _)) = members(frame, ws(frame, 0)) else {
+            return true;
+        };
+        for m in &top {
+            let verdict = match m.key.as_str() {
+                "item" => instructs(frame, m.value.0),
+                "response" => input_instructs(frame, m.value.0),
+                _ => Some(false),
+            };
+            if verdict != Some(false) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The legacy `session.input_audio_format` and the GA `session.audio.input.format`, every
+    /// spelling of each the frame carries.
+    fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
+        let (top, _) = members(frame, ws(frame, 0)).ok_or(Unmeterable)?;
+        let mut named = Named::default();
+        for session in top.iter().filter(|m| m.key == "session") {
+            if frame.get(session.value.0) != Some(&b'{') {
+                continue;
+            }
+            let (keys, _) = members(frame, session.value.0).ok_or(Unmeterable)?;
+            for m in &keys {
+                match m.key.as_str() {
+                    "input_audio_format" => {
+                        named.add(legacy_format(&frame[m.value.0..m.value.1])?)?
+                    }
+                    "audio" => {
+                        for input in nested(frame, m.value.0, "input")? {
+                            for format in nested(frame, input, "format")? {
+                                named.add(ga_format(frame, format)?)?;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(named.0)
+    }
+}
+
+/// A caller frame names an uplink audio format the plane cannot meter, or two that disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unmeterable;
+
+/// The one format a frame's keys name, or none; a second that disagrees is refused.
+#[derive(Default)]
+struct Named(Option<AudioFormat>);
+
+impl Named {
+    fn add(&mut self, format: Option<AudioFormat>) -> Result<(), Unmeterable> {
+        match (self.0, format) {
+            (_, None) => Ok(()),
+            (None, Some(f)) => {
+                self.0 = Some(f);
+                Ok(())
+            }
+            (Some(a), Some(b)) if a == b => Ok(()),
+            _ => Err(Unmeterable),
+        }
+    }
+}
+
+/// The objects at every `key` member of the object at `b[open]` (none when `b[open]` is not an
+/// object: the far end refuses that shape itself).
+fn nested(b: &[u8], open: usize, key: &str) -> Result<Vec<usize>, Unmeterable> {
+    if b.get(open) != Some(&b'{') {
+        return Ok(Vec::new());
+    }
+    let (keys, _) = members(b, open).ok_or(Unmeterable)?;
+    Ok(keys
+        .iter()
+        .filter(|m| m.key == key)
+        .map(|m| m.value.0)
+        .collect())
+}
+
+/// A legacy format token (`"pcm16"`, `"g711_ulaw"`); `null` names none.
+fn legacy_format(value: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
+    match serde_json::from_slice::<Option<String>>(value).map_err(|_| Unmeterable)? {
+        None => Ok(None),
+        Some(token) => AudioFormat::from_wire(&token).map(Some).ok_or(Unmeterable),
+    }
+}
+
+/// A GA format object (`{"type":"audio/pcm","rate":24000}`, `{"type":"audio/pcmu"}`), or a legacy
+/// token where one is written in its place; `null` names none.
+fn ga_format(b: &[u8], at: usize) -> Result<Option<AudioFormat>, Unmeterable> {
+    let end = value_end(b, at).ok_or(Unmeterable)?;
+    if b.get(at) != Some(&b'{') {
+        return legacy_format(&b[at..end]);
+    }
+    let (keys, _) = members(b, at).ok_or(Unmeterable)?;
+    let mut named = Named::default();
+    let mut pcm = false;
+    for m in keys.iter().filter(|m| m.key == "type") {
+        let token: String =
+            serde_json::from_slice(&b[m.value.0..m.value.1]).map_err(|_| Unmeterable)?;
+        match token.as_str() {
+            "audio/pcm" => pcm = true,
+            "audio/pcmu" => named.add(Some(AudioFormat::G711Ulaw))?,
+            _ => return Err(Unmeterable),
+        }
+    }
+    if pcm {
+        // The GA PCM format is 24 kHz; a rate it states must be that one.
+        for m in keys.iter().filter(|m| m.key == "rate") {
+            let rate: u64 =
+                serde_json::from_slice(&b[m.value.0..m.value.1]).map_err(|_| Unmeterable)?;
+            if rate != 24_000 {
+                return Err(Unmeterable);
+            }
+        }
+        named.add(Some(AudioFormat::Pcm16))?;
+    }
+    match named.0 {
+        Some(f) => Ok(Some(f)),
+        // A format object that names no type is one the plane cannot meter.
+        None => Err(Unmeterable),
+    }
+}
+
+/// Whether the item at `b[at]` is in an instructing role: `Some(true)` when any `role` it carries
+/// is one, `Some(false)` when none is (or it is not an object), `None` when it cannot be read.
+fn instructs(b: &[u8], at: usize) -> Option<bool> {
+    if b.get(at) != Some(&b'{') {
+        return Some(false);
+    }
+    let (keys, _) = members(b, at)?;
+    for m in keys.iter().filter(|m| m.key == "role") {
+        if let Ok(role) = serde_json::from_slice::<String>(&b[m.value.0..m.value.1]) {
+            if INSTRUCTING_ROLES
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(role.trim()))
+            {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
+}
+
+/// Whether the response object at `b[at]` carries, in any `input` array, an item in an
+/// instructing role.
+fn input_instructs(b: &[u8], at: usize) -> Option<bool> {
+    if b.get(at) != Some(&b'{') {
+        return Some(false);
+    }
+    let (keys, _) = members(b, at)?;
+    for m in keys.iter().filter(|m| m.key == "input") {
+        for item in elements(b, m.value.0)? {
+            if instructs(b, item)? {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
+}
+
+/// Where each element of the array at `b[open]` starts; none when it is not an array.
+fn elements(b: &[u8], open: usize) -> Option<Vec<usize>> {
+    if b.get(open) != Some(&b'[') {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut i = ws(b, open + 1);
+    if b.get(i) == Some(&b']') {
+        return Some(out);
+    }
+    loop {
+        let end = value_end(b, i)?;
+        out.push(i);
+        let next = ws(b, end);
+        match b.get(next)? {
+            b',' => i = ws(b, next + 1),
+            b']' => return Some(out),
+            _ => return None,
+        }
+    }
 }
 
 impl LockedKeys for GeminiLiveCodec {
@@ -81,6 +286,17 @@ impl LockedKeys for GeminiLiveCodec {
 
     fn response_rule(&self) -> Option<Rule> {
         None
+    }
+
+    /// Gemini Live's conversation turns are `user` and `model`: no item instructs the model.
+    fn authors_instructions(&self, _frame: &[u8]) -> bool {
+        false
+    }
+
+    /// Gemini Live states each uplink blob's format on the blob itself (its `mimeType`), and each
+    /// blob is metered at the format it states: `setup` configures none.
+    fn uplink_format(&self, _frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
+        Ok(None)
     }
 }
 
@@ -115,8 +331,8 @@ struct JsonMember {
     value: (usize, usize),
 }
 
-/// The object at `b[open]`, rebuilt: the caller's members not cut and not set, in order and byte for
-/// byte, then each `set` member (merged into the caller's when both are objects).
+/// The object at `b[open]`, rebuilt: the caller's members not cut and not set, in order and byte
+/// for byte, then each `set` member (merged into the caller's when both are objects).
 fn object(b: &[u8], open: usize, cut: &[&str], set: &Map<String, Value>) -> Option<Vec<u8>> {
     let (members, _) = members(b, open)?;
     let mut out = vec![b'{'];

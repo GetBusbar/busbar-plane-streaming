@@ -31,7 +31,7 @@ use crate::codec::ir::media::AudioFormat;
 use crate::codec::ir::tool::IrDuplexTool;
 use crate::codec::ir::usage::IrDuplexUsage;
 use crate::session::TurnCounters;
-use crate::splice::{splice, LockedKeys};
+use crate::splice::{splice, LockedKeys, Rule};
 
 /// The reason code of the error frame a session past its configured ceiling is closed with.
 pub const SESSION_CEILING_REASON: &str = "session_expired";
@@ -75,6 +75,8 @@ pub struct SessionPump<C> {
     /// The format uplink audio is counted in when a frame's wire states none: the locked config's
     /// input format, else the one the caller's session update states, else PCM16.
     audio_in: AudioFormat,
+    /// The governed splices every caller frame takes under the lock, built once at the lock.
+    rules: Vec<Rule>,
 }
 
 impl<C> SessionPump<C>
@@ -87,8 +89,15 @@ where
             .as_ref()
             .and_then(|c| c.input_audio_format)
             .unwrap_or(AudioFormat::Pcm16);
+        let rules = match &locked_config {
+            Some(locked) => std::iter::once(codec.configure_rule(locked))
+                .chain(codec.response_rule())
+                .collect(),
+            None => Vec::new(),
+        };
         SessionPump {
             codec,
+            rules,
             decode: DecodeState::default(),
             turn: TurnCounters::default(),
             locked_config,
@@ -150,50 +159,55 @@ where
     }
 
     /// A FRAME FROM THE CALLER. It reaches the far end as the caller sent it; uplink audio is
-    /// counted; a frame that configures the session or asks for a response under its own settings
-    /// takes the locked keys. A frame that is not JSON goes nowhere: the lock is judged on what
-    /// the reader reads, and bytes it cannot read are never handed to a far end whose own reader
-    /// might read them differently.
+    /// counted. Under a lock it is governed by its BYTES, whatever its `type` says: every
+    /// configuring object and per-response object in it takes the locked keys, and a frame that
+    /// authors an instructing item goes nowhere (Part 2 #45). A frame that configures an uplink
+    /// format the plane cannot meter, or one other than the session's locked format, goes nowhere:
+    /// the far end would read the caller's audio at a rate the plane does not count it at. A frame
+    /// that is not JSON goes nowhere: bytes the reader cannot read are never handed to a far end
+    /// whose own reader might read them differently.
     pub fn on_client_frame(&mut self, frame: WireEvent) -> Outbound {
         let mut out = Outbound::default();
         if serde_json::from_slice::<serde::de::IgnoredAny>(&frame.0).is_err() {
             return out;
         }
-        let mut configures = false;
-        let mut responds = false;
-        for ev in self.codec.read_up_ref(WireRef(&frame.0), &mut self.decode) {
-            match ev {
-                IrClientEvent::AudioFrame(f) => {
-                    self.turn
-                        .admit_audio(f.format.unwrap_or(self.audio_in), f.media.len());
-                }
-                IrClientEvent::Control(IrDuplexControl::SessionConfigure { config }) => {
-                    configures = true;
-                    let locked = self
-                        .locked_config
-                        .as_ref()
-                        .and_then(|c| c.input_audio_format);
-                    if let Some(fmt) = locked.or(config.input_audio_format) {
-                        self.audio_in = fmt;
-                    }
-                }
-                IrClientEvent::Control(IrDuplexControl::ResponseCreate { .. }) => responds = true,
-                _ => {}
-            }
-        }
-        let rule = match (&self.locked_config, configures, responds) {
-            (Some(locked), true, _) => Some(self.codec.configure_rule(locked)),
-            (Some(_), false, true) => self.codec.response_rule(),
-            _ => None,
+        let locked_format = self
+            .locked_config
+            .as_ref()
+            .and_then(|c| c.input_audio_format);
+        let Ok(named) = self.codec.uplink_format(&frame.0) else {
+            return out;
         };
-        match rule {
-            None => out.upstream.push(frame),
-            Some(rule) => {
-                if let Some(spliced) = splice(&frame.0, &rule) {
-                    out.upstream.push(WireEvent(spliced.into()));
-                }
+        match (locked_format, named) {
+            (Some(locked), Some(named)) if locked != named => return out,
+            (None, Some(named)) => self.audio_in = named,
+            _ => {}
+        }
+        if self.locked_config.is_some() && self.codec.authors_instructions(&frame.0) {
+            return out;
+        }
+        for ev in self.codec.read_up_ref(WireRef(&frame.0), &mut self.decode) {
+            if let IrClientEvent::AudioFrame(f) = ev {
+                self.turn
+                    .admit_audio(f.format.unwrap_or(self.audio_in), f.media.len());
             }
         }
+        if self.rules.is_empty() {
+            out.upstream.push(frame);
+            return out;
+        }
+        let mut bytes = frame.0.to_vec();
+        for rule in &self.rules {
+            match splice(&bytes, rule) {
+                Some(spliced) => bytes = spliced,
+                None => return out,
+            }
+        }
+        out.upstream.push(if bytes.as_slice() == &frame.0[..] {
+            frame
+        } else {
+            WireEvent(bytes.into())
+        });
         out
     }
 
@@ -209,6 +223,12 @@ where
         if !sink.turn_closed(usage, counters) {
             out.close = true;
         }
+    }
+
+    /// The open turn's counters as they stand: what [`Self::settle_open_turn`] would settle now.
+    #[must_use]
+    pub fn open_turn(&self) -> TurnCounters {
+        self.turn
     }
 
     /// The session ends with a turn open: the turn's counters settle, once. A turn with nothing
