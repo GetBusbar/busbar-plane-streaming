@@ -21,3 +21,29 @@ fn an_unknown_key_is_refused() {
         .expect_err("an unknown key is refused");
     assert!(err.to_string().contains("nonsense_key"), "{err}");
 }
+
+/// RED-BEFORE-GREEN (THE DESIGN §2 "Validation refusals, every kind"): a key the plane does not
+/// model INSIDE `streams.session` is refused with its path. RED: `instruction:` (a typo of
+/// `instructions:`) was dropped, every session opened with no locked instructions, and the
+/// governed splice still cut the caller's own.
+#[test]
+fn an_unknown_key_inside_the_locked_session_is_refused_with_its_path() {
+    for (blob, path) in [
+        (
+            r#"{"session":{"instruction":"be terse"}}"#,
+            "streams.session.instruction",
+        ),
+        (
+            r#"{"session":{"turn_detection":{"type":"server_vad","silence_ms":300}}}"#,
+            "streams.session.turn_detection.silence_ms",
+        ),
+    ] {
+        let err = serde_json::from_str::<StreamsCfg>(blob).expect_err("refused");
+        assert!(err.to_string().contains(path), "{blob}: {err}");
+    }
+    let ok: StreamsCfg =
+        serde_json::from_str(r#"{"session":{"instructions":"be terse","voice":"verse"}}"#)
+            .expect("every modelled key reads");
+    assert_eq!(ok.session.instructions.as_deref(), Some("be terse"));
+}
+

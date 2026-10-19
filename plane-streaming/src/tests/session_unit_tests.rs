@@ -104,16 +104,16 @@ fn a_stop_settles_the_open_turns_counters_once() {
     let _ = s.from_caller(&start("audio/x-mulaw"));
     // Two seconds of 8 kHz mu-law: 8 bytes a millisecond.
     let _ = s.from_caller(&media("MZ1", &[0; 16_000]));
-    assert_eq!(s.units(), CumulativeUnits::default(), "no turn closed yet");
-    assert!(
-        s.from_caller(&json(serde_json::json!({"event":"stop"})))
-            .end
-    );
     let seconds = CLASSES
         .iter()
         .position(|c| *c == meta::CLASS_AUDIO_SECONDS_IN)
         .expect("declared");
-    assert_eq!(s.units().0[seconds], 2);
+    assert_eq!(s.units().0[seconds], 2, "the open turn, running");
+    assert!(
+        s.from_caller(&json(serde_json::json!({"event":"stop"})))
+            .end
+    );
+    assert_eq!(s.units().0[seconds], 2, "settled once, not twice");
     let _ = s.end();
     assert_eq!(s.units().0[seconds], 2, "a second end settles nothing");
 }

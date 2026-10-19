@@ -125,15 +125,15 @@ fn a_far_side_answer_carries_only_a_frame_for_the_caller() {
 }
 
 /// The caller's last piece settles the open turn once: the audio it admitted is in the session's
-/// units, and only the caller side answers the end.
+/// units (as it was, running, in every answer before), and only the caller side answers the end.
 #[test]
 fn the_callers_last_piece_settles_the_open_turn_and_ends_the_session() {
     let mut s = sideband();
     s.from_caller(&uplink(3000), false);
     let _ = s.next(true);
-    assert!(s.units().is_empty(), "no turn closed yet");
+    assert_eq!(s.units(), vec![(seconds(), 3)], "the open turn, running");
     s.from_caller(&[], true);
-    assert_eq!(s.units(), vec![(seconds(), 3)]);
+    assert_eq!(s.units(), vec![(seconds(), 3)], "settled once, not twice");
     assert!(
         !s.next(false).done,
         "a far-side answer never ends the session"
@@ -360,4 +360,65 @@ fn the_telephony_door_tells_the_far_end_its_locked_session_at_the_carriers_start
     assert_eq!(v["session"]["input_audio_format"], "g711_ulaw", "{v}");
     assert_eq!(v["session"]["output_audio_format"], "g711_ulaw", "{v}");
     assert_eq!(v["session"]["instructions"], "be brief", "{v}");
+}
+
+/// The class index of tool calls, in the tail's order.
+fn tool_calls() -> u32 {
+    crate::session_unit::CLASSES
+        .iter()
+        .position(|c| *c == crate::meta::CLASS_TOOL_CALLS)
+        .expect("declared") as u32
+}
+
+/// RED-BEFORE-GREEN (MONEY, THE DESIGN §7: "`cut-stream` cuts it, and a cut bills what streamed";
+/// units are reported "as they happen"): the kernel bills a session from the last units it
+/// reported, however it ends, and a cancel (a `cut-stream` budget cut, a drain) reports none of
+/// its own. So every answer carries the OPEN turn's running counts. A caller that streamed 2.5 s
+/// while the far end opened one tool call, cut before any usage report, bills 3 `audio_seconds_in`
+/// and 1 `tool_calls` with its fee. RED: the answers reported closed turns only, the last
+/// checkpoint before the cancel was the fee alone, and the 2.5 s and the call were never billed.
+#[test]
+fn a_session_the_kernel_cancels_mid_turn_has_already_reported_the_open_turn() {
+    let t = Ticket {
+        slot: 1,
+        generation: 1,
+    };
+    let mut all = Sessions::default();
+    let cfg = StreamsCfg::default();
+    let live = all.get_or_open(7, Door::Sideband, &cfg).expect("open");
+    live.from_caller(&uplink(2500), false);
+    live.from_far_end(
+        &json(serde_json::json!({"type":"response.output_item.added",
+            "item":{"type":"function_call","call_id":"c1","name":"weather"}})),
+        0,
+    );
+    let last_checkpoint = live.units();
+    all.crossed(7, t);
+    assert!(all.cancel(t), "the kernel's cancel ends the session");
+    assert_eq!(
+        last_checkpoint,
+        vec![(seconds(), 3), (tool_calls(), 1), (PER_SESSION_CLASS, 1)],
+        "the last answer before the cancel bills what streamed"
+    );
+}
+
+/// The open turn's running counts never fall when the turn closes: a usage report moves them into
+/// the closed total, so the kernel's checkpoint is monotone across the close.
+#[test]
+fn a_turns_close_moves_its_running_counts_and_the_total_never_falls() {
+    let mut s = sideband();
+    s.from_caller(&uplink(1500), false);
+    let running = s.units();
+    assert_eq!(running, vec![(seconds(), 2)]);
+    s.from_far_end(&usage_done(), 0);
+    let closed = s.units();
+    assert!(closed.contains(&(seconds(), 2)), "{closed:?}");
+    s.from_caller(&uplink(400), false);
+    assert!(
+        s.units().contains(&(seconds(), 2)),
+        "1 900 ms is still 2 s: {:?}",
+        s.units()
+    );
+    s.from_caller(&uplink(200), false);
+    assert!(s.units().contains(&(seconds(), 3)), "{:?}", s.units());
 }
