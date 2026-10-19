@@ -128,6 +128,7 @@ const fn claim(
         // no single request body to key a replay on, and the two one-shot operations are read
         // straight through rather than replay-cached, matching the previous release's behaviour.
         idempotency: None,
+        ..Claim::ZERO
     }
 }
 
