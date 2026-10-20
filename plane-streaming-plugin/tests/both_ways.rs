@@ -122,7 +122,7 @@ fn linked(d: &Dispatcher) -> Plugin<Plane> {
 /// This crate's dropped-in image, the `busbar_plane_streaming_plugin` cdylib `cargo test` builds
 /// beside the test (uplifted to `target/<profile>`, or hashed in its `deps`). A missing artifact is
 /// a failure, never a skip: this test IS the dropped-in door's proof.
-fn dropped(d: &Dispatcher) -> Option<Plugin<Plane>> {
+fn dropped(d: &Dispatcher) -> Plugin<Plane> {
     let exe = std::env::current_exe().expect("the test binary has a path");
     let deps = exe.parent().expect("target/<profile>/deps");
     let profile = deps.parent().expect("target/<profile>");
@@ -132,10 +132,8 @@ fn dropped(d: &Dispatcher) -> Option<Plugin<Plane>> {
         .find(|p| p.exists())
         .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
     let stated = row().statement;
-    Some(
-        load_dropped::<Plane>(&path, &stated, bind(d, "dropped"))
-            .expect("the dropped streaming door loads"),
-    )
+    load_dropped::<Plane>(&path, &stated, bind(d, "dropped"))
+        .expect("the dropped streaming door loads")
 }
 
 fn validate(p: &Plugin<Plane>, settings: &'static [u8]) -> Outcome {
@@ -325,10 +323,7 @@ fn the_dropped_door_answers_as_the_linked_door_does() {
     for url in [Some(PUBLIC), None] {
         // A fresh instance of each door per script: the script opens its instance, and an open
         // instance refuses a second open.
-        let Some(dropped) = dropped(&d) else {
-            eprintln!("skip: the plugin cdylib is not built");
-            return;
-        };
+        let dropped = dropped(&d);
         assert_eq!(
             script(&dropped, url),
             script(&linked(&d), url),
@@ -616,10 +611,7 @@ fn the_one_request_doors_answer_their_pieces_through_the_door() {
 #[test]
 fn the_dropped_door_answers_the_one_request_doors_as_the_linked_door_does() {
     let d = Dispatcher::new(DispatchConfig::default());
-    let Some(dropped) = dropped(&d) else {
-        eprintln!("skip: the plugin cdylib is not built");
-        return;
-    };
+    let dropped = dropped(&d);
     assert_eq!(
         unit_script(&dropped),
         unit_script(&linked(&d)),
@@ -713,13 +705,14 @@ fn a_live_session_is_answered_through_the_door() {
             && caller.contains("input_audio_buffer.append")
             && caller.contains(&payload)
             && caller.contains("more=0")
-            && caller.ends_with("units=[]"),
-        "the caller's frame is one turn toward the far end, its audio unchanged: {caller}"
+            && caller.ends_with("units=[4:1=2]"),
+        "the caller's frame is one turn toward the far end, its audio unchanged, and the open \
+         turn's two running seconds are reported with it: {caller}"
     );
     assert_eq!(
         line("turn attempt"),
         "turn attempt Ready emitted= more=0 far=false done=false status=0 verb= target= \
-         fields=[] units=[]",
+         fields=[] units=[4:1=2]",
         "the turn's request is the caller side's answer"
     );
     let far = line("far usage");
@@ -738,8 +731,9 @@ fn a_live_session_is_answered_through_the_door() {
     let recall = line("short re-call");
     assert!(
         recall.contains("far=true")
-            && recall.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=2 6:1=1]"),
-        "the re-call answers the same piece once, its audio not counted twice: {recall}"
+            && recall.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=4 6:1=1]"),
+        "the re-call answers the same piece once, its audio not counted twice (the open turn's \
+         two running seconds over the closed turn's two): {recall}"
     );
     let end = line("caller end");
     assert!(
@@ -753,10 +747,7 @@ fn a_live_session_is_answered_through_the_door() {
 #[test]
 fn the_dropped_door_answers_a_live_session_as_the_linked_door_does() {
     let d = Dispatcher::new(DispatchConfig::default());
-    let Some(dropped) = dropped(&d) else {
-        eprintln!("skip: the plugin cdylib is not built");
-        return;
-    };
+    let dropped = dropped(&d);
     assert_eq!(
         session_script(&dropped),
         session_script(&linked(&d)),
@@ -784,8 +775,7 @@ fn arrive_route(p: &Plugin<Plane>, claim: u32) -> (Outcome, u8, String) {
 fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route() {
     use busbar_contract::abi::plane::{ROUTE_DIRECT, ROUTE_POOL};
     let d = Dispatcher::new(DispatchConfig::default());
-    let mut doors = vec![linked(&d)];
-    doors.extend(dropped(&d));
+    let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         for claim in [0, 1, 2, 3, 4] {
@@ -848,8 +838,7 @@ fn project(p: &Plugin<Plane>, claim: u32, rewrite: &'static [u8]) -> (Outcome, S
 #[test]
 fn a_session_open_is_projected_for_the_hooks_and_a_rewrite_patches_it() {
     let d = Dispatcher::new(DispatchConfig::default());
-    let mut doors = vec![linked(&d)];
-    doors.extend(dropped(&d));
+    let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let (outcome, body, rewritten) = project(p, 2, b"");
@@ -880,8 +869,7 @@ fn a_session_open_is_projected_for_the_hooks_and_a_rewrite_patches_it() {
 #[test]
 fn every_far_request_names_the_need_it_rides() {
     let d = Dispatcher::new(DispatchConfig::default());
-    let mut doors = vec![linked(&d)];
-    doors.extend(dropped(&d));
+    let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::with_units(1 << 18, 8);
@@ -971,8 +959,7 @@ fn an_authentication_refusal_reads_in_the_dialects_vendor_terms() {
     );
 
     let d = Dispatcher::new(DispatchConfig::default());
-    let mut doors = vec![linked(&d)];
-    doors.extend(dropped(&d));
+    let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, b"{}", Some(PUBLIC)).0, Outcome::Ready);
         let (outcome, body) = refused(
@@ -1048,8 +1035,7 @@ fn refused_unit(
 fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
     use busbar_contract::caps::ReasonCode;
     let d = Dispatcher::new(DispatchConfig::default());
-    let mut doors = vec![linked(&d)];
-    doors.extend(dropped(&d));
+    let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(1 << 16);
