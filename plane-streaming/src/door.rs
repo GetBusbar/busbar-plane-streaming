@@ -65,12 +65,12 @@ use busbar_contract::abi::plane::{
     OpClass, OutField, PlaneCancelIn, PlaneCancelOut, PlaneDriveIn, PlaneDriveOut, PlaneOpenIn,
     PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RefusalClass,
     RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, CANCEL_FAILED,
-    CLAIM_EXACT, CLAIM_OPEN, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
-    INGRESS_DUPLEX_SESSION, INGRESS_REQUEST_RESPONSE, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
-    ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT, UNITS_ESTIMATED, UNITS_REPORTED,
+    EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION,
+    INGRESS_REQUEST_RESPONSE, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT, ROUTE_DIRECT,
+    SHAPE_PIECEWISE, SPAN_ABSENT, UNITS_ESTIMATED, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
-use busbar_contract::abi::sdk::publish::{ClaimSpec, SnapshotSpec};
+use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
 use busbar_contract::abi::sdk::{Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, Wake};
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
@@ -441,11 +441,18 @@ impl Route {
     /// The door as a generation snapshot claims it.
     #[must_use]
     pub fn claim(&self) -> ClaimSpec {
-        let flags =
-            if self.exact() { CLAIM_EXACT } else { 0 } | if self.open() { CLAIM_OPEN } else { 0 };
+        // The flags are the contract's one spelling of a route's claim: a `{name}` target is a
+        // PATTERN (`CLAIM_PATTERN`), any other exact, an open one adds `CLAIM_OPEN`. Without
+        // `CLAIM_PATTERN` a `{call_id}` target would be claimed as a one-level prefix.
         ClaimSpec {
             refusal_dialect: self.refusal_dialect as u16,
-            ..ClaimSpec::new(self.verb, self.target, self.carrier, flags)
+            ..ServedRoute {
+                verb: self.verb,
+                target: self.target,
+                carrier: self.carrier,
+                open: self.open(),
+            }
+            .claim_spec()
         }
     }
 }
