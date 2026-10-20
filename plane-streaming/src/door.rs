@@ -178,8 +178,7 @@ pub const LIVE_STYLE: &str = "x-goog-api-key";
 const fn dialect_auth(dialect: u32, style: &'static str) -> DialectAuth {
     DialectAuth {
         dialect,
-        // No provider names a realtime dialect, and no caller signs one.
-        flags: 0,
+        // No provider names a realtime dialect, and no caller signs one: no flags (ZERO's).
         style: abi_str(style),
         params: Blob::ABSENT,
         ..DialectAuth::ZERO
