@@ -1509,15 +1509,12 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         // THE SDP DOOR'S SESSION IS LOCKED TO ITS TICKET (row 132): the hooks are shown the
         // session the ticket's record locks, kept for the session the unit opens.
         if door == Door::Sdp {
-            match p.take_ticket() {
-                Ok(Some(record)) => {
-                    let Ok(ticketed) = crate::ticket::locked_by(&record) else {
-                        return Outcome::Refused;
-                    };
-                    lock(&p.sessions).rewrite(given.unit, ticketed.clone());
-                    locked = ticketed;
-                }
-                Ok(None) | Err(()) => {}
+            if let Ok(Some(record)) = p.take_ticket() {
+                let Ok(ticketed) = crate::ticket::locked_by(&record) else {
+                    return Outcome::Refused;
+                };
+                lock(&p.sessions).rewrite(given.unit, ticketed.clone());
+                locked = ticketed;
             }
         }
         let params = if rewrite.is_empty() {

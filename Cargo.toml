@@ -10,8 +10,8 @@
 # `.busbar-ref`; no sibling-checkout path dependency ships in any manifest.
 #
 # THIRD-PARTY VERSIONS ARE THE FLEET'S, NOT THIS REPO'S. The table below is busbar's own root
-# `[workspace.dependencies]` (third-party rows) at busbar 3df3940165e3830a7abaff047a15992e4580cbb9, followed by the plugin-only rows
-# of busbar's `.github/fleet/deps.toml` at 3df3940165e3830a7abaff047a15992e4580cbb9. A member takes a crate with
+# `[workspace.dependencies]` (third-party rows) at busbar bdafe7c65dc48fe9b845cab795c0d1a9c9551596, followed by the plugin-only rows
+# of busbar's `.github/fleet/deps.toml` at bdafe7c65dc48fe9b845cab795c0d1a9c9551596. A member takes a crate with
 # `{ workspace = true }` (adding features if it needs them); a crate in neither table is a new
 # `deps.toml` row in busbar first. CI holds this repo's Cargo.lock to busbar's lock at the pin.
 [workspace]
@@ -29,9 +29,9 @@ publish = false
 repository = "https://github.com/GetBusbar/busbar-plane-streaming"
 
 [workspace.dependencies]
-busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "3df3940165e3830a7abaff047a15992e4580cbb9" }
-busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "3df3940165e3830a7abaff047a15992e4580cbb9" }
-# busbar's root [workspace.dependencies], third-party rows, at 3df3940165e3830a7abaff047a15992e4580cbb9
+busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "bdafe7c65dc48fe9b845cab795c0d1a9c9551596" }
+busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "bdafe7c65dc48fe9b845cab795c0d1a9c9551596" }
+# busbar's root [workspace.dependencies], third-party rows, at bdafe7c65dc48fe9b845cab795c0d1a9c9551596
 arc-swap = "1"
 async-trait = "0.1"
 axum = "0.8"
@@ -102,7 +102,7 @@ url = "2"
 webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std", "ring"] }
 webpki-roots = "1"
 zeroize = "1"
-# busbar .github/fleet/deps.toml [plugin-deps], at 3df3940165e3830a7abaff047a15992e4580cbb9
+# busbar .github/fleet/deps.toml [plugin-deps], at bdafe7c65dc48fe9b845cab795c0d1a9c9551596
 fallible-iterator = "0.2"
 ldap3 = { version = "0.12", default-features = false, features = ["sync"] }
 mysql = { version = "28", default-features = false, features = ["minimal-rust"] }
