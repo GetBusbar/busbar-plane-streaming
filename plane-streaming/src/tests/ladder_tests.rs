@@ -216,3 +216,48 @@ fn no_line_is_open_and_the_telephony_line_is_signed() {
         .collect();
     assert_eq!(signed, ["/twilio/{call_id}"]);
 }
+
+/// A `{call_id}` route is claimed as a PATTERN, not as a one-level prefix. Without `CLAIM_PATTERN`
+/// the published claim reads as the prefix `/twilio/{call_id}` (one segment under it), which also
+/// catches a path the route was never meant to carry. RED arms: every pattern route carries
+/// `CLAIM_PATTERN` and never `CLAIM_EXACT`; every exact route the reverse; and the neighbouring
+/// path the prefix reading would have caught (`/twilio/{call_id}/extra`-shaped, one more level)
+/// is not matched by the pattern.
+#[test]
+fn a_call_id_route_is_claimed_as_a_pattern_and_a_neighbour_is_not() {
+    use busbar_contract::abi::plane::{CLAIM_EXACT, CLAIM_PATTERN};
+    let mut patterns = 0;
+    for r in ROUTES {
+        let flags = r.claim().flags;
+        if r.target.contains('{') {
+            patterns += 1;
+            assert_eq!(
+                flags & CLAIM_PATTERN,
+                CLAIM_PATTERN,
+                "{} is a pattern",
+                r.target
+            );
+            assert_eq!(flags & CLAIM_EXACT, 0, "{} is not exact", r.target);
+        } else {
+            assert_eq!(flags & CLAIM_EXACT, CLAIM_EXACT, "{} is exact", r.target);
+            assert_eq!(flags & CLAIM_PATTERN, 0, "{} is not a pattern", r.target);
+        }
+    }
+    assert_eq!(
+        patterns, 3,
+        "the sideband, Gemini and Twilio sockets are the pattern routes"
+    );
+    // The neighbour: one more segment than the pattern has is no match (a prefix reading of
+    // `/twilio` + one level would not catch it either, but `/twilio/x/extra` would be caught by a
+    // looser prefix; the pattern pins the segment count).
+    let twilio = ROUTES
+        .iter()
+        .find(|r| r.target == "/twilio/{call_id}")
+        .expect("twilio route");
+    assert!(path_rank(twilio, "/twilio/abc").is_some());
+    assert!(path_rank(twilio, "/twilio/abc/extra").is_none());
+    assert!(
+        path_rank(twilio, "/twilio/").is_none(),
+        "an empty segment is no call id"
+    );
+}
