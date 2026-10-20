@@ -27,3 +27,6 @@ busbar-plugin-loader = { workspace = true, features = ["conformance"] }
 # The op-by-op both-ways script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-streaming) builds the openai-realtime wire frames it pushes as JSON.
 serde_json = { workspace = true }
+# The shared host-services double (dev-only feature): the ticket cells (row 132) drive the door
+# over a host that mints and takes tickets.
+busbar-contract = { workspace = true, features = ["services-double"] }
