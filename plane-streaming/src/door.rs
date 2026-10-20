@@ -115,10 +115,7 @@ pub const MOUNT_PATH: &str = "/v1/realtime";
 pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/v1/realtime";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr {
-    ptr: ptr::null(),
-    len: 0,
-};
+const NONE: AbiStr = AbiStr::ZERO;
 
 const SECTIONS: &[Section] = &[
     Section {
@@ -250,10 +247,9 @@ const fn need(direction: u32, transport: &'static str, auth: AbiStr, target: Abi
 /// address the member's own (the `base_url` of the catalog model `streams.session.model` names, sealed
 /// by the kernel's egress), never a config path of the plane's: a model name is no dial target.
 const fn outbound(transport: &'static str, style: &'static str) -> Need {
-    Need {
-        egress_class: EGRESS_PROVIDER,
-        ..need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE)
-    }
+    let mut n = need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE);
+    n.egress_class = EGRESS_PROVIDER;
+    n
 }
 
 /// The plane's connection needs: its keyed doors and its telephony door inbound; outbound, to the
@@ -287,7 +283,7 @@ pub const RIDES_LIVE_SOCKET: u32 = 6;
 pub const TAIL: &PlaneTail = &PlaneTail {
     head: KindTailHead {
         size: size_of::<PlaneTail>() as u32,
-        _reserved: 0,
+        ..KindTailHead::ZERO
     },
     ingress: INGRESS_REQUEST_RESPONSE | INGRESS_DUPLEX_SESSION,
     dispatch_shape: SHAPE_PIECEWISE,
