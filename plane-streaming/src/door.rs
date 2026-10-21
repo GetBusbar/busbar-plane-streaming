@@ -40,7 +40,7 @@
 //! session's unsolicited output named on the instance's driver ticket, and the session's cumulative
 //! units on every answer. A request unit on a session door is refused.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::mem::size_of;
 use std::ptr;
 use std::sync::Mutex;
@@ -76,7 +76,7 @@ use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
 use crate::claims::{Dialect, HTTP_TRANSPORT, WS_TRANSPORT};
 use crate::config::StreamsCfg;
-use crate::driven::{Door, Steps, FIELD_CONTENT_LENGTH};
+use crate::driven::{Door, Steps, FIELD_CONTENT_LENGTH, FIELD_LOCATION};
 use crate::meta;
 use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
@@ -249,6 +249,19 @@ const fn outbound(transport: &'static str, style: &'static str) -> Need {
     }
 }
 
+/// The far end's response head field the one-shot passes read: where a created call lives (the
+/// SDP answer's `Location`, the call a sideband attaches to).
+const PASS_KEEPS: &[AbiStr] = &[abi_str(FIELD_LOCATION)];
+
+/// The one-shot passes' outbound need: [`outbound`], keeping [`PASS_KEEPS`].
+const fn pass(transport: &'static str, style: &'static str) -> Need {
+    Need {
+        keep_response_headers: PASS_KEEPS.as_ptr(),
+        keep_response_headers_len: PASS_KEEPS.len(),
+        ..outbound(transport, style)
+    }
+}
+
 /// The plane's connection needs: its keyed doors and its telephony door inbound; outbound, to the
 /// upstream `streams.session.model` names, OpenAI Realtime's socket and its one-shot passes (the
 /// mint, the SDP offer) under its bearer style, and Gemini Live's socket under its key header
@@ -264,7 +277,7 @@ const NEEDS: &[Need] = &[
         NONE,
     ),
     outbound(WS_TRANSPORT, REALTIME_STYLE),
-    outbound(HTTP_TRANSPORT, REALTIME_STYLE),
+    pass(HTTP_TRANSPORT, REALTIME_STYLE),
     outbound(WS_TRANSPORT, LIVE_STYLE),
 ];
 
@@ -567,6 +580,14 @@ pub const REFUSAL_NO_DOOR: u32 = 1;
 /// The most units an instance keeps state for at once; past it, the oldest is dropped first.
 pub const MAX_UNITS: usize = 4096;
 
+/// The most sideband arrivals whose call is kept until their session opens; past it, the oldest
+/// arrival's is forgotten and its session, should it open, is refused.
+pub const MAX_PENDING_CALLS: usize = 4096;
+
+/// The most calls the SDP door has brokered that an instance keeps the owner of; past it, the
+/// oldest is forgotten and a sideband to it is refused (never attached unchecked).
+pub const MAX_BROKERED_CALLS: usize = 4096;
+
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
 struct Held {
     /// The plane's answers to the unit's pieces.
@@ -590,6 +611,12 @@ pub struct Plane {
     units: Mutex<BTreeMap<u64, Held>>,
     /// The live sessions, by the kernel's stream.
     sessions: Mutex<Sessions>,
+    /// The provider call each sideband arrival names, by the kernel's unit key, until the unit's
+    /// session opens.
+    calls: Mutex<BTreeMap<u64, String>>,
+    /// The calls the SDP door brokered, oldest first, each with the caller reference of the unit
+    /// whose offer created it: a sideband attaches only to its own caller's call.
+    brokered: Mutex<VecDeque<(String, String)>>,
     /// The host's wake, as `open` handed it; `None` = no session output can be named.
     wake: Option<Wake>,
     /// The instance's driver ticket, as its last `tick` was handed it, and that tick's clock
@@ -694,6 +721,8 @@ slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
         snapshots: Generations::new(),
         units: Mutex::new(BTreeMap::new()),
         sessions: Mutex::new(Sessions::default()),
+        calls: Mutex::new(BTreeMap::new()),
+        brokered: Mutex::new(VecDeque::new()),
         wake,
         driver: Mutex::new((Ticket::NONE, 0)),
     };
@@ -815,6 +844,24 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         return Outcome::Failed;
     }
     out.set(|o| &o.units_written, units.written() as u32);
+    // A sideband arrival names the provider call its session attaches to: kept by the unit until
+    // the session's first piece opens it.
+    if a.door == Door::Sideband {
+        let call = input
+            .field(|i| &i.target)
+            .as_str()
+            .ok()
+            .and_then(crate::driven::sideband_call_id);
+        if let (Some(p), Some(call)) = (instance.get(), call) {
+            let mut calls = lock(&p.calls);
+            while calls.len() >= MAX_PENDING_CALLS {
+                if calls.pop_first().is_none() {
+                    break;
+                }
+            }
+            calls.insert(input.unit, call.to_string());
+        }
+    }
     out.set(|o| &o.op_class, a.op_class);
     out.set(|o| &o.dialect, a.dialect);
     out.set(|o| &o.principal_need, a.door.authenticate());
@@ -939,6 +986,26 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     };
     let now_ms = lock(&p.driver).1;
     let mut sessions = lock(&p.sessions);
+    // A sideband session attaches to the provider call its arrival named, and only to a call the
+    // SDP door brokered for this same caller; any other is refused, never dialled as a fresh
+    // session and never attached to another caller's call.
+    let opening = given.from == FROM_CALLER && sessions.get(given.stream).is_none();
+    let call = if opening && door == Door::Sideband {
+        let Some(call) = lock(&p.calls).remove(&given.unit) else {
+            return Outcome::Refused;
+        };
+        let caller = input.field(|i| &i.caller_ref).as_str().unwrap_or_default();
+        let owned = !caller.is_empty()
+            && lock(&p.brokered)
+                .iter()
+                .any(|(id, owner)| *id == call && owner == caller);
+        if !owned {
+            return Outcome::Refused;
+        }
+        Some(call)
+    } else {
+        None
+    };
     // Only the caller's piece opens a session: a far-end piece or a collection for a stream the
     // door holds nothing for (an ended or cancelled session) is refused, never a fresh session.
     let live = if given.from == FROM_CALLER {
@@ -946,8 +1013,11 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     } else {
         sessions.get(given.stream)
     };
-    if live.is_none() {
+    let Some(live) = live else {
         return Outcome::Refused;
+    };
+    if let Some(call) = call {
+        live.attach(call);
     }
     sessions.crossed(given.stream, given.head.ticket);
     let Some(live) = sessions.get(given.stream) else {
@@ -999,11 +1069,15 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         });
     }
     let target = match emit.frame {
-        Some((Side::FarEnd, _)) => door.route(&cfg.session, None, &[]).ok().flatten(),
+        Some((Side::FarEnd, _)) => door
+            .route(&cfg.session, None, &[])
+            .ok()
+            .flatten()
+            .map(|a| (a.verb, live.dial_target(a.target))),
         _ => None,
     };
-    let verb = target.as_ref().map(|a| arena.span(a.verb.as_bytes()));
-    let path = target.as_ref().map(|a| arena.span(a.target.as_bytes()));
+    let verb = target.as_ref().map(|(verb, _)| arena.span(verb.as_bytes()));
+    let path = target.as_ref().map(|(_, path)| arena.span(path.as_bytes()));
     if piece::settle(out, &fields, &units, &arena) {
         // Short as a whole: the re-call carries the same piece, answered from here.
         if near {
@@ -1099,6 +1173,33 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
             held.unit.on_piece(piece)
         }
     };
+    // An SDP answer that created a call names it: the call is this caller's, the one their own
+    // sideband may attach to.
+    let brokered = match &answer {
+        Answer::ToCaller(reply) if (200..300).contains(&reply.status) => {
+            reply.rtc_call_id.as_deref()
+        }
+        _ => None,
+    };
+    let caller = input
+        .field(|i| &i.caller_ref)
+        .as_str()
+        .ok()
+        .filter(|r| !r.is_empty());
+    if let (Some(call), Some(caller)) = (brokered, caller) {
+        let mut calls = lock(&p.brokered);
+        if !calls
+            .iter()
+            .any(|(id, owner)| id == call && owner == caller)
+        {
+            while calls.len() >= MAX_BROKERED_CALLS {
+                if calls.pop_front().is_none() {
+                    break;
+                }
+            }
+            calls.push_back((call.to_string(), caller.to_string()));
+        }
+    }
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
     if done {
         units.remove(&given.unit);
