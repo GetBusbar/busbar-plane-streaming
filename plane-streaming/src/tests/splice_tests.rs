@@ -15,7 +15,7 @@ fn rule(set: serde_json::Value) -> Rule {
             _ => Map::new(),
         },
         proto_names: false,
-        cap: None,
+        caps: Vec::new(),
     }
 }
 
@@ -170,4 +170,68 @@ fn a_callers_pre_ga_session_output_cap_is_held_under_the_ceiling() {
         "{absent}"
     );
     assert_eq!(absent["max_output_tokens"], 1000, "{absent}");
+}
+
+/// The session locked under an output ceiling of `cap`.
+fn capped_session(cap: u32) -> SessionConfig {
+    SessionConfig {
+        max_output_tokens: Some(MaxOutputTokens::Limit(cap)),
+        ..SessionConfig::default()
+    }
+}
+
+/// RED-BEFORE-GREEN (lead ruling: the effective output ceiling is the lower of the caller's value
+/// and the cap): a caller's GA `session.update` asking for less than the cap keeps its own value; one
+/// asking for more, or for `"inf"`, is lowered to the cap; one naming none gets the cap. RED (the
+/// lower value): the lock set `max_output_tokens` over the caller's, so a caller's 200 went out as
+/// the cap's 1000. The higher and absent cases held before as well.
+#[test]
+fn a_callers_ga_session_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
+    let rule = OpenAiRealtimeCodec.configure_rule(&capped_session(1000));
+    let session = |frame: &[u8]| -> Value {
+        let out = splice(frame, &rule).expect("spliced");
+        let v: Value = serde_json::from_slice(&out).expect("json");
+        v["session"].clone()
+    };
+    let lower = session(br#"{"type":"session.update","session":{"max_output_tokens":200}}"#);
+    assert_eq!(lower["max_output_tokens"], 200, "{lower}");
+    let higher = session(br#"{"type":"session.update","session":{"max_output_tokens":5000}}"#);
+    assert_eq!(higher["max_output_tokens"], 1000, "{higher}");
+    let inf = session(br#"{"type":"session.update","session":{"max_output_tokens":"inf"}}"#);
+    assert_eq!(inf["max_output_tokens"], 1000, "{inf}");
+    let absent = session(br#"{"type":"session.update","session":{"voice":"verse"}}"#);
+    assert_eq!(absent["max_output_tokens"], 1000, "{absent}");
+}
+
+/// RED-BEFORE-GREEN (lead ruling), Gemini Live: a caller's `setup.generationConfig.maxOutputTokens`
+/// below the cap is kept (under either spelling of its keys), one above it is lowered, and a setup
+/// naming none, or no `generationConfig` at all, gets the cap; the caller's other
+/// `generationConfig` members keep their values. RED (the lower value): the lock merged its
+/// `maxOutputTokens` over the caller's, so a caller's 200 went out as the cap's 1000. The higher and
+/// absent cases held before as well.
+#[test]
+fn a_gemini_callers_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
+    let rule =
+        crate::codec::ir::codec::gemini::GeminiLiveCodec.configure_rule(&capped_session(1000));
+    let config = |frame: &[u8]| -> Value {
+        let out = splice(frame, &rule).expect("spliced");
+        let v: Value = serde_json::from_slice(&out).expect("json");
+        v["setup"]["generationConfig"].clone()
+    };
+    let lower =
+        config(br#"{"setup":{"generationConfig":{"maxOutputTokens":200,"temperature":0.3}}}"#);
+    assert_eq!(lower["maxOutputTokens"], 200, "{lower}");
+    assert_eq!(lower["temperature"], 0.3, "{lower}");
+    let snake = config(br#"{"setup":{"generation_config":{"max_output_tokens":200}}}"#);
+    assert_eq!(snake["maxOutputTokens"], 200, "{snake}");
+    assert!(
+        snake.get("max_output_tokens").is_none(),
+        "one spelling: {snake}"
+    );
+    let higher = config(br#"{"setup":{"generationConfig":{"maxOutputTokens":5000}}}"#);
+    assert_eq!(higher["maxOutputTokens"], 1000, "{higher}");
+    let absent = config(br#"{"setup":{"generationConfig":{"temperature":0.3}}}"#);
+    assert_eq!(absent["maxOutputTokens"], 1000, "{absent}");
+    let none = config(br#"{"setup":{"model":"models/gemini-live"}}"#);
+    assert_eq!(none["maxOutputTokens"], 1000, "{none}");
 }
