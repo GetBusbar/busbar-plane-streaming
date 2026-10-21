@@ -371,14 +371,14 @@ fn refused_and_cancelled_pending_calls_are_freed() {
 #[test]
 fn another_callers_offers_never_drop_a_live_call() {
     let mut brokered = Brokered::default();
-    assert!(brokered.admits());
-    brokered.record("rtc_a".to_string(), "tenant-a".to_string());
+    assert!(brokered.admits(0));
+    brokered.record("rtc_a".to_string(), "tenant-a".to_string(), 0);
     for i in 0..MAX_BROKERED_CALLS {
-        assert!(brokered.admits(), "offer {i} proceeds");
-        brokered.record(format!("rtc_b{i}"), "tenant-b".to_string());
+        assert!(brokered.admits(0), "offer {i} proceeds");
+        brokered.record(format!("rtc_b{i}"), "tenant-b".to_string(), 0);
     }
     assert!(
-        brokered.owns("rtc_a", "tenant-a"),
+        brokered.owns("rtc_a", "tenant-a", 0),
         "tenant A's live call is kept"
     );
     assert_eq!(
@@ -388,94 +388,131 @@ fn another_callers_offers_never_drop_a_live_call() {
     );
     let newest = format!("rtc_b{}", MAX_BROKERED_CALLS - 1);
     assert!(
-        brokered.owns(&newest, "tenant-b"),
+        brokered.owns(&newest, "tenant-b", 0),
         "B's newest call is kept"
     );
-    assert!(brokered.admits(), "the instance still admits");
+    assert!(brokered.admits(0), "the instance still admits");
 }
 
 /// RED-BEFORE-GREEN (lead ruling: no permanent refusal): a caller holding
 /// [`MAX_CALLS_PER_CALLER`] live calls is not refused; its next offer proceeds and displaces that
-/// caller's own oldest row, and no other row. RED: the oldest row of the whole list went,
-/// whichever caller's it was.
+/// caller's own oldest row, and no other row. RED: a caller had no bound of its own, so its
+/// newest call was kept beside all the others and its oldest row stayed (and past 4096 rows the
+/// oldest row of the whole list went, whichever caller's it was).
 #[test]
 fn a_caller_at_its_cap_displaces_only_its_own_oldest_row() {
     let mut brokered = Brokered::default();
-    brokered.record("rtc_b_first".to_string(), "tenant-b".to_string());
+    brokered.record("rtc_b_first".to_string(), "tenant-b".to_string(), 0);
     for i in 0..MAX_CALLS_PER_CALLER {
-        brokered.record(format!("rtc_a{i}"), "tenant-a".to_string());
+        brokered.record(format!("rtc_a{i}"), "tenant-a".to_string(), 0);
     }
-    brokered.record("rtc_b_second".to_string(), "tenant-b".to_string());
-    assert!(brokered.admits(), "the caller at its cap is not refused");
-    brokered.record("rtc_a_next".to_string(), "tenant-a".to_string());
+    brokered.record("rtc_b_second".to_string(), "tenant-b".to_string(), 0);
+    assert!(brokered.admits(0), "the caller at its cap is not refused");
+    brokered.record("rtc_a_next".to_string(), "tenant-a".to_string(), 0);
     assert!(
-        brokered.owns("rtc_a_next", "tenant-a"),
+        brokered.owns("rtc_a_next", "tenant-a", 0),
         "the offer proceeds"
     );
     assert!(
-        !brokered.owns("rtc_a0", "tenant-a"),
+        !brokered.owns("rtc_a0", "tenant-a", 0),
         "the caller's own oldest row is gone"
     );
     for i in 1..MAX_CALLS_PER_CALLER {
         assert!(
-            brokered.owns(&format!("rtc_a{i}"), "tenant-a"),
+            brokered.owns(&format!("rtc_a{i}"), "tenant-a", 0),
             "its row {i} stays"
         );
     }
     assert_eq!(brokered.per_caller["tenant-a"].len(), MAX_CALLS_PER_CALLER);
     assert!(
-        brokered.owns("rtc_b_first", "tenant-b") && brokered.owns("rtc_b_second", "tenant-b"),
+        brokered.owns("rtc_b_first", "tenant-b", 0) && brokered.owns("rtc_b_second", "tenant-b", 0),
         "every other caller's row stays, its oldest included"
     );
     assert_eq!(brokered.owners.len(), MAX_CALLS_PER_CALLER + 2);
 }
 
-/// GREEN: an instance holding [`MAX_BROKERED_CALLS`] live calls answers a new SDP offer
-/// [`STATUS_CALLS_FULL`] in the dialects' error shape, brokering nothing.
-#[test]
-fn a_full_instance_answers_an_offer_calls_full() {
+/// An instance holding [`MAX_BROKERED_CALLS`] rows recorded at the tick clock's reading 0, across
+/// as many callers as hold them at their cap.
+fn full_instance() -> Brokered {
     let mut brokered = Brokered::default();
     for i in 0..MAX_BROKERED_CALLS {
         brokered.record(
             format!("rtc_{i}"),
             format!("caller-{}", i / MAX_CALLS_PER_CALLER),
+            0,
         );
     }
-    assert!(!brokered.admits(), "a full instance refuses");
+    brokered
+}
+
+/// RED-BEFORE-GREEN (lead ruling: only settled handles are bounded): an instance full of unexpired
+/// rows answers a new SDP offer [`STATUS_CALLS_FULL`] in the dialects' error shape, and the 429
+/// clears once the rows are older than [`REALTIME_CALL_MAX_MS`]: their calls have certainly
+/// ended. A row's age counts from the first tick after it was recorded, so a clock that had not
+/// moved since never ages it early. RED: a row never expired, so the 429 stood for as long as the
+/// instance lived.
+#[test]
+fn the_instance_429_clears_once_rows_expire() {
+    let mut brokered = full_instance();
+    assert!(!brokered.admits(0), "a full instance refuses");
     let reply = calls_full_reply();
     assert_eq!(u32::from(reply.status), STATUS_CALLS_FULL);
     assert_eq!(reply.rtc_call_id, None, "a refused offer brokers no call");
     let body: serde_json::Value = serde_json::from_slice(&reply.body).expect("json");
     assert_eq!(body["error"]["type"], "rate_limit_error");
     assert_eq!(body["error"]["message"], CALLS_FULL_TEXT);
+    // The clock moves past the reading the rows were recorded at: their age counts from here.
+    assert!(!brokered.admits(1), "inside the lifetime the rows are live");
+    assert!(
+        !brokered.admits(REALTIME_CALL_MAX_MS),
+        "one millisecond short of the lifetime they are live"
+    );
+    assert!(
+        brokered.admits(1 + REALTIME_CALL_MAX_MS),
+        "past the lifetime the 429 clears"
+    );
+    assert!(brokered.owners.is_empty() && brokered.per_caller.is_empty());
 }
 
-/// RED-BEFORE-GREEN: a brokered call whose session closes (its caller's last piece, the far end's
-/// end, a cancel) has ended, and its row is freed. RED: a row left only when 4096 newer calls
-/// pushed it out.
+/// RED-BEFORE-GREEN (lead ruling): an expired row frees room for another caller, and only the
+/// expired rows go: a call recorded once the clock had moved is still live. RED: a row never
+/// expired, so the instance's room never came back.
 #[test]
-fn an_ended_call_frees_its_row() {
+fn an_expired_row_frees_room_for_another_caller() {
+    let mut brokered = full_instance();
+    assert!(!brokered.admits(1));
+    assert!(brokered.end("rtc_0"), "one call ends");
+    brokered.record("rtc_late".to_string(), "caller-late".to_string(), 1);
+    assert!(!brokered.admits(1 + REALTIME_CALL_MAX_MS - 1));
+    assert!(brokered.admits(1 + REALTIME_CALL_MAX_MS));
+    brokered.record(
+        "rtc_other".to_string(),
+        "tenant-other".to_string(),
+        1 + REALTIME_CALL_MAX_MS,
+    );
+    assert!(brokered.owns("rtc_other", "tenant-other", 1 + REALTIME_CALL_MAX_MS));
+    assert!(
+        brokered.owns("rtc_late", "caller-late", 1 + REALTIME_CALL_MAX_MS),
+        "a row recorded after the clock moved is not expired with the rest"
+    );
+    assert_eq!(brokered.owners.len(), 2);
+}
+
+/// RED-BEFORE-GREEN (lead ruling: a sideband may reconnect to a live call): a sideband that closes
+/// (its caller's last piece, a cancel) leaves its call's row, so the caller's next sideband to the
+/// same call is admitted. RED: the row was freed when the sideband closed, and the reconnect was
+/// refused.
+#[test]
+fn a_sideband_reconnect_after_a_sideband_close_is_admitted() {
     let p = plane();
     let cfg = StreamsCfg::default();
-    {
-        let mut brokered = lock(&p.brokered);
-        for i in 0..3 {
-            brokered.record(format!("rtc_{i}"), "tenant-a".to_string());
-        }
-    }
+    lock(&p.brokered).record("rtc_0".to_string(), "tenant-a".to_string(), 0);
     let mut sessions = lock(&p.sessions);
     sessions
         .get_or_open(10, Door::Sideband, &cfg)
         .expect("a session door")
         .attach("rtc_0".to_string());
     sessions.close(10);
-    p.calls_ended(&mut sessions);
-    assert!(
-        !lock(&p.brokered).owns("rtc_0", "tenant-a"),
-        "the ended call's row is freed"
-    );
-    assert_eq!(lock(&p.brokered).per_caller["tenant-a"].len(), 2);
-
     let ticket = Ticket {
         slot: 3,
         generation: 1,
@@ -483,17 +520,47 @@ fn an_ended_call_frees_its_row() {
     sessions
         .get_or_open(11, Door::Sideband, &cfg)
         .expect("a session door")
-        .attach("rtc_1".to_string());
+        .attach("rtc_0".to_string());
     sessions.crossed(11, ticket);
     assert!(sessions.cancel(ticket));
-    p.calls_ended(&mut sessions);
+    drop(sessions);
     assert!(
-        !lock(&p.brokered).owns("rtc_1", "tenant-a"),
-        "a cancelled session's call is freed"
+        lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
+        "the reconnect is admitted"
+    );
+}
+
+/// RED-BEFORE-GREEN: a brokered call the far end ends, as its sideband sees it (the far end's
+/// answer ends whole: its last piece, not cut), has ended, and its row is freed. A far end whose
+/// connection was cut, or a piece that is not its last, frees nothing. RED: the row was freed only
+/// when the sideband itself closed, never on the far end's end.
+#[test]
+fn an_ended_call_frees_its_row() {
+    let p = plane();
+    let cfg = StreamsCfg::default();
+    for i in 0..2 {
+        lock(&p.brokered).record(format!("rtc_{i}"), "tenant-a".to_string(), 0);
+    }
+    let mut live = Live::open(Door::Sideband, &cfg).expect("a session door");
+    live.attach("rtc_0".to_string());
+    p.far_end_ended(Door::Sideband, 0, live.call_id());
+    assert!(
+        lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
+        "not its last piece"
+    );
+    p.far_end_ended(Door::Sideband, PIECE_LAST | PIECE_CUT, live.call_id());
+    assert!(
+        lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
+        "a cut is no end"
+    );
+    p.far_end_ended(Door::Sideband, PIECE_LAST, live.call_id());
+    assert!(
+        !lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
+        "the ended call's row is freed"
     );
     assert!(
-        lock(&p.brokered).owns("rtc_2", "tenant-a"),
+        lock(&p.brokered).owns("rtc_1", "tenant-a", 0),
         "no other call is touched"
     );
-    assert_eq!(lock(&p.brokered).owners.len(), 1);
+    assert_eq!(lock(&p.brokered).per_caller["tenant-a"].len(), 1);
 }

@@ -60,9 +60,9 @@ use busbar_contract::abi::plane::{
     PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RefusalClass,
     RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, CANCEL_FAILED,
     EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION,
-    INGRESS_REQUEST_RESPONSE, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT, PIECE_REFUSED,
-    ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE,
-    UNITS_ESTIMATED, UNITS_REPORTED,
+    INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
+    PIECE_REFUSED, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT, TAIL_REFUSED_PIECE,
+    TAP_FAULT_DECODE, UNITS_ESTIMATED, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
@@ -555,12 +555,14 @@ pub const MAX_UNITS: usize = 4096;
 /// sideband arrival is refused ([`REFUSAL_CALLS_FULL`]): no pending call is dropped to make room.
 pub const MAX_PENDING_CALLS: usize = 4096;
 
-/// The most live calls the SDP door has brokered that an instance keeps the owner of; at it, a new
-/// SDP offer is refused ([`STATUS_CALLS_FULL`]). No other caller's live call is dropped to make
-/// room (THE DESIGN: retention bounds only settled handles); a call leaves when it ends, or when
-/// its own caller's next offer displaces it ([`MAX_CALLS_PER_CALLER`]). Offers checked against the
-/// bound at once are each recorded when their far end answers, so the instance may hold past it by
-/// at most the units in flight ([`MAX_UNITS`]). PROVISIONAL: awaiting the owner's ratification.
+/// The most live calls the SDP door has brokered that an instance keeps the owner of; at it, with
+/// every row unexpired ([`REALTIME_CALL_MAX_MS`]), a new SDP offer is refused
+/// ([`STATUS_CALLS_FULL`]). No other caller's live call is dropped to make room (THE DESIGN:
+/// retention bounds only settled handles); a call leaves when the far end ends it, when it is past
+/// its dialect's maximum lifetime, or when its own caller's next offer displaces it
+/// ([`MAX_CALLS_PER_CALLER`]). Offers checked against the bound at once are each recorded when their
+/// far end answers, so the instance may hold past it by at most the units in flight
+/// ([`MAX_UNITS`]). PROVISIONAL: awaiting the owner's ratification.
 pub const MAX_BROKERED_CALLS: usize = 4096;
 
 /// The most live brokered calls one caller (one `caller_ref`) keeps at once. At it, that caller's
@@ -569,6 +571,17 @@ pub const MAX_BROKERED_CALLS: usize = 4096;
 /// 64 callers each hold their whole allowance before the instance's bound is met. PROVISIONAL:
 /// awaiting the owner's ratification.
 pub const MAX_CALLS_PER_CALLER: usize = MAX_BROKERED_CALLS / 64;
+
+/// THE LONGEST AN OPENAI REALTIME CALL LIVES, in milliseconds: OpenAI's published limit, "The
+/// maximum duration of a Realtime session is 60 minutes."
+/// (<https://developers.openai.com/api/docs/guides/realtime-conversations>). Azure OpenAI documents
+/// 30 minutes for its Realtime sessions; 60 is the longer bound, so it is the safe one: a row never
+/// expires while its call may still be live on either. A call the SDP door brokered has certainly
+/// ended once it is older than this, so its row is settled and expires. The SDP door brokers OpenAI
+/// Realtime calls only and no Gemini Live call, so no Gemini Live lifetime is stated (its published
+/// session limits also lift under the context-window compression this plane always asks for).
+/// PROVISIONAL: awaiting the owner's ratification.
+pub const REALTIME_CALL_MAX_MS: u64 = 60 * 60 * 1000;
 
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
 struct Held {
@@ -664,29 +677,71 @@ impl Calls {
 }
 
 /// THE LIVE CALLS THE SDP DOOR BROKERED, each with the caller reference of the unit whose offer
-/// created it (a sideband attaches only to its own caller's call), and each caller's calls, oldest
-/// first. A call leaves when it ends (the session attached to it closes), or when its own caller's
-/// next call displaces it at [`MAX_CALLS_PER_CALLER`]; never to make room for another caller. At
-/// [`MAX_BROKERED_CALLS`] a new offer is refused instead.
+/// created it (a sideband attaches only to its own caller's call, and may attach again after its
+/// sideband closes), and each caller's calls, oldest first. A call leaves when the far end ends it
+/// (seen through its sideband), when it is older than [`REALTIME_CALL_MAX_MS`] (it has certainly
+/// ended), or when its own caller's next call displaces it at [`MAX_CALLS_PER_CALLER`]; never to
+/// make room for another caller. At [`MAX_BROKERED_CALLS`] unexpired rows a new offer is refused
+/// instead. Expiry is read lazily, at an offer and at an attach, on the door's tick clock.
 #[derive(Default)]
 struct Brokered {
-    owners: HashMap<String, String>,
+    owners: HashMap<String, BrokeredRow>,
     per_caller: HashMap<String, VecDeque<String>>,
 }
 
+/// One brokered call's row.
+struct BrokeredRow {
+    /// The caller reference of the unit whose offer created the call.
+    owner: String,
+    /// The tick clock's reading (milliseconds) when the call was recorded: the last tick before it.
+    recorded: u64,
+    /// The first tick clock reading after `recorded`: a tick that ran after the call was created,
+    /// so the call's age, counted from it, is never more than its true age. `None` until the clock
+    /// moves.
+    since: Option<u64>,
+}
+
 impl Brokered {
-    /// Whether a new call may be brokered: the instance is below [`MAX_BROKERED_CALLS`].
-    fn admits(&self) -> bool {
+    /// Every row older than [`REALTIME_CALL_MAX_MS`] at `now_ms` (the tick clock) is freed: its call
+    /// has certainly ended.
+    fn expire(&mut self, now_ms: u64) {
+        let mut expired = Vec::new();
+        for (call, row) in &mut self.owners {
+            if row.since.is_none() && now_ms > row.recorded {
+                row.since = Some(now_ms);
+            }
+            if row
+                .since
+                .is_some_and(|since| now_ms.saturating_sub(since) >= REALTIME_CALL_MAX_MS)
+            {
+                expired.push(call.clone());
+            }
+        }
+        for call in expired {
+            self.end(&call);
+        }
+    }
+
+    /// Whether a new call may be brokered at `now_ms`: the instance holds fewer than
+    /// [`MAX_BROKERED_CALLS`] unexpired rows.
+    fn admits(&mut self, now_ms: u64) -> bool {
+        self.expire(now_ms);
         self.owners.len() < MAX_BROKERED_CALLS
     }
 
-    /// The far end created `call` for `caller`. A caller already holding
+    /// The far end created `call` for `caller` at `now_ms`. A caller already holding
     /// [`MAX_CALLS_PER_CALLER`] calls gives up its own oldest; no other caller's row is touched.
     /// Recorded whatever the instance bound reads now: the call is live at the far end (see
     /// [`MAX_BROKERED_CALLS`] for the bounded overshoot).
-    fn record(&mut self, call: String, caller: String) {
-        if let Some(previous) = self.owners.insert(call.clone(), caller.clone()) {
-            self.release(&previous, &call);
+    fn record(&mut self, call: String, caller: String, now_ms: u64) {
+        self.expire(now_ms);
+        let row = BrokeredRow {
+            owner: caller.clone(),
+            recorded: now_ms,
+            since: None,
+        };
+        if let Some(previous) = self.owners.insert(call.clone(), row) {
+            self.release(&previous.owner, &call);
         }
         let rows = self.per_caller.entry(caller).or_default();
         while rows.len() >= MAX_CALLS_PER_CALLER {
@@ -700,16 +755,17 @@ impl Brokered {
         rows.push_back(call);
     }
 
-    /// Whether `call` is live and `caller`'s.
-    fn owns(&self, call: &str, caller: &str) -> bool {
-        self.owners.get(call).is_some_and(|owner| owner == caller)
+    /// Whether `call` is live at `now_ms` and `caller`'s.
+    fn owns(&mut self, call: &str, caller: &str, now_ms: u64) -> bool {
+        self.expire(now_ms);
+        self.owners.get(call).is_some_and(|row| row.owner == caller)
     }
 
     /// `call` ended: its row is freed. Answers whether it was held.
     fn end(&mut self, call: &str) -> bool {
         match self.owners.remove(call) {
-            Some(owner) => {
-                self.release(&owner, call);
+            Some(row) => {
+                self.release(&row.owner, call);
                 true
             }
             None => false,
@@ -772,21 +828,28 @@ impl Plane {
     }
 
     /// Unit `unit` is over (refused, or its refusal is about to be told): what the door holds for
-    /// it as a request unit or a pending sideband call is forgotten.
+    /// it as a request unit, a pending sideband call or a session (whose stream is its unit) is
+    /// forgotten.
     fn end_unit(&self, unit: u64) {
         lock(&self.units).forget(unit);
         lock(&self.calls).forget(unit);
+        lock(&self.sessions).close(unit);
     }
 
-    /// The calls whose sessions `sessions` has closed since last asked have ended: their brokered
-    /// rows are freed.
-    fn calls_ended(&self, sessions: &mut Sessions) {
-        let ended = sessions.take_ended_calls();
-        if !ended.is_empty() {
-            let mut brokered = lock(&self.brokered);
-            for call in ended {
-                brokered.end(&call);
-            }
+    /// The tick clock: the instance's last tick's reading, in milliseconds.
+    fn now_ms(&self) -> u64 {
+        lock(&self.driver).1
+    }
+
+    /// A far-end piece with `flags` reached a session on `door` attached to `call`: a sideband
+    /// whose far end ended its answer whole ([`PIECE_LAST`] without [`PIECE_CUT`]) has seen the
+    /// provider end the call, and the call's row is freed. A sideband the caller closes, or one
+    /// whose connection was cut, frees nothing: the call lives on, and a sideband may attach to it
+    /// again.
+    fn far_end_ended(&self, door: Door, flags: u32, call: Option<&str>) {
+        let ended = door == Door::Sideband && flags & PIECE_LAST != 0 && flags & PIECE_CUT == 0;
+        if let (true, Some(call)) = (ended, call) {
+            lock(&self.brokered).end(call);
         }
     }
 
@@ -953,7 +1016,8 @@ slot!(
 
 // `cancel`: an op on a session's ticket ends the session (each side tells the other); an op on a
 // request unit's ticket, or the kernel's own cancel of a unit (`PlaneCancelIn::unit`, a unit whose
-// ticket no piece may ever have carried), forgets the unit's state and its pending sideband call.
+// ticket no piece may ever have carried), forgets the unit's state, its pending sideband call and
+// the session its unit names.
 // Either way it bills nothing of its own and writes no record.
 slot!(
     Cancel,
@@ -963,14 +1027,11 @@ slot!(
         if let Some(p) = instance.get() {
             let ticket = input.cancel().ticket();
             let unit = input.unit();
-            {
-                let mut sessions = lock(&p.sessions);
-                sessions.cancel(ticket);
-                p.calls_ended(&mut sessions);
-            }
+            lock(&p.sessions).cancel(ticket);
             lock(&p.units).cancel(ticket, unit);
             if unit != 0 {
                 lock(&p.calls).forget(unit);
+                lock(&p.sessions).close(unit);
             }
         }
         out.set(|o| &o.cancel.disposition, CANCEL_FAILED);
@@ -1166,7 +1227,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
             return Outcome::Refused;
         };
         let caller = input.caller_ref().as_str().unwrap_or_default();
-        let owned = !caller.is_empty() && lock(&p.brokered).owns(&call, caller);
+        let owned = !caller.is_empty() && lock(&p.brokered).owns(&call, caller, now_ms);
         if !owned {
             return Outcome::Refused;
         }
@@ -1210,7 +1271,10 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
             let bytes = input.bytes().bytes();
             match given.from() {
                 FROM_CALLER => live.from_caller(bytes, caller_last),
-                FROM_FAR_END => live.from_far_end(bytes, now_ms),
+                FROM_FAR_END => {
+                    live.from_far_end(bytes, now_ms);
+                    p.far_end_ended(door, given.flags(), live.call_id());
+                }
                 FROM_KERNEL => {}
                 _ => return Outcome::Refused,
             }
@@ -1286,7 +1350,6 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     let owes = live.ready();
     if done {
         sessions.close(given.stream());
-        p.calls_ended(&mut sessions);
     } else if owes {
         drop(sessions);
         p.wake_driver();
@@ -1309,15 +1372,14 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     if given.from() == FROM_KERNEL && given.flags() & PIECE_REFUSED != 0 {
         p.end_unit(given.unit());
         if given.stream() != 0 {
-            let mut sessions = lock(&p.sessions);
-            sessions.close(given.stream());
-            p.calls_ended(&mut sessions);
+            lock(&p.sessions).close(given.stream());
         }
         return Outcome::Ready;
     }
     if given.stream() != 0 {
         return session_piece(p, input, &mut out);
     }
+    let now_ms = p.now_ms();
     let mut units = lock(&p.units);
     if piece::is_recall(input) {
         if let Some(held) = units.held.get_mut(&given.unit()) {
@@ -1359,7 +1421,7 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         None if Door::of(given.claim()) == Some(Door::Sdp)
             && given.from() == FROM_KERNEL
             && given.attempt_no() > 0
-            && !lock(&p.brokered).admits() =>
+            && !lock(&p.brokered).admits(now_ms) =>
         {
             Answer::ToCaller(calls_full_reply())
         }
@@ -1378,7 +1440,7 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         _ => None,
     };
     if let (Some(call), Some(caller)) = (brokered, caller) {
-        lock(&p.brokered).record(call, caller.to_string());
+        lock(&p.brokered).record(call, caller.to_string(), now_ms);
     }
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
     if done || outcome == Outcome::Refused {
@@ -1483,8 +1545,8 @@ pub fn session_cut_render(dialect: u32, text: &str) -> Vec<u8> {
 
 // `refusal`: the kernel's status and text (a hook's veto, an admission's refusal) in the dialects'
 // error shape, as JSON, before any upgrade; a live session's budget cut in its own stream. The
-// refusal ends its unit: what the door holds for it as a request unit or a pending sideband call is
-// forgotten.
+// refusal ends its unit: what the door holds for it as a request unit, a pending sideband call or a
+// session is forgotten.
 slot!(Refusal, RefusalIn, RefusalOut, |instance, input, out| {
     let given = input;
     let status = u16::try_from(given.status()).unwrap_or(0);

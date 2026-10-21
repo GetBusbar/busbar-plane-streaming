@@ -199,6 +199,12 @@ impl Live {
         self.call_id = Some(call_id);
     }
 
+    /// The provider's call this session is attached to, if any.
+    #[must_use]
+    pub fn call_id(&self) -> Option<&str> {
+        self.call_id.as_deref()
+    }
+
     /// The target the session dials under the member's base URL: the dialect's socket `path`, and
     /// for a session attached to a provider's call, that call (`?call_id=`, the provider's sideband
     /// connection to the call's own session).
@@ -368,9 +374,6 @@ pub struct Sessions {
     /// The streams whose sessions ended most recently, oldest first (at most [`MAX_SESSIONS`]): a
     /// cut ends a session before the kernel asks for the cut's frame.
     ended: VecDeque<u64>,
-    /// The provider calls whose attached sessions have closed since the door last asked
-    /// ([`Sessions::take_ended_calls`]): those calls have ended.
-    ended_calls: Vec<String>,
 }
 
 impl Sessions {
@@ -413,21 +416,14 @@ impl Sessions {
 
     /// Stream `stream`'s session is over: it and its tickets are forgotten.
     pub fn close(&mut self, stream: u64) {
-        if let Some(live) = self.live.remove(&stream) {
+        if self.live.remove(&stream).is_some() {
             while self.ended.len() >= MAX_SESSIONS {
                 self.ended.pop_front();
             }
             self.ended.push_back(stream);
-            self.ended_calls.extend(live.call_id);
         }
         self.rewritten.remove(&stream);
         self.tickets.retain(|_, s| *s != stream);
-    }
-
-    /// The provider calls whose attached sessions have closed since last asked, taken: each call
-    /// has ended.
-    pub fn take_ended_calls(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.ended_calls)
     }
 
     /// The op on `ticket` is cancelled: the session it serves, if any, is over. Answers whether
