@@ -67,20 +67,22 @@ use busbar_contract::abi::plane::{
     RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, CANCEL_FAILED,
     EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION,
     INGRESS_REQUEST_RESPONSE, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT, ROUTE_DIRECT,
-    SHAPE_PIECEWISE, SPAN_ABSENT, UNITS_ESTIMATED, UNITS_REPORTED,
+    SHAPE_PIECEWISE, SPAN_ABSENT, TAP_FAULT_DECODE, UNITS_ESTIMATED, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
 use busbar_contract::abi::sdk::{Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, Wake};
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
-use crate::claims::{Dialect, HTTP_TRANSPORT, WS_TRANSPORT};
+use crate::claims::{HTTP_TRANSPORT, WS_TRANSPORT};
 use crate::config::StreamsCfg;
 use crate::driven::{Door, Steps, FIELD_CONTENT_LENGTH};
 use crate::meta;
-use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME};
+use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME, TWILIO_MEDIA_STREAMS};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
-use crate::session_door::{committed_session_config, Live, Sessions, Side, CEILING_TICK_NS};
+use crate::session_door::{
+    committed_session_config, Live, Sessions, Side, CEILING_TICK_NS, PER_SESSION_CLASS,
+};
 
 /// The name the plane's Statement carries.
 pub const NAME: &str = crate::codec::PLANE_KEY;
@@ -141,7 +143,7 @@ const SECTIONS: &[Section] = &[
 pub const DIALECTS_BY_NAME: &[&str] = &[
     OPENAI_REALTIME,
     GEMINI_LIVE,
-    Dialect::TwilioMediaStreams.name(),
+    TWILIO_MEDIA_STREAMS,
     OPENAI_PROVIDER,
     GEMINI_PROVIDER,
 ];
@@ -250,6 +252,20 @@ const fn outbound(transport: &'static str, style: &'static str) -> Need {
     }
 }
 
+/// The far end's response head fields the one-shot passes read: where a created call lives (the
+/// SDP answer's `Location`) and what the answer's body is (its `Content-Type`, relayed on an answer
+/// that is not an SDP answer).
+const PASS_KEEPS: &[AbiStr] = &[abi_str("location"), abi_str("content-type")];
+
+/// The one-shot passes' outbound need: [`outbound`], keeping [`PASS_KEEPS`].
+const fn pass(transport: &'static str, style: &'static str) -> Need {
+    Need {
+        keep_response_headers: PASS_KEEPS.as_ptr(),
+        keep_response_headers_len: PASS_KEEPS.len(),
+        ..outbound(transport, style)
+    }
+}
+
 /// The plane's connection needs: its keyed doors and its telephony door inbound; outbound, to the
 /// upstream `streams.session.model` names, OpenAI Realtime's socket and its one-shot passes (the
 /// mint, the SDP offer) under its bearer style, and Gemini Live's socket under its key header
@@ -265,7 +281,7 @@ const NEEDS: &[Need] = &[
         NONE,
     ),
     outbound(WS_TRANSPORT, REALTIME_STYLE),
-    outbound(HTTP_TRANSPORT, REALTIME_STYLE),
+    pass(HTTP_TRANSPORT, REALTIME_STYLE),
     outbound(WS_TRANSPORT, LIVE_STYLE),
 ];
 
@@ -554,8 +570,13 @@ impl Generation {
 /// serves it (a 404).
 pub const REFUSAL_NO_DOOR: u32 = 1;
 
-/// The most units an instance keeps state for at once; past it, the oldest is dropped first.
+/// The most request units an instance keeps state for at once; past it, a new unit is refused (a
+/// unit in flight is never dropped to make room).
 pub const MAX_UNITS: usize = 4096;
+
+/// The most sideband arrivals whose call is kept until their session opens; past it, the oldest
+/// arrival's is forgotten and its session, should it open, is refused.
+pub const MAX_PENDING_CALLS: usize = 4096;
 
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
 struct Held {
@@ -568,6 +589,56 @@ struct Held {
     short: Option<Answer>,
 }
 
+/// The request units in flight, by the kernel's unit key, and the tickets their pieces crossed on,
+/// so a cancel on a unit's ticket forgets it.
+#[derive(Default)]
+struct Units {
+    held: BTreeMap<u64, Held>,
+    tickets: std::collections::HashMap<Ticket, u64>,
+}
+
+impl Units {
+    /// Whether a new unit is refused: the table is at [`MAX_UNITS`].
+    fn full(&self) -> bool {
+        self.held.len() >= MAX_UNITS
+    }
+
+    /// Hold `held` for unit `unit`. Answers `false`, holding nothing, at the bound: no unit in
+    /// flight is dropped to make room.
+    fn hold(&mut self, unit: u64, held: Held) -> bool {
+        if self.full() {
+            return false;
+        }
+        self.held.insert(unit, held);
+        true
+    }
+
+    /// A piece of unit `unit` crossed on `ticket`.
+    fn crossed(&mut self, unit: u64, ticket: Ticket) {
+        if ticket != Ticket::NONE {
+            self.tickets.insert(ticket, unit);
+        }
+    }
+
+    /// The op on `ticket` is cancelled: the unit it serves, if any, is forgotten. Answers whether
+    /// one was.
+    fn cancel(&mut self, ticket: Ticket) -> bool {
+        match self.tickets.get(&ticket).copied() {
+            Some(unit) => {
+                self.forget(unit);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Unit `unit` is over: it and its tickets are forgotten.
+    fn forget(&mut self, unit: u64) {
+        self.held.remove(&unit);
+        self.tickets.retain(|_, u| *u != unit);
+    }
+}
+
 /// One open plane instance.
 pub struct Plane {
     /// The deployment's public base URL, as `open` read it; a refresh keeps it.
@@ -576,8 +647,11 @@ pub struct Plane {
     generations: Mutex<Vec<(StreamsCfg, Generation)>>,
     /// The published snapshots, held by the SDK until their generation's `retire`.
     snapshots: Generations<PlaneSnapshot>,
-    /// The request units in flight, by the kernel's unit key.
-    units: Mutex<BTreeMap<u64, Held>>,
+    /// The request units in flight.
+    units: Mutex<Units>,
+    /// The provider call each sideband arrival names, by the kernel's unit key, until the unit's
+    /// session opens (oldest first).
+    calls: Mutex<BTreeMap<u64, String>>,
     /// The live sessions, by the kernel's stream.
     sessions: Mutex<Sessions>,
     /// The host's wake, as `open` handed it; `None` = no session output can be named.
@@ -682,7 +756,8 @@ slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
         public_url,
         generations: Mutex::new(Vec::new()),
         snapshots: Generations::new(),
-        units: Mutex::new(BTreeMap::new()),
+        units: Mutex::new(Units::default()),
+        calls: Mutex::new(BTreeMap::new()),
         sessions: Mutex::new(Sessions::default()),
         wake,
         driver: Mutex::new((Ticket::NONE, 0)),
@@ -762,15 +837,18 @@ slot!(
     }
 );
 
-// `cancel`: an op on a session's ticket ends the session (each side tells the other); a request
-// unit's cancel is declined. It writes no record.
+// `cancel`: an op on a session's ticket ends the session (each side tells the other); an op on a
+// request unit's ticket forgets the unit's state. Either way it bills nothing of its own and
+// writes no record.
 slot!(
     Cancel,
     PlaneCancelIn,
     PlaneCancelOut,
     |instance, input, out| {
         if let Some(p) = instance.get() {
-            lock(&p.sessions).cancel(input.get().cancel.ticket);
+            let ticket = input.get().cancel.ticket;
+            lock(&p.sessions).cancel(ticket);
+            lock(&p.units).cancel(ticket);
         }
         out.set(|o| &o.cancel.disposition, CANCEL_FAILED);
         Outcome::Ready
@@ -805,6 +883,22 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         return Outcome::Failed;
     }
     out.set(|o| &o.units_written, units.written() as u32);
+    if a.door == Door::Sideband {
+        let call = input
+            .field(|i| &i.target)
+            .as_str()
+            .ok()
+            .and_then(crate::driven::sideband_call_id);
+        if let (Some(p), Some(call)) = (instance.get(), call) {
+            let mut calls = lock(&p.calls);
+            while calls.len() >= MAX_PENDING_CALLS {
+                if calls.pop_first().is_none() {
+                    break;
+                }
+            }
+            calls.insert(input.unit, call.to_string());
+        }
+    }
     out.set(|o| &o.op_class, a.op_class);
     out.set(|o| &o.dialect, a.dialect);
     out.set(|o| &o.principal_need, a.door.authenticate());
@@ -895,8 +989,18 @@ fn answer_piece(
             (Outcome::Ready, false)
         }
         Answer::ToCaller(reply) => {
-            let (mut fields, units, mut arena) =
+            let (mut fields, mut units, mut arena) =
                 (input.fields_buf(), input.units_buf(), input.arena_buf());
+            // A far end that answered the mint or the SDP offer has brokered a session on the
+            // operator's account: its fee unit is incurred, as a socket session's is once its far
+            // end answers. A failed pass brokered nothing and reports none.
+            if (200..300).contains(&reply.status) {
+                units.push(UnitCount {
+                    class: PER_SESSION_CLASS,
+                    source: UNITS_REPORTED,
+                    amount: 1,
+                });
+            }
             // A one-request door's answer is WHOLE: its head states its length, so the caller is
             // answered under it, never chunked (1.6.0-pre's bytes; the serve path sends a whole
             // answer under the length its head states).
@@ -929,6 +1033,17 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     };
     let now_ms = lock(&p.driver).1;
     let mut sessions = lock(&p.sessions);
+    // A sideband session attaches to the provider call its arrival named; one whose arrival named
+    // none is refused, never dialled as a fresh session.
+    let opening = given.from == FROM_CALLER && sessions.get(given.stream).is_none();
+    let call = if opening && door == Door::Sideband {
+        let Some(call) = lock(&p.calls).remove(&given.unit) else {
+            return Outcome::Refused;
+        };
+        Some(call)
+    } else {
+        None
+    };
     // Only the caller's piece opens a session: a far-end piece or a collection for a stream the
     // door holds nothing for (an ended or cancelled session) is refused, never a fresh session.
     let live = if given.from == FROM_CALLER {
@@ -936,8 +1051,11 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     } else {
         sessions.get(given.stream)
     };
-    if live.is_none() {
+    let Some(live) = live else {
         return Outcome::Refused;
+    };
+    if let Some(call) = call {
+        live.attach(call);
     }
     sessions.crossed(given.stream, given.head.ticket);
     let Some(live) = sessions.get(given.stream) else {
@@ -989,11 +1107,15 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         });
     }
     let target = match emit.frame {
-        Some((Side::FarEnd, _)) => door.route(&cfg.session, None, &[]).ok().flatten(),
+        Some((Side::FarEnd, _)) => door
+            .route(&cfg.session, None, &[])
+            .ok()
+            .flatten()
+            .map(|a| (a.verb, live.dial_target(a.target))),
         _ => None,
     };
-    let verb = target.as_ref().map(|a| arena.span(a.verb.as_bytes()));
-    let path = target.as_ref().map(|a| arena.span(a.target.as_bytes()));
+    let verb = target.as_ref().map(|(verb, _)| arena.span(verb.as_bytes()));
+    let path = target.as_ref().map(|(_, path)| arena.span(path.as_bytes()));
     if piece::settle(out, &fields, &units, &arena) {
         // Short as a whole: the re-call carries the same piece, answered from here.
         if near {
@@ -1026,6 +1148,11 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         }
         None => false,
     };
+    // A session that ended on a usage report it could not read is reported to the kernel once,
+    // as the reader's refusal of the far end's body.
+    if live.take_unmetered() {
+        out.set(|o| &o.tap_fault, TAP_FAULT_DECODE);
+    }
     let owes = live.ready();
     if done {
         sessions.close(given.stream);
@@ -1050,16 +1177,20 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     }
     let mut units = lock(&p.units);
     if piece::is_recall(input) {
-        if let Some(held) = units.get_mut(&given.unit) {
+        if let Some(held) = units.held.get_mut(&given.unit) {
             if held.owed.pending() {
                 if held.owed.pay(input, &mut out) {
-                    units.remove(&given.unit);
+                    units.forget(given.unit);
                 }
                 return Outcome::Ready;
             }
         }
     }
-    if !units.contains_key(&given.unit) {
+    if !units.held.contains_key(&given.unit) {
+        // At the bound a new unit is refused: no unit in flight is dropped to make room.
+        if units.full() {
+            return Outcome::Refused;
+        }
         let caller_ref = input
             .field(|i| &i.caller_ref)
             .as_str()
@@ -1069,14 +1200,12 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         let Some(held) = p.held(given.claim, caller_ref) else {
             return Outcome::Refused;
         };
-        while units.len() >= MAX_UNITS {
-            if units.pop_first().is_none() {
-                break;
-            }
+        if !units.hold(given.unit, held) {
+            return Outcome::Refused;
         }
-        units.insert(given.unit, held);
     }
-    let Some(held) = units.get_mut(&given.unit) else {
+    units.crossed(given.unit, given.head.ticket);
+    let Some(held) = units.held.get_mut(&given.unit) else {
         return Outcome::Failed;
     };
     let answer = match held.short.take() {
@@ -1090,8 +1219,8 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         }
     };
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
-    if done {
-        units.remove(&given.unit);
+    if done || outcome == Outcome::Refused {
+        units.forget(given.unit);
     }
     outcome
 });

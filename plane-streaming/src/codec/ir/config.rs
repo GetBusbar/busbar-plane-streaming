@@ -164,4 +164,90 @@ pub struct SessionConfig {
     /// Per-response output-token ceiling, or `"inf"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<MaxOutputTokens>,
+    /// THE CONTEXT-WINDOW CEILING the plane imposes on a live session (`streams.context_window_tokens`),
+    /// in tokens. Never read from or written to a wire `session` object under this name: it is the
+    /// plane's own ceiling, which each dialect states in its own key when the session is locked (the
+    /// OpenAI Realtime `truncation` limit, the Gemini Live `contextWindowCompression` trigger).
+    #[serde(skip)]
+    pub context_window_tokens: Option<u32>,
+}
+
+impl SessionConfig {
+    /// THE LOCKED SESSION IN THE GA `session` SHAPE, the shape the GA `/v1/realtime` socket reads
+    /// (no `OpenAI-Beta` header): `type` is `realtime`; the requested modalities are
+    /// `output_modalities`; the uplink format and turn detection sit under `audio.input`, the
+    /// downlink format and the voice under `audio.output`, each format the GA format object
+    /// (`{"type":"audio/pcm","rate":24000}`, `{"type":"audio/pcmu"}`). Only what the lock names is
+    /// stated, so a member the operator left unset keeps whatever the caller or the far end has.
+    #[must_use]
+    pub fn ga_session(&self) -> serde_json::Map<String, serde_json::Value> {
+        use serde_json::{json, Map, Value};
+        let mut s = Map::new();
+        s.insert("type".into(), json!("realtime"));
+        if let Some(model) = &self.model {
+            s.insert("model".into(), json!(model));
+        }
+        if !self.modalities.is_empty() {
+            s.insert("output_modalities".into(), json!(self.modalities));
+        }
+        if let Some(instructions) = &self.instructions {
+            s.insert("instructions".into(), json!(instructions));
+        }
+        let mut input = Map::new();
+        if let Some(format) = self.input_audio_format {
+            input.insert("format".into(), format.ga_format());
+        }
+        if let Some(vad) = &self.turn_detection {
+            input.insert(
+                "turn_detection".into(),
+                serde_json::to_value(vad).unwrap_or(Value::Null),
+            );
+        }
+        let mut output = Map::new();
+        if let Some(format) = self.output_audio_format {
+            output.insert("format".into(), format.ga_format());
+        }
+        if let Some(voice) = &self.voice {
+            output.insert("voice".into(), json!(voice));
+        }
+        let mut audio = Map::new();
+        if !input.is_empty() {
+            audio.insert("input".into(), Value::Object(input));
+        }
+        if !output.is_empty() {
+            audio.insert("output".into(), Value::Object(output));
+        }
+        if !audio.is_empty() {
+            s.insert("audio".into(), Value::Object(audio));
+        }
+        if !self.tools.is_empty() {
+            s.insert("tools".into(), Value::Array(self.tools.clone()));
+        }
+        if let Some(choice) = &self.tool_choice {
+            s.insert("tool_choice".into(), choice.clone());
+        }
+        if let Some(max) = self.max_output_tokens {
+            s.insert(
+                "max_output_tokens".into(),
+                serde_json::to_value(max).unwrap_or(Value::Null),
+            );
+        }
+        if let Some(limit) = self.context_window_tokens {
+            // The GA retention-ratio truncation with a custom limit: the conversation after the
+            // instructions is held under the ceiling, less the output the response may still write.
+            let out = match self.max_output_tokens {
+                Some(MaxOutputTokens::Limit(n)) => n,
+                _ => 0,
+            };
+            s.insert(
+                "truncation".into(),
+                json!({
+                    "type": "retention_ratio",
+                    "retention_ratio": 1.0,
+                    "token_limits": { "post_instructions": limit.saturating_sub(out) },
+                }),
+            );
+        }
+        s
+    }
 }

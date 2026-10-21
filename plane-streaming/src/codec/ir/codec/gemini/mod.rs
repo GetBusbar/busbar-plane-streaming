@@ -275,6 +275,7 @@ fn session_config_from_setup(setup: &Value, st: &mut DecodeState) -> SessionConf
             .unwrap_or_default(),
         tool_choice: None,
         max_output_tokens,
+        context_window_tokens: None,
     }
 }
 
@@ -331,6 +332,14 @@ fn setup_from_session_config(cfg: &SessionConfig) -> Value {
     if !cfg.tools.is_empty() {
         setup.insert("tools".into(), Value::Array(cfg.tools.clone()));
     }
+    if let Some(trigger) = cfg.context_window_tokens {
+        // The plane's context-window ceiling: the far end compresses the context, on its sliding
+        // window, once it reaches it.
+        setup.insert(
+            "contextWindowCompression".into(),
+            json!({ "triggerTokens": trigger, "slidingWindow": {} }),
+        );
+    }
     // Three-state (see `SessionConfig::turn_detection`): an ABSENT turn_detection names no setting,
     // so no `realtimeInputConfig` is written at all and the session keeps what it had. Only an
     // explicit `null` writes Gemini's own disable marker.
@@ -368,61 +377,59 @@ fn setup_from_session_config(cfg: &SessionConfig) -> Value {
 
 // ── usage ↔ usageMetadata ─────────────────────────────────────────────────────────────────────────
 
-/// Pull a per-modality token count out of a Gemini `*TokensDetails` array (`[{modality, tokenCount}]`).
-/// A BILLED COUNT, read through [`billed_count`]: an absent modality or count is zero, a present but
-/// unreadable one is an `Err` the caller turns into a refusal (#42).
-fn modality_tokens(details: Option<&Value>, modality: &str) -> Result<u64, String> {
-    let entry = details
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|d| {
-            d.get("modality")
-                .and_then(Value::as_str)
-                .map(str::to_ascii_uppercase)
-                == Some(modality.to_string())
-        });
-    billed_count(entry, "tokenCount")
+/// The `(AUDIO entry, sum of every entry)` of a Gemini `*TokensDetails` array (`[{modality,
+/// tokenCount}]`). BILLED COUNTS, read through [`billed_count`]: an absent array, modality or count is
+/// zero, a present but unreadable count is an `Err` the caller turns into a refusal (#42).
+fn modality_split(details: Option<&Value>) -> Result<(u64, u64), String> {
+    let (mut audio, mut all) = (0_u64, 0_u64);
+    for d in details.and_then(Value::as_array).into_iter().flatten() {
+        let n = billed_count(Some(d), "tokenCount")?;
+        all = all.saturating_add(n);
+        let is_audio = d
+            .get("modality")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.eq_ignore_ascii_case("AUDIO"));
+        if is_audio {
+            audio = audio.saturating_add(n);
+        }
+    }
+    Ok((audio, all))
 }
 
 /// Extract the split token classes from a Gemini `usageMetadata` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
 /// SEPARATE classes; extraction-only, never client-translated).
 ///
-/// The per-modality breakdown (`promptTokensDetails`/`responseTokensDetails`) is a REFINEMENT of the
-/// stated `promptTokenCount`/`responseTokenCount` totals, never their sole source — Gemini can omit
-/// the breakdown while still stating the totals. Reading a missing breakdown as zero tokens metered a
-/// real turn at zero (silent under-billing, the one outcome #42 forbids outside billing being off);
-/// when the breakdown yields nothing, the stated total is billed instead (attributed to `text`, the
-/// conservative default when the split is unknown — this only changes the audio/text LABEL, never the
-/// input/output lane the billing fold sums onto, and it is an integer passthrough of the wire figure,
-/// no rate lookup or multiply).
+/// GOOGLE'S TOTAL IS BILLED (the owner's gemini-tool-use-billing ruling, `BUSBAR-1.6.0.md`: "a
+/// grounded Gemini turn bills Google's total, tool-use prompt tokens included"). Input is the
+/// prompt (the larger of `promptTokenCount` and the sum of every `promptTokensDetails` entry, so
+/// IMAGE, VIDEO and DOCUMENT tokens bill beside AUDIO and TEXT) plus the tool-use prompt (the larger
+/// of `toolUsePromptTokenCount` and its `toolUsePromptTokensDetails`); output is the response (the
+/// larger of `responseTokenCount` and its `responseTokensDetails`) plus `thoughtsTokenCount`, which
+/// Google prices as output ("Output price (including thinking tokens)"). Where `totalTokenCount`
+/// states more than that sum, the remainder bills as input text. Audio bills as audio; every other
+/// token is attributed to `text` (the plane declares no image or video class: such tokens bill at
+/// the text rate, never at zero) — this only changes the audio/text LABEL, never the input/output
+/// lane, and it is an integer passthrough of the wire figures, no rate lookup or multiply.
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
 /// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
 fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
-    let pd = u.get("promptTokensDetails");
-    let rd = u.get("responseTokensDetails");
-    let (audio_in, text_in) = {
-        let (a, t) = (modality_tokens(pd, "AUDIO")?, modality_tokens(pd, "TEXT")?);
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "promptTokenCount")?)
-        } else {
-            (a, t)
-        }
-    };
-    let (audio_out, text_out) = {
-        let (a, t) = (modality_tokens(rd, "AUDIO")?, modality_tokens(rd, "TEXT")?);
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "responseTokenCount")?)
-        } else {
-            (a, t)
-        }
-    };
+    let (audio_in, prompt_all) = modality_split(u.get("promptTokensDetails"))?;
+    let (tool_audio, tool_all) = modality_split(u.get("toolUsePromptTokensDetails"))?;
+    let (audio_out, response_all) = modality_split(u.get("responseTokensDetails"))?;
+    let audio_in = audio_in.saturating_add(tool_audio);
+    let input = billed_count(Some(u), "promptTokenCount")?
+        .max(prompt_all)
+        .saturating_add(billed_count(Some(u), "toolUsePromptTokenCount")?.max(tool_all));
+    let output = billed_count(Some(u), "responseTokenCount")?
+        .max(response_all)
+        .saturating_add(billed_count(Some(u), "thoughtsTokenCount")?);
+    let input = input.max(billed_count(Some(u), "totalTokenCount")?.saturating_sub(output));
     Ok(IrDuplexUsage {
         audio_in,
-        text_in,
+        text_in: input.saturating_sub(audio_in),
         audio_out,
-        text_out,
+        text_out: output.saturating_sub(audio_out),
         cached: billed_count(Some(u), "cachedContentTokenCount")?,
     })
 }

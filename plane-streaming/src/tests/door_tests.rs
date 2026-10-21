@@ -45,7 +45,7 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
             Door::Twilio,
             RIDES_REALTIME_SOCKET,
             REALTIME_SOCKET_PATH,
-            Dialect::TwilioMediaStreams.name(),
+            TWILIO_MEDIA_STREAMS,
         ),
     ];
     for (door, need, path, dialect) in served {
@@ -185,4 +185,49 @@ fn a_refusal_is_rendered_in_the_dialects_error_shape() {
 fn the_bad_key_answer_is_the_vendors_own_copy() {
     assert_eq!(AUTH_FAILURE_MESSAGE, "Incorrect API key provided.");
     assert_eq!(AUTH_FAILURE_CODE, "invalid_api_key");
+}
+
+/// A mint unit's state, as the door holds it from its first piece.
+fn held_mint() -> Held {
+    Held {
+        unit: RequestUnit::open(
+            Door::Mint,
+            crate::codec::ir::config::SessionConfig::default(),
+            None,
+        )
+        .expect("a one-request door"),
+        owed: Owed::default(),
+        short: None,
+    }
+}
+
+/// RED-BEFORE-GREEN (THE DESIGN: admission bounds live work and nothing evicts it): a request unit
+/// whose op the kernel cancels is forgotten at once, and a table at its bound refuses a new unit
+/// rather than drop one in flight. RED: the cancel slot ended only sessions, so a cancelled mint
+/// or SDP unit held its state until 4096 newer units pushed it out, and past the bound the oldest
+/// unit was evicted live, its gathered far-end body lost.
+#[test]
+fn a_cancelled_request_unit_is_forgotten_and_a_full_table_refuses_rather_than_evicts() {
+    let mut units = Units::default();
+    let ticket = |unit: u64| Ticket {
+        slot: u32::try_from(unit).expect("small") + 1,
+        generation: 1,
+    };
+    for unit in 0..MAX_UNITS as u64 {
+        assert!(units.hold(unit, held_mint()), "unit {unit}");
+        units.crossed(unit, ticket(unit));
+    }
+    let late = u64::MAX;
+    assert!(!units.hold(late, held_mint()), "a full table refuses");
+    assert!(
+        units.held.contains_key(&0),
+        "the oldest unit in flight is kept"
+    );
+    assert!(units.cancel(ticket(0)), "the cancel names a held unit");
+    assert!(
+        !units.held.contains_key(&0),
+        "the cancelled unit is forgotten"
+    );
+    assert!(!units.cancel(ticket(0)), "and its ticket with it");
+    assert!(units.hold(late, held_mint()), "its room is free");
 }

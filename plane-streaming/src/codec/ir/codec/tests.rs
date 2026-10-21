@@ -1044,8 +1044,8 @@ fn response_done_usage_extracts_split_token_classes() {
         "type": "response.done",
         "response": {
             "usage": {
-                "total_tokens": 150,
-                "input_tokens": 100,
+                "total_tokens": 145,
+                "input_tokens": 95,
                 "output_tokens": 50,
                 "input_token_details": { "audio_tokens": 80, "text_tokens": 15, "cached_tokens": 5 },
                 "output_token_details": { "audio_tokens": 40, "text_tokens": 10 }
@@ -1061,6 +1061,50 @@ fn response_done_usage_extracts_split_token_classes() {
     assert_eq!(u.cached, 5);
     assert_eq!(u.audio_out, 40);
     assert_eq!(u.text_out, 10);
+}
+
+/// RED-BEFORE-GREEN (MONEY; the Realtime API reference: `usage` "will correspond to billing", and
+/// `input_token_details.image_tokens` is "The number of image tokens used as input for the
+/// Response"): a turn whose input carried an image bills its image tokens, at the text class, and
+/// the input classes sum to the stated `input_tokens`. RED: only the audio and text entries were
+/// read, so the 10 image tokens billed zero.
+#[test]
+fn image_input_tokens_are_billed() {
+    let src = json!({
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "total_tokens": 230,
+                "input_tokens": 150,
+                "output_tokens": 80,
+                "input_token_details": { "text_tokens": 40, "audio_tokens": 100, "image_tokens": 10 },
+                "output_token_details": { "text_tokens": 20, "audio_tokens": 60 }
+            }
+        }
+    });
+    let ir = OpenAiRealtimeCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    let IrServerEvent::Usage(u) = &ir[0] else {
+        panic!("expected Usage")
+    };
+    assert_eq!((u.audio_in, u.text_in), (100, 50), "{u:?}");
+    assert_eq!((u.audio_out, u.text_out), (60, 20), "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY): the image tokens bill even when the stated total is absent: each side
+/// bills the sum of every entry of its breakdown. RED: the image entry was never read.
+#[test]
+fn image_input_tokens_are_billed_without_a_stated_total() {
+    let src = json!({
+        "type": "response.done",
+        "response": { "usage": {
+            "input_token_details": { "text_tokens": 4, "audio_tokens": 0, "image_tokens": 300 }
+        } }
+    });
+    let ir = OpenAiRealtimeCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    let IrServerEvent::Usage(u) = &ir[0] else {
+        panic!("expected Usage")
+    };
+    assert_eq!((u.audio_in, u.text_in), (0, 304), "{u:?}");
 }
 
 #[test]

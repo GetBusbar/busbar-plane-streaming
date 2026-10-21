@@ -1150,6 +1150,98 @@ fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
     );
 }
 
+/// The usage a Gemini `usageMetadata` object reads as.
+fn usage_of(meta: Value) -> IrDuplexUsage {
+    let src = json!({ "usageMetadata": meta });
+    let ir = GeminiLiveCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    ir.iter()
+        .find_map(|e| match e {
+            IrServerEvent::Usage(u) => Some(*u),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected a Usage: {ir:?}"))
+}
+
+/// RED-BEFORE-GREEN (MONEY; the `Modality` enum names TEXT, IMAGE, VIDEO, AUDIO and DOCUMENT): a
+/// turn whose prompt carried camera frames bills its IMAGE and VIDEO tokens, at the text class, so
+/// the input classes sum to the prompt. RED: only the AUDIO and TEXT entries were read, so the
+/// image and video tokens billed zero.
+#[test]
+fn image_and_video_prompt_tokens_are_billed() {
+    let u = usage_of(json!({
+        "promptTokenCount": 160,
+        "responseTokenCount": 50,
+        "totalTokenCount": 210,
+        "promptTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 80 },
+            { "modality": "TEXT", "tokenCount": 15 },
+            { "modality": "IMAGE", "tokenCount": 25 },
+            { "modality": "VIDEO", "tokenCount": 40 }
+        ],
+        "responseTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 40 },
+            { "modality": "TEXT", "tokenCount": 10 }
+        ]
+    }));
+    assert_eq!((u.audio_in, u.text_in), (80, 80), "{u:?}");
+    assert_eq!((u.audio_out, u.text_out), (40, 10), "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY; the owner's gemini-tool-use-billing ruling: "a grounded Gemini turn
+/// bills Google's total, tool-use prompt tokens included"; `toolUsePromptTokenCount` is the "Number
+/// of tokens present in tool-use prompt(s)"): the tool-use prompt bills as input. RED: the field was
+/// never read and billed zero.
+#[test]
+fn tool_use_prompt_tokens_are_billed() {
+    let u = usage_of(json!({
+        "promptTokenCount": 95,
+        "toolUsePromptTokenCount": 30,
+        "responseTokenCount": 50,
+        "totalTokenCount": 175,
+        "promptTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 80 },
+            { "modality": "TEXT", "tokenCount": 15 }
+        ],
+        "toolUsePromptTokensDetails": [ { "modality": "TEXT", "tokenCount": 30 } ]
+    }));
+    assert_eq!((u.audio_in, u.text_in), (80, 45), "{u:?}");
+    assert_eq!(u.audio_out + u.text_out, 50, "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY; `thoughtsTokenCount` is the "Number of tokens of thoughts for thinking
+/// models", and Google's price list states "Output price (including thinking tokens)"): a thinking
+/// model's thought tokens bill as output. RED: the field was never read and billed zero.
+#[test]
+fn thought_tokens_are_billed_as_output() {
+    let u = usage_of(json!({
+        "promptTokenCount": 95,
+        "responseTokenCount": 50,
+        "thoughtsTokenCount": 120,
+        "totalTokenCount": 265,
+        "responseTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 40 },
+            { "modality": "TEXT", "tokenCount": 10 }
+        ]
+    }));
+    assert_eq!(u.audio_in + u.text_in, 95, "{u:?}");
+    assert_eq!((u.audio_out, u.text_out), (40, 130), "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY; the owner's ruling bills "Google's total"): where `totalTokenCount`
+/// states more than the prompt, tool-use prompt, response and thoughts it breaks into, the
+/// remainder bills as input, so the turn's classes sum to Google's total. RED: the total was never
+/// read and the remainder billed zero.
+#[test]
+fn googles_total_is_billed_when_it_exceeds_its_parts() {
+    let u = usage_of(json!({
+        "promptTokenCount": 95,
+        "responseTokenCount": 50,
+        "totalTokenCount": 160
+    }));
+    assert_eq!(u.audio_in + u.text_in, 110, "{u:?}");
+    assert_eq!(u.audio_out + u.text_out, 50, "{u:?}");
+}
+
 #[test]
 fn cached_content_tokens_are_not_billed_twice() {
     // Gemini reports `cachedContentTokenCount` as a SUBSET of `promptTokenCount` (cached content IS

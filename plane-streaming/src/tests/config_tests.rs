@@ -76,6 +76,7 @@ fn the_strict_key_lists_are_the_session_objects_own_members() {
         tools: vec![serde_json::json!({})],
         tool_choice: Some(serde_json::json!("auto")),
         max_output_tokens: Some(MaxOutputTokens::Inf),
+        context_window_tokens: Some(1),
     };
     assert_eq!(
         keys(serde_json::to_value(&full).expect("json")),

@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use busbar_contract::abi::mechanism::ticket::Ticket;
 
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
-use crate::codec::ir::config::SessionConfig;
+use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
 use crate::codec::ir::GeminiLiveCodec;
 use crate::config::StreamsCfg;
 use crate::driven::{Door, Steps};
@@ -113,6 +113,8 @@ pub struct Live {
     started_ns: Option<u64>,
     /// The far end has answered the session: its fee unit was incurred.
     answered: bool,
+    /// The provider's call a sideband session attaches to, as its arrival named it.
+    call_id: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
     pub(crate) near: crate::piece::Owed,
     /// What the frame a far-side answer is writing still owes the reply buffer.
@@ -145,7 +147,8 @@ impl Live {
     }
 
     /// [`Self::open`], locked to `rewritten` where a session-open hook rewrote the params
-    /// ([`Self::locked`]) this session opens under.
+    /// ([`Self::locked`]) this session opens under, with the section's two token ceilings applied
+    /// ([`with_ceilings`]).
     #[must_use]
     pub fn open_locked(
         door: Door,
@@ -153,7 +156,7 @@ impl Live {
         rewritten: Option<SessionConfig>,
     ) -> Option<Live> {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
-        let locked = rewritten.unwrap_or_else(|| Self::locked(door, cfg));
+        let locked = with_ceilings(rewritten.unwrap_or_else(|| Self::locked(door, cfg)), cfg);
         let unit = match door {
             Door::Sideband => Unit::Realtime(SessionUnit::open(
                 OpenAiRealtimeCodec,
@@ -181,11 +184,34 @@ impl Live {
             ceiling_secs: ceiling,
             started_ns: None,
             answered: false,
+            call_id: None,
             near: crate::piece::Owed::default(),
             far: crate::piece::Owed::default(),
             short_near: None,
             short_far: None,
         })
+    }
+
+    /// The provider's call this session attaches to (the sideband door's `{call_id}`).
+    pub fn attach(&mut self, call_id: String) {
+        self.call_id = Some(call_id);
+    }
+
+    /// The target the session dials under the member's base URL: the dialect's socket `path`, and
+    /// for a session attached to a provider's call, that call (`?call_id=`, the provider's sideband
+    /// connection to the call's own session).
+    #[must_use]
+    pub fn dial_target(&self, path: &str) -> String {
+        match &self.call_id {
+            Some(id) => format!("{path}?call_id={id}"),
+            None => path.to_string(),
+        }
+    }
+
+    /// Whether the session ended on a far-end usage report it could not read and the kernel has
+    /// not been told; telling clears it.
+    pub fn take_unmetered(&mut self) -> bool {
+        each!(&mut self.unit, |u| u.take_unmetered())
     }
 
     /// Queue what `plan` owes either side, the far end's frames first.
@@ -279,6 +305,22 @@ impl Live {
         }
         out
     }
+}
+
+/// THE SECTION'S TOKEN CEILINGS over the session params `locked`: the per-response output cap is
+/// `streams.max_output_tokens`, or the session's own where that is lower, and the context window is
+/// `streams.context_window_tokens`. Each dialect states them in its own keys when the session is
+/// locked (`max_output_tokens` and `truncation` on OpenAI Realtime, `generationConfig.maxOutputTokens`
+/// and `contextWindowCompression` on Gemini Live).
+#[must_use]
+pub fn with_ceilings(mut locked: SessionConfig, cfg: &StreamsCfg) -> SessionConfig {
+    let cap = match locked.max_output_tokens {
+        Some(MaxOutputTokens::Limit(n)) => n.min(cfg.max_output_tokens),
+        _ => cfg.max_output_tokens,
+    };
+    locked.max_output_tokens = Some(MaxOutputTokens::Limit(cap));
+    locked.context_window_tokens = Some(cfg.context_window_tokens);
+    locked
 }
 
 /// THE SESSION-OPEN PARAMS A COMMITTED HOOK REWRITE PRODUCED (the session-open hook projection the

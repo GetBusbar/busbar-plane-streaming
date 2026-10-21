@@ -14,6 +14,7 @@ fn rule(set: serde_json::Value) -> Rule {
             Value::Object(m) => m,
             _ => Map::new(),
         },
+        proto_names: false,
     }
 }
 

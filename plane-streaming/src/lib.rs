@@ -32,7 +32,7 @@
 //!
 //! The plane value ([`StreamingPlane`]) is immutable and carries only its configured upstream list.
 //! A door instance holds its live generations; a live session's state (the codec's decode state, the
-//! open turn's counters, the session's cumulative units and record) is a [`session_unit::SessionUnit`].
+//! open turn's counters and the session's cumulative units) is a [`session_unit::SessionUnit`].
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -44,7 +44,6 @@ mod claims;
 #[allow(missing_docs)]
 mod codec;
 mod config;
-mod diagnostics;
 mod door;
 mod driven;
 mod meta;
@@ -56,6 +55,9 @@ mod session;
 mod session_door;
 mod session_params;
 mod session_pump;
+/// The session record the crate's tests read (the door writes none: the kernel writes a session's
+/// one line).
+#[cfg(test)]
 mod session_row;
 mod session_unit;
 /// The live sessions one open builds, by door (the crate's tests' driver; the door holds `Live`).

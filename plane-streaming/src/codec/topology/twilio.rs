@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE TWILIO MEDIA STREAMS ENVELOPE for the telephony topology (behind the `runtime` feature).
+//! THE TWILIO MEDIA STREAMS ENVELOPE for the telephony topology.
 //!
 //! Twilio speaks a JSON-over-WS protocol on its Media Streams leg: lifecycle events (`connected`,
 //! `start`, `mark`, `dtmf`, `stop` — the whole set Twilio sends TO the socket, because an event
 //! this codec does not model is a decode REFUSAL to everything downstream) plus per-frame `media`
-//! events whose `payload` is base64 8 kHz µ-law. The
-//! generic telephony bridge (`TelephonyProxy`, in the runtime half) already carries raw `Vec<u8>` on its
-//! `client_in`/`client_out` halves, so the only carrier-specific work is this thin, stateless codec
-//! that:
+//! events whose `payload` is base64 8 kHz µ-law. The telephony session ([`TwilioBridge`], driven by
+//! `crate::session_unit::SessionUnit`) rewrites only this envelope, so the carrier-specific work is
+//! this thin codec that:
 //!
 //! * DECODES an inbound Twilio WS frame into a [`TwilioEvent`], base64-decoding a `media` payload to
-//!   the raw µ-law bytes the proxy's `client_in` stream consumes.
-//! * ENCODES raw µ-law bytes back into the Twilio outbound `media` envelope for the proxy's
-//!   `client_out` sink.
-//! * Renders the inbound-webhook TwiML that tells Twilio which WS URL to dial.
+//!   the raw µ-law bytes the far end's uplink append carries.
+//! * ENCODES the far end's µ-law audio back into the Twilio outbound `media` envelope, and relays a
+//!   tool call the model makes down the session as the far end wrote it (Law 11).
+//! * Renders the inbound-webhook TwiML that tells Twilio which WS URL to dial (the crate's tests').
 //! * REFUSES a `start` whose negotiated media format is not `g711_ulaw` / 8000 Hz — a silent format
 //!   mismatch would corrupt the barge-in truncate arithmetic without erroring, so it fails closed.
 //! * Guards a WS connection's `streamSid` against the value bound at admission, so a forged or replayed
@@ -527,12 +526,18 @@ impl TwilioBridge {
 
     /// Rewrite one frame bound for the caller into the carrier's envelope: model audio becomes a
     /// `media` frame on the call's stream, and a barge-in clears the audio the carrier has queued.
-    /// `None` for a frame the carrier has no event for.
+    /// A tool call the model makes is relayed down the session as the far end wrote it (Law 11: "a
+    /// tool call on any session, Twilio included, is relayed down that session as-is"; busbar
+    /// neither drops nor answers it). `None` for any other frame: the carrier has no event for it.
     #[must_use]
     pub fn to_caller(&self, frame: &[u8]) -> Option<Vec<u8>> {
-        let sid = self.stream_sid.as_deref()?;
         let v: serde_json::Value = serde_json::from_slice(frame).ok()?;
-        match v.get("type").and_then(serde_json::Value::as_str)? {
+        let kind = v.get("type").and_then(serde_json::Value::as_str)?;
+        if is_tool_call(kind, &v) {
+            return Some(frame.to_vec());
+        }
+        let sid = self.stream_sid.as_deref()?;
+        match kind {
             "response.output_audio.delta" | "response.audio.delta" => {
                 let audio = base64_decode(v.get("delta")?.as_str()?)?;
                 Some(TwilioEnvelope::encode_media(sid, &audio))
@@ -545,6 +550,27 @@ impl TwilioBridge {
             _ => None,
         }
     }
+}
+
+/// Whether the far end's event `kind` (the frame `v`) carries a tool call the model made: its
+/// arguments as they stream (`response.function_call_arguments.*`), or the `function_call` item
+/// itself as the response and the conversation state it.
+fn is_tool_call(kind: &str, v: &serde_json::Value) -> bool {
+    if kind.starts_with("response.function_call_arguments.") {
+        return true;
+    }
+    matches!(
+        kind,
+        "response.output_item.added"
+            | "response.output_item.done"
+            | "conversation.item.created"
+            | "conversation.item.added"
+            | "conversation.item.done"
+    ) && v
+        .get("item")
+        .and_then(|i| i.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("function_call")
 }
 
 #[cfg(test)]

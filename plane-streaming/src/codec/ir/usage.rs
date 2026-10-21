@@ -56,9 +56,9 @@ pub struct IrDuplexUsage {
 /// which an `f64` no longer represents consecutive integers, so the integrality test stops carrying
 /// information) all read as `None`. Rounding would invent a quantity the provider never reported.
 ///
-/// CAVEAT, STATED PLAINLY: every caller in this crate currently ends in `unwrap_or_default()`, so a
-/// refused value still lands as ZERO. Decision #81 rules that a refused count is a REFUSAL, never a
-/// zero; implementing that refusal is the decimal-count work's, not this seam's.
+/// A refused value is never read as zero: every billed count in this crate is read through the
+/// codecs' `billed_count`, which turns a present-but-unreadable count into a refusal of the usage
+/// report (decision #81), and a live session that meets one ends rather than serve unmetered.
 #[must_use]
 pub fn read_count_u64(v: &serde_json::Value) -> Option<u64> {
     if let Some(u) = v.as_u64() {

@@ -13,6 +13,10 @@ pub const OPENAI_REALTIME: &str = "openai_realtime";
 /// (a plane earns a superset at its SECOND wire format and not before).
 pub const GEMINI_LIVE: &str = "gemini_live";
 
+/// THE TELEPHONY DIALECT a caller arrives in on the telephony door: Twilio Media Streams' JSON
+/// event envelope (never dialled: its session's far end speaks [`OPENAI_REALTIME`]).
+pub const TWILIO_MEDIA_STREAMS: &str = "twilio_media_streams";
+
 /// THE PROVIDER SIDE OF A DIAL — the origin, converted to its socket scheme, plus the fixed path the
 /// dialect's realtime endpoint answers on. Carries no credential: the dialect's
 /// [`credential_placement`] says where the host presents one, and the host adds it to the upgrade
@@ -36,8 +40,6 @@ pub fn provider_ws_url(base_url: &str, dialect: &str) -> String {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialPlacement {
-    /// A query parameter with this name on the request target.
-    Query(&'static str),
     /// A request header `name: {prefix}{secret}`.
     Header {
         /// The header name (lowercase).
@@ -47,14 +49,17 @@ pub enum CredentialPlacement {
     },
 }
 
-/// THE DIALECT'S NATIVE CREDENTIAL SCHEME on its realtime socket: Gemini Live takes the documented
-/// `?key=` query parameter (the bytes on the wire are the ones this plane has always sent); OpenAI
-/// Realtime takes `Authorization: Bearer`.
+/// THE DIALECT'S NATIVE CREDENTIAL SCHEME on its realtime socket, as the door's outbound needs
+/// declare it (`crate::door::LIVE_STYLE`, `crate::door::REALTIME_STYLE`): Gemini Live takes the
+/// `x-goog-api-key` header; OpenAI Realtime takes `Authorization: Bearer`.
 #[cfg(test)]
 #[must_use]
 pub fn credential_placement(dialect: &str) -> CredentialPlacement {
     if dialect == GEMINI_LIVE {
-        CredentialPlacement::Query("key")
+        CredentialPlacement::Header {
+            name: "x-goog-api-key",
+            prefix: "",
+        }
     } else {
         CredentialPlacement::Header {
             name: "authorization",
