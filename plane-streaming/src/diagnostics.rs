@@ -14,11 +14,13 @@
 //! the runtime catalog (`REGISTRY ∪ installed`) and resolve through `by_code`. The `busbar` binary
 //! reaches it through the plane's linked entry.
 
+#[cfg(test)]
 use busbar_contract::diagnostic::{Class, Diagnostic, Severity};
 
 /// The D2 governance outcome: a live streaming session was HARD-CLOSED when its metering lease reached
 /// the real cap (settle-past-cap), rather than being allowed to run unmetered. This is the plane's
 /// fail-closed spend ceiling doing its job on a long-lived session.
+#[cfg(test)]
 pub const STREAMING_SESSION_LEASE_EXHAUSTED: Diagnostic = Diagnostic {
     code: 7050,
     class: Class::Plane,
@@ -37,6 +39,7 @@ pub const STREAMING_SESSION_LEASE_EXHAUSTED: Diagnostic = Diagnostic {
 /// THE STREAMING PLANE'S PLANE-CONTRIBUTED DIAGNOSTICS — the `&'static [&'static Diagnostic]` the
 /// composition root installs via `install_diagnostics`. Ascending by code, mirroring the neutral
 /// `REGISTRY` and the sibling plane catalogs.
+#[cfg(test)]
 pub const DIAGNOSTICS: &[&Diagnostic] = &[&STREAMING_SESSION_LEASE_EXHAUSTED];
 
 #[cfg(test)]

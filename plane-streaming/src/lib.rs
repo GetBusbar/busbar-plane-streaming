@@ -59,15 +59,22 @@ mod session_params;
 mod session_pump;
 mod session_row;
 mod session_unit;
+/// The live sessions one open builds, by door (the crate's tests' driver; the door holds `Live`).
+#[cfg(test)]
 mod sessions;
 mod splice;
 
 #[cfg(test)]
 mod tests;
 
+// The plane value and its upstreams: the crate's tests' (purity, the plane's meta); a shipped build
+// states the plane through its door alone.
+#[cfg(test)]
 use busbar_contract::ids::LaneId;
+#[cfg(test)]
 use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
 
+#[cfg(test)]
 use claims::Dialect;
 
 /// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
@@ -78,6 +85,7 @@ pub use door::door;
 /// Borrowed for the life of the program, the same way `busbar-plane-llm::Upstream` is: the
 /// composition root interns every config-derived key once through
 /// the host's word interner (its `Registration`) and hands over names that outlive it.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Upstream {
     /// The priced lane this upstream is reached on.
@@ -95,11 +103,13 @@ pub(crate) struct Upstream {
 ///
 /// The one field is a borrowed, immutable list: no cell, no lock, no atomic. The purity test in
 /// `tests::purity` asserts that by walking the type rather than by trusting this sentence.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct StreamingPlane {
     upstreams: &'static [Upstream],
 }
 
+#[cfg(test)]
 impl StreamingPlane {
     /// A plane with a configured upstream set.
     #[must_use]
@@ -114,12 +124,6 @@ impl StreamingPlane {
     /// not a panic, and not a fabricated host.
     pub const EMPTY: Self = Self::new(&[]);
 
-    /// The configured upstreams, in declaration order.
-    #[must_use]
-    pub const fn upstreams(&self) -> &'static [Upstream] {
-        self.upstreams
-    }
-
     /// The first configured upstream that speaks a given dialect.
     ///
     /// First match wins, the declaration order the operator wrote. Choosing among several when more
@@ -130,12 +134,14 @@ impl StreamingPlane {
     }
 }
 
+#[cfg(test)]
 impl Default for StreamingPlane {
     fn default() -> Self {
         Self::EMPTY
     }
 }
 
+#[cfg(test)]
 impl Plugin for StreamingPlane {
     fn key(&self) -> &'static str {
         <Self as busbar_contract::plane::PlaneMeta>::KEY

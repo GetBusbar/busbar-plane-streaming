@@ -97,13 +97,8 @@ impl RequestUnit {
         })
     }
 
-    /// Its door.
-    #[must_use]
-    pub const fn door(&self) -> Door {
-        self.door
-    }
-
     /// `true` once the caller's answer has been given.
+    #[cfg(test)]
     #[must_use]
     pub const fn answered(&self) -> bool {
         self.answered

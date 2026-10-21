@@ -130,8 +130,10 @@ pub trait Steps {
     /// AUTHENTICATE: whom a unit on this door needs.
     fn authenticate(&self) -> u32;
     /// VERIFY: where, inside the plane's section, the destination a session dials is named.
+    #[cfg(test)]
     fn verify(&self) -> &'static str;
     /// APPROVE: the grant a key must hold, as (kind, value).
+    #[cfg(test)]
     fn approve(&self) -> (&'static str, &'static str);
     /// ADMIT: the units a unit is expected to cost before the far end reports any.
     fn admit(&self) -> Vec<(u32, u64)>;
@@ -148,6 +150,7 @@ pub trait Steps {
     /// METER: a session's units so far, per billable class index, the zero classes left out.
     fn meter(&self, units: &crate::session_unit::CumulativeUnits) -> Vec<(u32, u64)>;
     /// AUDIT: the action a unit on this door is audited under.
+    #[cfg(test)]
     fn audit(&self) -> &'static str;
 }
 
@@ -163,11 +166,13 @@ impl Steps for Door {
     }
 
     /// The kernel resolves `streams.session.model` through the root models and judges it.
+    #[cfg(test)]
     fn verify(&self) -> &'static str {
         crate::door::EGRESS_TARGET
     }
 
     /// The `session` kind, for the one pool every session is served on.
+    #[cfg(test)]
     fn approve(&self) -> (&'static str, &'static str) {
         (crate::door::SCOPE, crate::door::SESSION_POOL)
     }
@@ -218,12 +223,14 @@ impl Steps for Door {
     }
 
     /// A session open.
+    #[cfg(test)]
     fn audit(&self) -> &'static str {
         SESSION_OPEN_ACTION
     }
 }
 
 /// The action a session open is audited under.
+#[cfg(test)]
 pub const SESSION_OPEN_ACTION: &str = "streaming.session.open";
 
 /// The realtime socket an OpenAI Realtime session dials, under the member's base URL.

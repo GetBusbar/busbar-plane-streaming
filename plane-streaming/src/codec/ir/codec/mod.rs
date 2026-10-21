@@ -335,6 +335,7 @@ impl DecodeState {
     }
 
     /// The wire fields dropped as unmodelled so far this session, newest last.
+    #[cfg(test)]
     #[must_use]
     pub fn dropped_fields(&self) -> Vec<&str> {
         self.dropped_fields.iter().map(String::as_str).collect()
@@ -393,6 +394,7 @@ impl DecodeState {
     ///
     /// The bytes relayed for this item, converted at the negotiated format's rate, and bounded by the
     /// clock when the runtime has fed one (no clock: the bytes stand alone, an upper bound).
+    #[cfg(test)]
     #[must_use]
     pub fn played_ms(&self) -> u64 {
         let by_bytes =
@@ -407,6 +409,7 @@ impl DecodeState {
     /// duration (ms) — the value an [`IrDuplexControl::ItemTruncate`] carries — and zeroes the
     /// playback counter for the next item. This is the DATA move; the runtime that cancels the
     /// in-flight response and emits the truncate is the next layer.
+    #[cfg(test)]
     pub fn flush_playback(&mut self) -> u64 {
         let ms = self.played_ms();
         self.played_bytes = 0;
@@ -572,11 +575,13 @@ pub trait DuplexReader {
     fn read_down_ref(&self, wire: WireRef<'_>, st: &mut DecodeState) -> Vec<IrServerEvent>;
 
     /// The uplink read, over bytes the caller owns.
+    #[cfg(test)]
     fn read_up(&self, evt: WireEvent, st: &mut DecodeState) -> Vec<IrClientEvent> {
         self.read_up_ref(WireRef::from(&evt), st)
     }
 
     /// The downlink read, over bytes the caller owns.
+    #[cfg(test)]
     fn read_down(&self, evt: WireEvent, st: &mut DecodeState) -> Vec<IrServerEvent> {
         self.read_down_ref(WireRef::from(&evt), st)
     }
