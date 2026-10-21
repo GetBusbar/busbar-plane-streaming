@@ -169,7 +169,7 @@ fn usage_reports_accumulate_across_turns() {
     let _ = s.from_far_end(&done, 0);
     assert_eq!(
         s.units().0,
-        [20, 40, 6, 8, 0, 0],
+        [20, 40, 6, 8, 0, 0, 0, 0],
         "cached tokens are attribution, never billed"
     );
 }
