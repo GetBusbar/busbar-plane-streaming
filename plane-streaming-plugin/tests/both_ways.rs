@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE STREAMING PLANE'S DOOR, BOTH WAYS (#2 (4)/(5): the plugin's own both-ways witness, over the
-//! real loader): the same door compiled in (`busbar_plane_streaming::door::door`, through
+//! real loader): the same door compiled in (`busbar_plane_streaming::door`, through
 //! `load_linked`) and dropped in (this crate's cdylib, `busbar_plane_streaming_plugin`, which `cargo
 //! test` builds beside the test, through `load_dropped`), driven by ONE script over the plane kind.
 //! It moved here with the crate from busbar's `crates/busbar-plane-streaming/tests/conformance.rs`;
@@ -23,7 +23,7 @@ use busbar_contract::abi::plane::{
     PlaneRefreshOut, PlaneSnapshot, UnitCount, CANCEL_FAILED, CLAIM_EXACT, CLAIM_OPEN, EMIT_DONE,
     EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST,
 };
-use busbar_plane_streaming::{door, driven};
+use busbar_plane_streaming::door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::{
     in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
@@ -50,7 +50,75 @@ fn bind(d: &Dispatcher, instance: &str) -> Bind {
 
 /// The compiled-in row: the door and the Statement rendering it states.
 fn row() -> LinkedRow {
-    LinkedRow::of(door::door).expect("the streaming door states itself")
+    LinkedRow::of(door).expect("the streaming door states itself")
+}
+
+/// The Statement tail the door states, read off the door itself: the crate's one public item.
+fn tail() -> &'static busbar_contract::abi::plane::PlaneTail {
+    use busbar_contract::abi::plane::PlaneTail;
+    // SAFETY: the door's `'static` Door, its Statement, and the plane tail it points at.
+    unsafe { &*(*(*door()).statement).kind_tail.cast::<PlaneTail>() }
+}
+
+/// The need a far request rides, as `OnPieceOut::need` names it: the index plus one of the outbound
+/// need on `transport` under the auth style `auth`, read off the door's Statement.
+fn rides(transport: &str, auth: &str) -> u32 {
+    use busbar_contract::abi::host::conn::connector::DIRECTION_OUTBOUND;
+    let read = busbar_contract::abi::mechanism::rendering::read(&row().statement)
+        .expect("the Statement reads back");
+    let at = read
+        .needs
+        .iter()
+        .position(|n| {
+            n.direction == DIRECTION_OUTBOUND && n.transport == transport && n.auth == auth
+        })
+        .expect("the door states the need");
+    u32::try_from(at + 1).expect("a need index")
+}
+
+/// The realtime dialects' vendor copy for a bad or missing credential (the logic crate's
+/// `door_tests` pins the door's own constants to these words).
+const AUTH_FAILURE_MESSAGE: &str = "Incorrect API key provided.";
+const AUTH_FAILURE_CODE: &str = "invalid_api_key";
+
+/// The realtime dialects' REST error envelope for a refusal at `status` worded `text`, built as the
+/// door builds it (the logic crate's `door_tests` reads the door's `refusal_body` in this shape).
+fn refusal_body(status: u16, text: &str) -> Vec<u8> {
+    let kind = match status {
+        401 => "authentication_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        429 => "rate_limit_error",
+        400..=499 => "invalid_request_error",
+        _ => "server_error",
+    };
+    serde_json::to_vec(&serde_json::json!({
+        "error": {"message": text, "type": kind, "param": null, "code": null}
+    }))
+    .expect("the envelope serializes")
+}
+
+/// The served plane's answer to a minted secret, built as the plane builds it (the logic crate's
+/// `driven_tests` pins `mint_reply`'s body to this shape).
+fn minted_answer() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "value": "ek_oracle_0001",
+        "expires_at_unix": 1_767_225_600,
+    }))
+    .expect("the answer serializes")
+}
+
+/// THE STATEMENT CARRIES THE DECLARES DOCUMENT (BUSBAR-1.6.0.md l.246, ARCHITECT ruling
+/// 2026-10-21): the door's Statement, read back, holds `declares.json` byte for byte under
+/// `EXT_DECLARES`.
+#[test]
+fn the_statement_carries_the_declares_document() {
+    let row = busbar_plugin_loader::dispatch::LinkedRow::of(door).unwrap();
+    let read = busbar_contract::abi::mechanism::rendering::read(&row.statement).unwrap();
+    assert_eq!(
+        busbar_contract::abi::mechanism::extensions::declares(&read.extensions.bytes),
+        Some(&include_bytes!("../../plane-streaming/declares.json")[..])
+    );
 }
 
 fn json(b: &'static [u8]) -> Blob {
@@ -336,7 +404,7 @@ fn the_dropped_door_answers_as_the_linked_door_does() {
 fn the_tail_states_what_the_served_plane_declares() {
     // The billable classes a session counts in, the per-session fee and the `session` grant kind:
     // the served plane's own declaration, read off the tail the door states.
-    let t = door::TAIL;
+    let t = tail();
     assert_eq!(read(t.scope), "session");
     assert_eq!(read(t.audit_kind), "streaming_session");
     // SAFETY: the tail's `'static` lists.
@@ -560,7 +628,7 @@ fn unit_script(p: &Plugin<Plane>) -> Vec<String> {
 /// What the unit script must read: the served plane's answers, through the door.
 fn unit_expected() -> Vec<String> {
     let none = "verb= target= fields=[]";
-    let minted = driven::mint_reply(200, MINTED);
+    let minted = minted_answer();
     let mut t = vec![
         "open Ready".to_string(),
         format!(
@@ -572,8 +640,8 @@ fn unit_expected() -> Vec<String> {
         format!(
             "mint far_end Ready emitted={} more=0 far=false done=true status=200 verb= target= \
              fields=[\"content-type=application/json\", \"content-length={}\"]",
-            String::from_utf8_lossy(&minted.body),
-            minted.body.len()
+            String::from_utf8_lossy(&minted),
+            minted.len()
         ),
         "sdp attempt Ready emitted= more=0 far=true done=false status=0 verb=POST \
          target=/v1/realtime/calls fields=[\"content-type=application/sdp\"]"
@@ -875,29 +943,11 @@ fn every_far_request_names_the_need_it_rides() {
         let mut b = Bufs::with_units(1 << 18, 8);
         let answer = b.call(p, &session(40, FROM_CALLER, 0, &uplink(100)));
         assert!(answer.contains("far=true"), "{answer}");
-        assert_eq!(b.last_need, door::RIDES_REALTIME_SOCKET, "{answer}");
+        assert_eq!(b.last_need, rides("ws", "bearer"), "{answer}");
         let mut b = Bufs::new(1 << 16);
         let answer = b.call(p, &attempt(41, 0));
         assert!(answer.contains("far=true"), "{answer}");
-        assert_eq!(b.last_need, door::RIDES_REALTIME_PASS, "{answer}");
-    }
-}
-
-/// A refused open (a hook's veto, an admission's refusal) is answered in the dialects' error shape:
-/// the kernel's status read as the error's type, its words as the message.
-#[test]
-fn a_refusal_is_rendered_in_the_dialects_error_shape() {
-    for (status, kind) in [
-        (401, "authentication_error"),
-        (403, "permission_error"),
-        (429, "rate_limit_error"),
-        (400, "invalid_request_error"),
-        (503, "server_error"),
-    ] {
-        let body: serde_json::Value =
-            serde_json::from_slice(&door::refusal_body(status, "no sessions today")).expect("JSON");
-        assert_eq!(body["error"]["type"], kind, "{status}");
-        assert_eq!(body["error"]["message"], "no sessions today");
+        assert_eq!(b.last_need, rides("http", "bearer"), "{answer}");
     }
 }
 
@@ -944,15 +994,13 @@ fn refused(
 fn an_authentication_refusal_reads_in_the_dialects_vendor_terms() {
     use busbar_contract::caps::ReasonCode;
     let vendor = serde_json::json!({"error": {
-        "message": door::AUTH_FAILURE_MESSAGE,
+        "message": AUTH_FAILURE_MESSAGE,
         "type": "authentication_error",
         "param": null,
-        "code": door::AUTH_FAILURE_CODE,
+        "code": AUTH_FAILURE_CODE,
     }});
-    assert_eq!(door::AUTH_FAILURE_MESSAGE, "Incorrect API key provided.");
-    assert_eq!(door::AUTH_FAILURE_CODE, "invalid_api_key");
     let kernel_word: serde_json::Value =
-        serde_json::from_slice(&door::refusal_body(401, "unauthenticated")).expect("JSON");
+        serde_json::from_slice(&refusal_body(401, "unauthenticated")).expect("JSON");
     assert_ne!(
         kernel_word, vendor,
         "RED ARM: the kernel's word is not the vendor's answer"
@@ -1079,7 +1127,7 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
         assert_eq!(outcome, Outcome::Ready, "{body}");
         assert_eq!(
             body.as_bytes(),
-            door::refusal_body(429, "the budget is exhausted").as_slice(),
+            refusal_body(429, "the budget is exhausted").as_slice(),
             "a refusal before the upgrade keeps the REST envelope"
         );
     }

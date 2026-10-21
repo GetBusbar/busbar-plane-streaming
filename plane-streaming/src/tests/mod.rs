@@ -169,3 +169,17 @@ mod style {
         );
     }
 }
+
+/// The one counting allocator the crate's alloc gates read, and the only `unsafe` in the crate
+/// (a test-only module; a shipped build keeps `forbid(unsafe_code)`).
+#[allow(unsafe_code)]
+mod alloc_counter;
+
+/// What one downlink Twilio audio frame may allocate, and the bytes it must still render.
+mod alloc_gate_tests;
+
+/// What reading one wire frame may allocate, borrowed against owned.
+mod codec_alloc_gate_tests;
+
+/// The plane's type-level purity gates, moved in from `tests/purity.rs`.
+mod purity_gate_tests;

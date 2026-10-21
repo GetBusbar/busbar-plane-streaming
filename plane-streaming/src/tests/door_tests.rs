@@ -158,3 +158,31 @@ fn p_item_refusal_reason_collapse_only_the_kernels_class_picks_the_answer_and_no
         }
     }
 }
+
+/// (Moved from `plane-streaming-plugin/tests/both_ways.rs`, which reaches only the door.)
+/// A refused open (a hook's veto, an admission's refusal) is answered in the dialects' error shape:
+/// the kernel's status read as the error's type, its words as the message.
+#[test]
+fn a_refusal_is_rendered_in_the_dialects_error_shape() {
+    for (status, kind) in [
+        (401, "authentication_error"),
+        (403, "permission_error"),
+        (429, "rate_limit_error"),
+        (400, "invalid_request_error"),
+        (503, "server_error"),
+    ] {
+        let body: serde_json::Value =
+            serde_json::from_slice(&refusal_body(status, "no sessions today")).expect("JSON");
+        assert_eq!(body["error"]["type"], kind, "{status}");
+        assert_eq!(body["error"]["message"], "no sessions today");
+    }
+}
+
+/// The vendor's own words for a bad or missing credential (moved from the cdylib crate's
+/// `both_ways.rs`, whose `an_authentication_refusal_reads_in_the_dialects_vendor_terms` drives the
+/// door against these same words).
+#[test]
+fn the_bad_key_answer_is_the_vendors_own_copy() {
+    assert_eq!(AUTH_FAILURE_MESSAGE, "Incorrect API key provided.");
+    assert_eq!(AUTH_FAILURE_CODE, "invalid_api_key");
+}
