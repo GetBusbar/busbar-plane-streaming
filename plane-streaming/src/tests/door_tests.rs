@@ -54,7 +54,7 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         assert_eq!(declared.direction, DIRECTION_OUTBOUND, "{door:?}");
         assert_eq!(declared.egress_class, EGRESS_PROVIDER, "{door:?}");
         let attempt = door
-            .route(&cfg.session, None, &[])
+            .route(&cfg.session, None)
             .expect("a session door's dial is a request")
             .expect("a session door dials");
         assert_eq!(
@@ -71,6 +71,13 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         Door::Gemini.rides(),
         RIDES_REALTIME_SOCKET,
         "a Gemini Live session never rides the first-declared provider's socket"
+    );
+    // Row 132: the SDP door's far request is busbar's own call to OpenAI Realtime (the browser's
+    // media ends at busbar), on the outbound call need, never a socket's.
+    assert_eq!(Door::Sdp.rides(), RIDES_REALTIME_CALL);
+    assert_eq!(
+        NEEDS[RIDES_REALTIME_CALL as usize - 1].direction,
+        DIRECTION_OUTBOUND
     );
 
     // Metered on the serving provider's own report: a Gemini Live usage frame counts on the
