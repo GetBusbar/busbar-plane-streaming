@@ -11,7 +11,7 @@
 //! with the logic crate (`plane-streaming/tests/conformance.rs`).
 
 busbar_plugin_loader::conformance_suite! {
-    door: busbar_plane_streaming::door::door,
+    door: busbar_plane_streaming::door::MACRO_DOOR,
     cdylib: "busbar_plane_streaming_plugin",
     inputs: include_str!("conformance.json"),
 }

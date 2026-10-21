@@ -22,8 +22,8 @@ use busbar_contract::abi::sdk::{HostBuf, Lent, Out};
 /// attempt.
 #[must_use]
 pub fn is_recall(input: Lent<'_, OnPieceIn>) -> bool {
-    let given = input.get();
-    given.flags == 0 && given.attempt_no == 0 && input.field(|i| &i.bytes).bytes().is_empty()
+    let given = input;
+    given.flags() == 0 && given.attempt_no() == 0 && input.bytes().bytes().is_empty()
 }
 
 /// The bytes a unit's answer still owes the host's reply buffer, and the `EMIT_*` bits they carry.
