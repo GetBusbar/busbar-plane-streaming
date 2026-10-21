@@ -187,13 +187,8 @@ fn the_bad_key_answer_is_the_vendors_own_copy() {
     assert_eq!(AUTH_FAILURE_CODE, "invalid_api_key");
 }
 
-/// A mint unit's state, as the door holds it from its first piece, under no deadline.
+/// A mint unit's state, as the door holds it from its first piece.
 fn held_mint() -> Held {
-    held_until(0)
-}
-
-/// A mint unit's state whose first piece carried the deadline `deadline_ns`.
-fn held_until(deadline_ns: u64) -> Held {
     Held {
         unit: RequestUnit::open(
             Door::Mint,
@@ -203,8 +198,6 @@ fn held_until(deadline_ns: u64) -> Held {
         .expect("a one-request door"),
         owed: Owed::default(),
         short: None,
-        deadline_ns,
-        answered: false,
     }
 }
 
@@ -221,11 +214,11 @@ fn a_cancelled_request_unit_is_forgotten_and_a_full_table_refuses_rather_than_ev
         generation: 1,
     };
     for unit in 0..MAX_UNITS as u64 {
-        assert!(units.hold(unit, held_mint(), 0), "unit {unit}");
+        assert!(units.hold(unit, held_mint()), "unit {unit}");
         units.crossed(unit, ticket(unit));
     }
     let late = u64::MAX;
-    assert!(!units.hold(late, held_mint(), 0), "a full table refuses");
+    assert!(!units.hold(late, held_mint()), "a full table refuses");
     assert!(
         units.held.contains_key(&0),
         "the oldest unit in flight is kept"
@@ -236,7 +229,7 @@ fn a_cancelled_request_unit_is_forgotten_and_a_full_table_refuses_rather_than_ev
         "the cancelled unit is forgotten"
     );
     assert!(!units.cancel(ticket(0), 0), "and its ticket with it");
-    assert!(units.hold(late, held_mint(), 0), "its room is free");
+    assert!(units.hold(late, held_mint()), "its room is free");
 }
 
 /// An open instance with no generation published, as `open` builds one.
@@ -247,7 +240,7 @@ fn plane() -> Plane {
         snapshots: Generations::new(),
         units: Mutex::new(Units::default()),
         calls: Mutex::new(Calls::default()),
-        brokered: Mutex::new(std::collections::VecDeque::new()),
+        brokered: Mutex::new(Brokered::default()),
         sessions: Mutex::new(Sessions::default()),
         wake: None,
         driver: Mutex::new((Ticket::NONE, 0)),
@@ -273,18 +266,18 @@ fn a_refused_unit_is_forgotten_and_its_room_is_free() {
     {
         let mut units = lock(&p.units);
         for unit in 1..=MAX_UNITS as u64 {
-            assert!(units.hold(unit, held_mint(), 0), "unit {unit}");
+            assert!(units.hold(unit, held_mint()), "unit {unit}");
         }
-        assert!(!units.room(0), "the table is full");
+        assert!(units.full(), "the table is full");
     }
-    assert!(lock(&p.calls).pend(1, "rtc_1".to_string(), 0, 0));
+    assert!(lock(&p.calls).pend(1, "rtc_1".to_string()));
     p.end_unit(1);
     assert!(
         !lock(&p.units).held.contains_key(&1),
         "the refused unit is forgotten"
     );
     assert_eq!(lock(&p.calls).take(1), None, "its pending call with it");
-    assert!(lock(&p.units).room(0), "its room is free");
+    assert!(!lock(&p.units).full(), "its room is free");
     assert!(
         lock(&p.units).held.contains_key(&2),
         "no other unit is touched"
@@ -297,8 +290,8 @@ fn a_refused_unit_is_forgotten_and_its_room_is_free() {
 #[test]
 fn a_unit_the_kernel_cancels_by_its_key_is_forgotten() {
     let mut units = Units::default();
-    assert!(units.hold(7, held_mint(), 0));
-    assert!(units.hold(8, held_mint(), 0));
+    assert!(units.hold(7, held_mint()));
+    assert!(units.hold(8, held_mint()));
     assert!(
         units.cancel(Ticket::NONE, 7),
         "the cancel names a held unit by its key"
@@ -315,51 +308,15 @@ fn a_unit_the_kernel_cancels_by_its_key_is_forgotten() {
     assert!(units.held.contains_key(&8));
 }
 
-/// RED-BEFORE-GREEN (units leak): at the bound, a unit past its deadline that the far end never
-/// answered is stale (the kernel has cut it, and nothing will finish it): the room check forgets
-/// it. A unit inside its deadline, or one the far end has answered, is never dropped. RED: a full
-/// table refused every new unit, however long dead the units holding it were.
+/// GREEN (THE DESIGN: admission bounds live work, nothing evicts it): 4096 live units still refuse
+/// the next unit, and none of them is dropped.
 #[test]
-fn a_stale_never_answered_unit_makes_room() {
-    let mut units = Units::default();
-    let ticket = Ticket {
-        slot: 1,
-        generation: 1,
-    };
-    assert!(units.hold(1, held_until(100), 0));
-    units.crossed(1, ticket);
-    let mut answered = held_until(100);
-    answered.answered = true;
-    assert!(units.hold(2, answered, 0));
-    for unit in 3..=MAX_UNITS as u64 {
-        assert!(units.hold(unit, held_until(10_000), 0), "unit {unit}");
-    }
-    assert!(!units.room(99), "inside its deadline the unit is live");
-    assert_eq!(units.held.len(), MAX_UNITS);
-    assert!(units.room(100), "past its deadline it makes room");
-    assert!(!units.held.contains_key(&1), "the stale unit is forgotten");
-    assert!(!units.cancel(ticket, 0), "and its ticket with it");
-    assert!(
-        units.held.contains_key(&2),
-        "a unit the far end answered is never dropped"
-    );
-    assert_eq!(units.held.len(), MAX_UNITS - 1);
-    assert_eq!(units.next_stale(100), Some(10_000));
-}
-
-/// GREEN (THE DESIGN: admission bounds live work, nothing evicts it): 4096 live units, every one
-/// inside its deadline, still refuse the next unit, and none of them is dropped.
-#[test]
-fn a_full_table_of_live_units_inside_their_deadline_still_refuses() {
+fn a_full_table_of_live_units_still_refuses() {
     let mut units = Units::default();
     for unit in 0..MAX_UNITS as u64 {
-        let deadline = if unit % 2 == 0 { 0 } else { 10_000 };
-        assert!(units.hold(unit, held_until(deadline), 0), "unit {unit}");
+        assert!(units.hold(unit, held_mint()), "unit {unit}");
     }
-    assert!(
-        !units.hold(u64::MAX, held_mint(), 9_999),
-        "a full table refuses"
-    );
+    assert!(!units.hold(u64::MAX, held_mint()), "a full table refuses");
     assert_eq!(units.held.len(), MAX_UNITS, "no live unit is dropped");
     assert!(!units.held.contains_key(&u64::MAX));
 }
@@ -372,13 +329,10 @@ fn a_full_table_of_live_units_inside_their_deadline_still_refuses() {
 fn a_full_pending_call_table_refuses_the_next_arrival_and_keeps_every_call() {
     let mut calls = Calls::default();
     for unit in 0..MAX_PENDING_CALLS as u64 {
-        assert!(
-            calls.pend(unit, format!("rtc_{unit}"), 10_000, 0),
-            "unit {unit}"
-        );
+        assert!(calls.pend(unit, format!("rtc_{unit}")), "unit {unit}");
     }
     assert!(
-        !calls.pend(u64::MAX, "rtc_late".to_string(), 10_000, 9_999),
+        !calls.pend(u64::MAX, "rtc_late".to_string()),
         "the next arrival is refused"
     );
     assert_eq!(calls.pending.len(), MAX_PENDING_CALLS);
@@ -387,21 +341,20 @@ fn a_full_pending_call_table_refuses_the_next_arrival_and_keeps_every_call() {
         Some("rtc_0"),
         "the oldest pending call survives"
     );
-    assert!(calls.pend(u64::MAX, "rtc_late".to_string(), 10_000, 9_999));
+    assert!(calls.pend(u64::MAX, "rtc_late".to_string()));
     assert!(
-        calls.pend(1, "rtc_again".to_string(), 10_000, 9_999),
+        calls.pend(1, "rtc_again".to_string()),
         "an arrival re-asked (a short answer's re-call) keeps its own place"
     );
 }
 
-/// RED-BEFORE-GREEN: a pending call is freed when its unit is refused or cancelled, and a call past
-/// its deadline whose session never opened makes room at the bound. RED: entries were freed only
-/// when a session opened, so refused and cancelled arrivals held the table.
+/// RED-BEFORE-GREEN: a pending call is freed when its unit is refused or cancelled. RED: entries
+/// were freed only when a session opened, so refused and cancelled arrivals held the table.
 #[test]
-fn refused_cancelled_and_stale_pending_calls_are_freed() {
+fn refused_and_cancelled_pending_calls_are_freed() {
     let p = plane();
-    assert!(lock(&p.calls).pend(1, "rtc_1".to_string(), 0, 0));
-    assert!(lock(&p.calls).pend(2, "rtc_2".to_string(), 0, 0));
+    assert!(lock(&p.calls).pend(1, "rtc_1".to_string()));
+    assert!(lock(&p.calls).pend(2, "rtc_2".to_string()));
     p.end_unit(1);
     assert!(
         !lock(&p.calls).forget(1),
@@ -409,18 +362,102 @@ fn refused_cancelled_and_stale_pending_calls_are_freed() {
     );
     assert!(lock(&p.calls).forget(2), "a cancelled unit's call is freed");
     assert!(lock(&p.calls).pending.is_empty());
+}
 
-    let mut calls = Calls::default();
-    assert!(calls.pend(0, "rtc_stale".to_string(), 100, 0));
-    for unit in 1..MAX_PENDING_CALLS as u64 {
-        assert!(calls.pend(unit, format!("rtc_{unit}"), 0, 0), "unit {unit}");
+/// RED-BEFORE-GREEN (`BUSBAR-1.6.0.md` l.199: "An active work handle is never evicted ... Retention
+/// bounds only settled handles"): 4096 SDP offers from tenant B never drop tenant A's live call; B
+/// is held at its own cap. RED: the brokered list dropped its oldest entry past 4096, so B's
+/// offers pushed A's live call out, and A's sideband to it was refused.
+#[test]
+fn another_callers_offers_never_drop_a_live_call() {
+    let mut brokered = Brokered::default();
+    assert!(brokered.admits("tenant-a"));
+    brokered.record("rtc_a".to_string(), "tenant-a".to_string());
+    let mut admitted = 0;
+    for i in 0..MAX_BROKERED_CALLS {
+        if brokered.admits("tenant-b") {
+            brokered.record(format!("rtc_b{i}"), "tenant-b".to_string());
+            admitted += 1;
+        }
     }
-    assert!(!calls.pend(u64::MAX, "rtc_late".to_string(), 0, 99));
-    assert_eq!(calls.next_stale(99), Some(100));
     assert!(
-        calls.pend(u64::MAX, "rtc_late".to_string(), 0, 100),
-        "past its deadline the never-opened call makes room"
+        brokered.owns("rtc_a", "tenant-a"),
+        "tenant A's live call is kept"
     );
-    assert_eq!(calls.take(0), None, "the stale call is forgotten");
-    assert_eq!(calls.pending.len(), MAX_PENDING_CALLS);
+    assert_eq!(
+        admitted, MAX_CALLS_PER_CALLER,
+        "tenant B is held at its cap"
+    );
+    assert!(brokered.admits("tenant-a"), "tenant A may still broker");
+}
+
+/// RED-BEFORE-GREEN: a caller holding [`MAX_CALLS_PER_CALLER`] live calls is refused its next SDP
+/// offer, answered [`STATUS_CALLS_FULL`] in the dialects' error shape; another caller is not. RED:
+/// a caller had no bound of its own.
+#[test]
+fn a_caller_at_its_cap_is_refused() {
+    let mut brokered = Brokered::default();
+    for i in 0..MAX_CALLS_PER_CALLER {
+        assert!(brokered.admits("tenant-a"), "call {i}");
+        brokered.record(format!("rtc_a{i}"), "tenant-a".to_string());
+    }
+    assert!(
+        !brokered.admits("tenant-a"),
+        "the caller at its cap is refused"
+    );
+    assert!(brokered.admits("tenant-b"), "another caller is not");
+    let reply = calls_full_reply();
+    assert_eq!(u32::from(reply.status), STATUS_CALLS_FULL);
+    assert_eq!(reply.rtc_call_id, None, "a refused offer brokers no call");
+    let body: serde_json::Value = serde_json::from_slice(&reply.body).expect("json");
+    assert_eq!(body["error"]["type"], "rate_limit_error");
+    assert_eq!(body["error"]["message"], CALLS_FULL_TEXT);
+}
+
+/// RED-BEFORE-GREEN: a brokered call whose session closes (its caller's last piece, the far end's
+/// end, a cancel) has ended, and its row is freed, so its caller may broker another. RED: a row
+/// left only when 4096 newer calls pushed it out.
+#[test]
+fn an_ended_call_frees_its_row() {
+    let p = plane();
+    let cfg = StreamsCfg::default();
+    {
+        let mut brokered = lock(&p.brokered);
+        for i in 0..MAX_CALLS_PER_CALLER {
+            brokered.record(format!("rtc_{i}"), "tenant-a".to_string());
+        }
+        assert!(!brokered.admits("tenant-a"));
+    }
+    let mut sessions = lock(&p.sessions);
+    sessions
+        .get_or_open(10, Door::Sideband, &cfg)
+        .expect("a session door")
+        .attach("rtc_0".to_string());
+    sessions.close(10);
+    p.calls_ended(&mut sessions);
+    assert!(
+        !lock(&p.brokered).owns("rtc_0", "tenant-a"),
+        "the ended call's row is freed"
+    );
+    assert!(lock(&p.brokered).admits("tenant-a"), "its room is free");
+
+    let ticket = Ticket {
+        slot: 3,
+        generation: 1,
+    };
+    sessions
+        .get_or_open(11, Door::Sideband, &cfg)
+        .expect("a session door")
+        .attach("rtc_1".to_string());
+    sessions.crossed(11, ticket);
+    assert!(sessions.cancel(ticket));
+    p.calls_ended(&mut sessions);
+    assert!(
+        !lock(&p.brokered).owns("rtc_1", "tenant-a"),
+        "a cancelled session's call is freed"
+    );
+    assert!(
+        lock(&p.brokered).owns("rtc_2", "tenant-a"),
+        "no other call is touched"
+    );
 }
