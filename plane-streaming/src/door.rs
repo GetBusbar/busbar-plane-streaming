@@ -49,9 +49,7 @@ use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_INBOUND, DIRECTION_OUTBOUND, EGRESS_PROVIDER, KEEP_NAMED,
 };
 use busbar_contract::abi::mechanism::call::{AbiStr, Blob, InHead, OutHead, Outcome, Span};
-use busbar_contract::abi::mechanism::door::{
-    Section, Statement, SECTION_CONSUMED, SECTION_DECLARING,
-};
+use busbar_contract::abi::mechanism::door::{Section, SECTION_CONSUMED, SECTION_DECLARING};
 use busbar_contract::abi::mechanism::lifecycle::{
     GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
 };
