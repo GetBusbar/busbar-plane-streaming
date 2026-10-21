@@ -34,33 +34,33 @@
 //! A door instance holds its live generations; a live session's state (the codec's decode state, the
 //! open turn's counters, the session's cumulative units and record) is a [`session_unit::SessionUnit`].
 
-#![forbid(unsafe_code)]
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(test, deny(unsafe_code))]
 #![deny(missing_docs)]
 
-pub mod broker;
-pub mod claims;
+mod broker;
+mod claims;
 // `#![deny(missing_docs)]` above is a rule this crate holds itself to; the `codec` module was not
 // written under it and is exempt, scoped to exactly this module.
 #[allow(missing_docs)]
-pub mod codec;
-pub mod config;
-pub mod diagnostics;
-pub mod door;
-pub mod driven;
-pub mod meta;
+mod codec;
+mod config;
+mod diagnostics;
+mod door;
+mod driven;
+mod meta;
 /// What an `on_piece` answer owes the reply buffer across re-calls, and the one settle of its buffers.
 mod piece;
-pub mod provider;
-pub mod register;
-pub mod request_unit;
-pub mod session;
-pub mod session_door;
-pub mod session_params;
-pub mod session_pump;
-pub mod session_row;
-pub mod session_unit;
-pub mod sessions;
-pub mod splice;
+mod provider;
+mod request_unit;
+mod session;
+mod session_door;
+mod session_params;
+mod session_pump;
+mod session_row;
+mod session_unit;
+mod sessions;
+mod splice;
 
 #[cfg(test)]
 mod tests;
@@ -68,13 +68,10 @@ mod tests;
 use busbar_contract::ids::LaneId;
 use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
 
-/// The dialect roster this plane speaks, re-exported so a caller names it through the STREAMING plane it
-/// registered. The live realtime voice dialect appears here as [`Dialect::OpenaiRealtime`] /
-/// [`Dialect::GeminiLive`] — one dialect among the five, never the plane's name.
-pub use claims::Dialect;
+use claims::Dialect;
 
-/// The composition-root wiring shape and the plane value it registers (the plane side of S1/S4).
-pub use register::{plane_for_root, CAP_KEY};
+/// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
+pub use door::door;
 
 /// One configured upstream this plane may dial or pair a claim against.
 ///
@@ -82,7 +79,7 @@ pub use register::{plane_for_root, CAP_KEY};
 /// composition root interns every config-derived key once through
 /// the host's word interner (its `Registration`) and hands over names that outlive it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Upstream {
+pub(crate) struct Upstream {
     /// The priced lane this upstream is reached on.
     pub lane: LaneId,
     /// The host to dial.
@@ -99,7 +96,7 @@ pub struct Upstream {
 /// The one field is a borrowed, immutable list: no cell, no lock, no atomic. The purity test in
 /// `tests::purity` asserts that by walking the type rather than by trusting this sentence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StreamingPlane {
+pub(crate) struct StreamingPlane {
     upstreams: &'static [Upstream],
 }
 

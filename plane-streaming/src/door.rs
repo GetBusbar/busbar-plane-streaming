@@ -1328,10 +1328,19 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
     Outcome::Ready
 });
 
+busbar_contract::statement_extensions!(
+    /// The Statement's extensions: this plugin's whole `declares` document (BUSBAR-1.6.0.md l.246).
+    EXTENSIONS: [(
+        busbar_contract::abi::mechanism::extensions::EXT_DECLARES,
+        include_bytes!("../declares.json")
+    )]
+);
+
 busbar_contract::plugin_door! {
     ops: busbar_contract::abi::plane::Ops,
     statement: Statement {
         kind_tail: ptr::from_ref(TAIL).cast::<KindTailHead>(),
+        extensions: EXTENSIONS,
         sections: SECTIONS.as_ptr(),
         sections_len: SECTIONS.len(),
         needs: NEEDS.as_ptr(),
