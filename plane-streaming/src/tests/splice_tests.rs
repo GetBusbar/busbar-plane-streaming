@@ -15,6 +15,7 @@ fn rule(set: serde_json::Value) -> Rule {
             _ => Map::new(),
         },
         proto_names: false,
+        cap: None,
     }
 }
 
@@ -70,4 +71,67 @@ fn a_frame_that_is_not_one_object_is_not_spliced() {
             text(bad)
         );
     }
+}
+
+/// OpenAI Realtime's `response.create` rule, under a session whose output ceiling is `cap`.
+fn response_rule(cap: u32) -> Rule {
+    let locked = SessionConfig {
+        max_output_tokens: Some(MaxOutputTokens::Limit(cap)),
+        ..SessionConfig::default()
+    };
+    OpenAiRealtimeCodec
+        .response_rule(&locked)
+        .expect("OpenAI Realtime governs the response object")
+}
+
+/// The `max_output_tokens` the spliced `response.create` asks the far end for.
+fn asked(frame: &[u8], cap: u32) -> Value {
+    let out = splice(frame, &response_rule(cap)).expect("spliced");
+    let v: Value = serde_json::from_slice(&out).expect("json");
+    v["response"]["max_output_tokens"].clone()
+}
+
+/// RED-BEFORE-GREEN (lead ruling: a caller's own `max_output_tokens` never bypasses the configured
+/// output cap). RED: the response rule set nothing, so a caller's `response.create` asking for
+/// more than `streams.max_output_tokens` (or for `"inf"`) went to the far end as written, and the
+/// response ran past the operator's ceiling.
+#[test]
+fn a_callers_response_cap_above_the_ceiling_is_lowered_to_it() {
+    let frame = br#"{"type":"response.create","response":{"max_output_tokens":5000,"modalities":["text"]}}"#;
+    assert_eq!(asked(frame, 1000), 1000);
+    let inf = br#"{"type":"response.create","response":{"max_output_tokens":"inf"}}"#;
+    assert_eq!(
+        asked(inf, 1000),
+        1000,
+        "\"inf\" asks for no ceiling of its own"
+    );
+    let twice =
+        br#"{"type":"response.create","response":{"max_output_tokens":10,"max_output_tokens":9000}}"#;
+    let out = splice(twice, &response_rule(1000)).expect("spliced");
+    assert_eq!(
+        text(&out),
+        r#"{"type":"response.create","response":{"max_output_tokens":10}}"#,
+        "every spelling is read and the member is written once"
+    );
+}
+
+/// A caller's lower `max_output_tokens` stands: the effective value is the lower of the two, and
+/// the caller's other members keep their bytes.
+#[test]
+fn a_callers_response_cap_below_the_ceiling_stands() {
+    let frame =
+        br#"{"type":"response.create","response":{"modalities":["text"],"max_output_tokens":200}}"#;
+    let out = splice(frame, &response_rule(1000)).expect("spliced");
+    assert_eq!(
+        text(&out),
+        r#"{"type":"response.create","response":{"modalities":["text"],"max_output_tokens":200}}"#
+    );
+}
+
+/// RED-BEFORE-GREEN (lead ruling): a `response.create` that names no `max_output_tokens` asks for
+/// the configured cap. RED: it went out naming none, and the far end read none as its own default.
+#[test]
+fn a_response_naming_no_cap_asks_for_the_ceiling() {
+    let frame = br#"{"type":"response.create","response":{"modalities":["text"]}}"#;
+    assert_eq!(asked(frame, 1000), 1000);
 }

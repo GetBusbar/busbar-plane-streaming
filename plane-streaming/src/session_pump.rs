@@ -85,7 +85,7 @@ where
             .unwrap_or(AudioFormat::Pcm16);
         let rules = match &locked_config {
             Some(locked) => std::iter::once(codec.configure_rule(locked))
-                .chain(codec.response_rule())
+                .chain(codec.response_rule(locked))
                 .collect(),
             None => Vec::new(),
         };
