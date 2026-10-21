@@ -115,20 +115,21 @@ pub const MOUNT_PATH: &str = "/v1/realtime";
 pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/v1/realtime";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr::ZERO;
+const NONE: AbiStr = AbiStr {
+    ptr: ptr::null(),
+    len: 0,
+};
 
 const SECTIONS: &[Section] = &[
     Section {
         name: abi_str(SECTION),
         flags: SECTION_DECLARING,
         _reserved: 0,
-        ..Section::ZERO
     },
     Section {
         name: abi_str(PROVIDERS_SECTION),
         flags: SECTION_CONSUMED,
         _reserved: 0,
-        ..Section::ZERO
     },
 ];
 
@@ -169,7 +170,6 @@ const fn dialect_auth(dialect: u32, style: &'static str) -> DialectAuth {
         flags: 0,
         style: abi_str(style),
         params: Blob::ABSENT,
-        ..DialectAuth::ZERO
     }
 }
 
@@ -188,14 +188,12 @@ const SCOPE_KINDS: &[AbiStr] = &[abi_str(SCOPE)];
 const OP_CLASSES: &[OpClass] = &[OpClass {
     op: abi_str(meta::OP_SESSION_OPEN.as_str()),
     name: abi_str(LABEL),
-    ..OpClass::ZERO
 }];
 
 const fn class(class: &'static str, family: &'static str) -> BillableClass {
     BillableClass {
         class: abi_str(class),
         family: abi_str(family),
-        ..BillableClass::ZERO
     }
 }
 
@@ -230,7 +228,6 @@ const fn need(direction: u32, transport: &'static str, auth: AbiStr, target: Abi
             len: 0,
             fmt: BLOB_ABSENT,
             flags: 0,
-            ..Blob::ZERO
         },
         keep_response_headers: ptr::null(),
         keep_response_headers_len: 0,
@@ -239,7 +236,6 @@ const fn need(direction: u32, transport: &'static str, auth: AbiStr, target: Abi
         _reserved: 0,
         deny_response_headers: ptr::null(),
         deny_response_headers_len: 0,
-        ..Need::ZERO
     }
 }
 
@@ -247,9 +243,10 @@ const fn need(direction: u32, transport: &'static str, auth: AbiStr, target: Abi
 /// address the member's own (the `base_url` of the catalog model `streams.session.model` names, sealed
 /// by the kernel's egress), never a config path of the plane's: a model name is no dial target.
 const fn outbound(transport: &'static str, style: &'static str) -> Need {
-    let mut n = need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE);
-    n.egress_class = EGRESS_PROVIDER;
-    n
+    Need {
+        egress_class: EGRESS_PROVIDER,
+        ..need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE)
+    }
 }
 
 /// The plane's connection needs: its keyed doors and its telephony door inbound; outbound, to the
@@ -283,8 +280,9 @@ pub const RIDES_LIVE_SOCKET: u32 = 6;
 pub const TAIL: &PlaneTail = &PlaneTail {
     head: KindTailHead {
         size: size_of::<PlaneTail>() as u32,
-        ..KindTailHead::ZERO
+        _reserved: 0,
     },
+    flags: 0,
     ingress: INGRESS_REQUEST_RESPONSE | INGRESS_DUPLEX_SESSION,
     dispatch_shape: SHAPE_PIECEWISE,
     // The layout this plane writes its answers in: the contract's it was built against.
@@ -307,17 +305,31 @@ pub const TAIL: &PlaneTail = &PlaneTail {
     op_classes_len: OP_CLASSES.len(),
     billable_classes: BILLABLE_CLASSES.as_ptr(),
     billable_classes_len: BILLABLE_CLASSES.len(),
+    route_cost: ptr::null(),
+    route_cost_len: 0,
     fee_units: FEE_UNITS.as_ptr(),
     fee_units_len: FEE_UNITS.len(),
+    record_kinds: ptr::null(),
+    record_kinds_len: 0,
     egress_targets: EGRESS_TARGETS.as_ptr(),
     egress_targets_len: EGRESS_TARGETS.len(),
+    record_chains: ptr::null(),
+    record_chains_len: 0,
+    trust_keys: ptr::null(),
+    trust_keys_len: 0,
+    refusal_statuses: ptr::null(),
+    refusal_statuses_len: 0,
     caller_credential_refusal: NONE,
+    admin_routes: ptr::null(),
+    admin_routes_len: 0,
     admin_openapi: Blob::ABSENT,
     // No stream ceiling (ARCHITECT STREAM-CEILING, 2026-10-07): a live session runs as long as its
     // caller keeps it open, so the streaming plane states none; a streamed answer's send runs under
     // the deployment's ceiling.
+    stream_ceiling_secs: 0,
     // No lane words of its own: its attempts' counters carry the kernel's own lane.
-    ..PlaneTail::ZERO
+    metric_lanes: ptr::null(),
+    metric_lanes_len: 0,
 };
 
 /// The inbound auth style of a door read without a credential (no door of the plane is, today).
