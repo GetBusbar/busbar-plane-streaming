@@ -40,7 +40,7 @@
 //! session's unsolicited output named on the instance's driver ticket, and the session's cumulative
 //! units on every answer. A request unit on a session door is refused.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Mutex;
 
 use crate::piece::{self, Owed};
@@ -539,13 +539,13 @@ pub const REFUSAL_NO_DOOR: u32 = 1;
 /// wait for their sessions: the instance holds as many as it admits (a 429).
 pub const REFUSAL_CALLS_FULL: u32 = 2;
 
-/// The status [`REFUSAL_CALLS_FULL`] wears, and the status an SDP offer refused at a brokered-call
-/// bound is answered with.
+/// The status [`REFUSAL_CALLS_FULL`] wears, and the status an SDP offer refused at
+/// [`MAX_BROKERED_CALLS`] is answered with.
 pub const STATUS_CALLS_FULL: u32 = 429;
 
-/// The words an SDP offer refused at a brokered-call bound is answered with.
+/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`] is answered with.
 pub const CALLS_FULL_TEXT: &str =
-    "busbar is holding as many realtime calls for this caller as it admits at once; retry once one has ended";
+    "busbar is holding as many realtime calls as it admits at once; retry once one has ended";
 
 /// The most request units an instance keeps state for at once; past it, a new unit is refused (a
 /// unit in flight is never dropped to make room).
@@ -556,13 +556,18 @@ pub const MAX_UNITS: usize = 4096;
 pub const MAX_PENDING_CALLS: usize = 4096;
 
 /// The most live calls the SDP door has brokered that an instance keeps the owner of; at it, a new
-/// SDP offer is refused ([`STATUS_CALLS_FULL`]). No live call is dropped to make room (THE DESIGN:
-/// retention bounds only settled handles); a call leaves when it ends.
+/// SDP offer is refused ([`STATUS_CALLS_FULL`]). No other caller's live call is dropped to make
+/// room (THE DESIGN: retention bounds only settled handles); a call leaves when it ends, or when
+/// its own caller's next offer displaces it ([`MAX_CALLS_PER_CALLER`]). Offers checked against the
+/// bound at once are each recorded when their far end answers, so the instance may hold past it by
+/// at most the units in flight ([`MAX_UNITS`]). PROVISIONAL: awaiting the owner's ratification.
 pub const MAX_BROKERED_CALLS: usize = 4096;
 
-/// The most live brokered calls one caller (one `caller_ref`) holds at once; at it, that caller's
-/// next SDP offer is refused ([`STATUS_CALLS_FULL`]), and no other caller's is. `MAX_BROKERED_CALLS
-/// / 64`: at least 64 callers each hold their whole allowance before the instance's bound is met.
+/// The most live brokered calls one caller (one `caller_ref`) keeps at once. At it, that caller's
+/// next SDP offer proceeds and displaces that caller's own oldest row (a sideband to that call is
+/// then refused); no other caller's row is ever displaced. `MAX_BROKERED_CALLS / 64`, so at least
+/// 64 callers each hold their whole allowance before the instance's bound is met. PROVISIONAL:
+/// awaiting the owner's ratification.
 pub const MAX_CALLS_PER_CALLER: usize = MAX_BROKERED_CALLS / 64;
 
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
@@ -659,32 +664,40 @@ impl Calls {
 }
 
 /// THE LIVE CALLS THE SDP DOOR BROKERED, each with the caller reference of the unit whose offer
-/// created it (a sideband attaches only to its own caller's call), and how many each caller holds.
-/// A call leaves when it ends (the session attached to it closes), never to make room: at
-/// [`MAX_BROKERED_CALLS`], or at a caller's [`MAX_CALLS_PER_CALLER`], that caller's next offer is
-/// refused instead.
+/// created it (a sideband attaches only to its own caller's call), and each caller's calls, oldest
+/// first. A call leaves when it ends (the session attached to it closes), or when its own caller's
+/// next call displaces it at [`MAX_CALLS_PER_CALLER`]; never to make room for another caller. At
+/// [`MAX_BROKERED_CALLS`] a new offer is refused instead.
 #[derive(Default)]
 struct Brokered {
     owners: HashMap<String, String>,
-    per_caller: HashMap<String, usize>,
+    per_caller: HashMap<String, VecDeque<String>>,
 }
 
 impl Brokered {
-    /// Whether `caller` may broker one more call: the instance is below [`MAX_BROKERED_CALLS`] and
-    /// the caller below [`MAX_CALLS_PER_CALLER`].
-    fn admits(&self, caller: &str) -> bool {
+    /// Whether a new call may be brokered: the instance is below [`MAX_BROKERED_CALLS`].
+    fn admits(&self) -> bool {
         self.owners.len() < MAX_BROKERED_CALLS
-            && self.per_caller.get(caller).copied().unwrap_or(0) < MAX_CALLS_PER_CALLER
     }
 
-    /// The far end created `call` for `caller`. Recorded whatever the bounds read now: the call is
-    /// live at the far end, and offers admitted at once may each have passed [`Brokered::admits`]
-    /// (never more past the bound than the units in flight, [`MAX_UNITS`]).
+    /// The far end created `call` for `caller`. A caller already holding
+    /// [`MAX_CALLS_PER_CALLER`] calls gives up its own oldest; no other caller's row is touched.
+    /// Recorded whatever the instance bound reads now: the call is live at the far end (see
+    /// [`MAX_BROKERED_CALLS`] for the bounded overshoot).
     fn record(&mut self, call: String, caller: String) {
-        if let Some(previous) = self.owners.insert(call, caller.clone()) {
-            self.release(&previous);
+        if let Some(previous) = self.owners.insert(call.clone(), caller.clone()) {
+            self.release(&previous, &call);
         }
-        *self.per_caller.entry(caller).or_default() += 1;
+        let rows = self.per_caller.entry(caller).or_default();
+        while rows.len() >= MAX_CALLS_PER_CALLER {
+            match rows.pop_front() {
+                Some(oldest) => {
+                    self.owners.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+        rows.push_back(call);
     }
 
     /// Whether `call` is live and `caller`'s.
@@ -696,18 +709,18 @@ impl Brokered {
     fn end(&mut self, call: &str) -> bool {
         match self.owners.remove(call) {
             Some(owner) => {
-                self.release(&owner);
+                self.release(&owner, call);
                 true
             }
             None => false,
         }
     }
 
-    /// One of `caller`'s calls left.
-    fn release(&mut self, caller: &str) {
-        if let Some(n) = self.per_caller.get_mut(caller) {
-            *n = n.saturating_sub(1);
-            if *n == 0 {
+    /// `call` is no longer `caller`'s.
+    fn release(&mut self, caller: &str, call: &str) {
+        if let Some(rows) = self.per_caller.get_mut(caller) {
+            rows.retain(|c| c != call);
+            if rows.is_empty() {
                 self.per_caller.remove(caller);
             }
         }
@@ -1341,13 +1354,12 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     let caller = input.caller_ref().as_str().ok().filter(|r| !r.is_empty());
     let answer = match held.short.take() {
         Some(answer) => answer,
-        // An SDP offer's ATTEMPT, from a caller holding as many live calls as it is admitted (or
-        // on an instance holding as many as it keeps), is answered before anything is dialled:
-        // no live call is dropped to make room for it.
+        // An SDP offer's ATTEMPT on an instance holding as many live calls as it keeps is
+        // answered before anything is dialled: no other caller's live call is dropped for it.
         None if Door::of(given.claim()) == Some(Door::Sdp)
             && given.from() == FROM_KERNEL
             && given.attempt_no() > 0
-            && !lock(&p.brokered).admits(caller.unwrap_or_default()) =>
+            && !lock(&p.brokered).admits() =>
         {
             Answer::ToCaller(calls_full_reply())
         }
@@ -1386,7 +1398,7 @@ pub fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     error_envelope(status, text, None)
 }
 
-/// The answer to an SDP offer refused at a brokered-call bound: [`STATUS_CALLS_FULL`] with
+/// The answer to an SDP offer refused at [`MAX_BROKERED_CALLS`]: [`STATUS_CALLS_FULL`] with
 /// [`CALLS_FULL_TEXT`] in the dialects' error shape.
 fn calls_full_reply() -> crate::driven::Reply {
     let status = STATUS_CALLS_FULL as u16;
