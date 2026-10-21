@@ -12,9 +12,7 @@
 use std::mem::zeroed;
 use std::sync::Arc;
 
-use busbar_contract::abi::mechanism::call::{
-    AbiStr, Blob, Field, Outcome, Span, BLOB_JSON, BLOB_OCTETS,
-};
+use busbar_contract::abi::mechanism::call::{AbiStr, Blob, Field, Outcome, Span, BLOB_OCTETS};
 use busbar_contract::abi::mechanism::lifecycle::{
     slot as life, GenIn, RefreshIn, TickIn, TickOut, ValidateIn,
 };
@@ -27,7 +25,7 @@ use busbar_plane_streaming::door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::{
     in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
-    LinkedRow, NoSink, Plugin,
+    LinkedRow, LoadedDoor, NoSink, Plugin,
 };
 
 fn z<T>() -> T {
@@ -48,16 +46,28 @@ fn bind(d: &Dispatcher, instance: &str) -> Bind {
     }
 }
 
+/// This plugin's own door, named for the loader.
+fn loaded_door() -> LoadedDoor {
+    // SAFETY: `busbar_plane_streaming::door` is this crate's own door: it answers the `'static` door
+    // of this plugin.
+    #[allow(unused_unsafe)]
+    let loaded = unsafe { LoadedDoor::from_raw(door) };
+    loaded
+}
+
 /// The compiled-in row: the door and the Statement rendering it states.
 fn row() -> LinkedRow {
-    LinkedRow::of(door).expect("the streaming door states itself")
+    LinkedRow::of_loaded(loaded_door()).expect("the streaming door states itself")
 }
 
 /// The Statement tail the door states, read off the door itself: the crate's one public item.
 fn tail() -> &'static busbar_contract::abi::plane::PlaneTail {
     use busbar_contract::abi::plane::PlaneTail;
     // SAFETY: the door's `'static` Door, its Statement, and the plane tail it points at.
-    unsafe { &*(*(*door()).statement).kind_tail.cast::<PlaneTail>() }
+    #[allow(unused_unsafe)]
+    unsafe {
+        &*(*(*door()).statement).kind_tail().cast::<PlaneTail>()
+    }
 }
 
 /// The need a far request rides, as `OnPieceOut::need` names it: the index plus one of the outbound
@@ -113,7 +123,7 @@ fn minted_answer() -> Vec<u8> {
 /// `EXT_DECLARES`.
 #[test]
 fn the_statement_carries_the_declares_document() {
-    let row = busbar_plugin_loader::dispatch::LinkedRow::of(door).unwrap();
+    let row = LinkedRow::of_loaded(loaded_door()).unwrap();
     let read = busbar_contract::abi::mechanism::rendering::read(&row.statement).unwrap();
     assert_eq!(
         busbar_contract::abi::mechanism::extensions::declares(&read.extensions.bytes),
@@ -122,27 +132,19 @@ fn the_statement_carries_the_declares_document() {
 }
 
 fn json(b: &'static [u8]) -> Blob {
-    Blob {
-        ptr: b.as_ptr(),
-        len: b.len(),
-        fmt: BLOB_JSON,
-        flags: 0,
-    }
+    Blob::json(b)
 }
 
 fn text(s: &'static str) -> AbiStr {
-    AbiStr {
-        ptr: s.as_ptr(),
-        len: s.len(),
-    }
+    AbiStr::of(s)
 }
 
 fn read(s: AbiStr) -> String {
-    if s.ptr.is_null() {
+    if s.is_absent() {
         return String::new();
     }
     // SAFETY: the plugin's text, valid while its generation is live.
-    String::from_utf8_lossy(unsafe { std::slice::from_raw_parts(s.ptr, s.len) }).into_owned()
+    String::from_utf8_lossy(unsafe { s.bytes() }).into_owned()
 }
 
 /// A published snapshot, read while its generation is live: its generation, its claims
@@ -409,7 +411,7 @@ fn the_tail_states_what_the_served_plane_declares() {
     assert_eq!(read(t.audit_kind), "streaming_session");
     // SAFETY: the tail's `'static` lists.
     let classes: Vec<String> =
-        unsafe { std::slice::from_raw_parts(t.billable_classes, t.billable_classes_len) }
+        unsafe { std::slice::from_raw_parts(t.billable_classes_ptr(), t.billable_classes_len()) }
             .iter()
             .map(|c| format!("{}/{}", read(c.class), read(c.family)))
             .collect();
@@ -428,10 +430,11 @@ fn the_tail_states_what_the_served_plane_declares() {
         ]
     );
     // SAFETY: as above.
-    let fees: Vec<String> = unsafe { std::slice::from_raw_parts(t.fee_units, t.fee_units_len) }
-        .iter()
-        .map(|f| read(*f))
-        .collect();
+    let fees: Vec<String> =
+        unsafe { std::slice::from_raw_parts(t.fee_units_ptr(), t.fee_units_len()) }
+            .iter()
+            .map(|f| read(*f))
+            .collect();
     assert_eq!(fees, ["per_session"]);
     busbar_contract::abi::plane::check::check_tail(t)
         .expect("the kind's own check admits the tail");
@@ -440,8 +443,8 @@ fn the_tail_states_what_the_served_plane_declares() {
     // SAFETY: as above.
     let (fee_units, billable) = unsafe {
         (
-            std::slice::from_raw_parts(t.fee_units, t.fee_units_len),
-            std::slice::from_raw_parts(t.billable_classes, t.billable_classes_len),
+            std::slice::from_raw_parts(t.fee_units_ptr(), t.fee_units_len()),
+            std::slice::from_raw_parts(t.billable_classes_ptr(), t.billable_classes_len()),
         )
     };
     busbar_contract::abi::plane::check::check_fee_units(fee_units, billable)
@@ -467,12 +470,8 @@ const SDP_ANSWER: &[u8] = b"v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r
 const LOCATION: &str = "/v1/realtime/calls/rtc_oracle0001";
 
 fn octets(b: &[u8]) -> Blob {
-    Blob {
-        ptr: b.as_ptr(),
-        len: b.len(),
-        fmt: BLOB_OCTETS,
-        flags: 0,
-    }
+    // SAFETY: the test's own bytes, which outlive the call each `in` is built for.
+    unsafe { Blob::from_raw_parts(b.as_ptr(), b.len(), BLOB_OCTETS, 0) }
 }
 
 fn at(buf: &[u8], s: Span) -> String {
