@@ -148,6 +148,23 @@ pub struct StreamsCfg {
     pub max_output_tokens: u32,
 }
 
+impl StreamsCfg {
+    /// Why the section's two token ceilings cannot both hold, if they cannot: a per-response output
+    /// cap at or above the context window leaves no room for the conversation (the locked session's
+    /// context limit after its output, `context_window_tokens - max_output_tokens`, would be 0), so
+    /// such a section is refused at load, naming both settings and their values.
+    #[must_use]
+    pub fn ceilings_conflict(&self) -> Option<String> {
+        (self.max_output_tokens >= self.context_window_tokens).then(|| {
+            format!(
+                "streams.max_output_tokens ({}) must be below streams.context_window_tokens ({}): \
+                 the output cap leaves no context window for the conversation",
+                self.max_output_tokens, self.context_window_tokens
+            )
+        })
+    }
+}
+
 // MANUAL `Default`, not derived: the serde field defaults above are non-trivial (the three ceilings
 // and the synthesized `server_vad`), and `#[derive(Default)]` would give `0`/`SessionConfig::default`
 // instead — so `StreamsCfg::default()` (what `streams_default_section` returns for an ABSENT section)
