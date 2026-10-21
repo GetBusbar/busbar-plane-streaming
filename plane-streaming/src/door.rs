@@ -125,10 +125,7 @@ pub const MOUNT_PATH: &str = "/v1/realtime";
 pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/v1/realtime";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr {
-    ptr: ptr::null(),
-    len: 0,
-};
+const NONE: AbiStr = AbiStr::ZERO;
 
 const SECTIONS: &[Section] = &[
     Section {
@@ -259,10 +256,9 @@ const fn need(direction: u32, transport: &'static str, auth: AbiStr, target: Abi
 /// address the member's own (the `base_url` of the catalog model `streams.session.model` names, sealed
 /// by the kernel's egress), never a config path of the plane's: a model name is no dial target.
 const fn outbound(transport: &'static str, style: &'static str) -> Need {
-    Need {
-        egress_class: EGRESS_PROVIDER,
-        ..need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE)
-    }
+    let mut n = need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE);
+    n.egress_class = EGRESS_PROVIDER;
+    n
 }
 
 /// The plane's connection needs: its keyed doors and its telephony door inbound; outbound, to the
@@ -321,7 +317,7 @@ const MARK_WORDS: &[MarkWord] = &[MarkWord {
 pub const TAIL: &PlaneTail = &PlaneTail {
     head: KindTailHead {
         size: size_of::<PlaneTail>() as u32,
-        _reserved: 0,
+        ..KindTailHead::ZERO
     },
     ingress: INGRESS_REQUEST_RESPONSE | INGRESS_DUPLEX_SESSION,
     dispatch_shape: SHAPE_PIECEWISE,
@@ -1270,14 +1266,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                 out.set(|o| &o.verb, verb);
                 out.set(|o| &o.target, path);
             }
-            out.set(
-                |o| &o.need,
-                match door {
-                    Door::Gemini => RIDES_LIVE_SOCKET,
-                    Door::Sdp => RIDES_REALTIME_CALL,
-                    _ => RIDES_REALTIME_SOCKET,
-                },
-            );
+            out.set(|o| &o.need, door.rides());
             // A realtime dialect's frame is a JSON text message on its socket.
             live.near
                 .owe(&frame, EMIT_TO_FAR_END | PIECE_OUT_TEXT, input, out);
@@ -1617,6 +1606,10 @@ busbar_contract::plugin_door! {
 #[cfg(test)]
 #[path = "tests/ladder_tests.rs"]
 mod ladder_tests;
+
+#[cfg(test)]
+#[path = "tests/door_tests.rs"]
+mod door_tests;
 
 const _: () = {
     // The ride constants name the needs they say they name.

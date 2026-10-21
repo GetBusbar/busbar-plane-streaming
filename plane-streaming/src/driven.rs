@@ -81,6 +81,19 @@ impl Door {
             Door::Sdp | Door::Sideband | Door::Gemini | Door::Twilio
         )
     }
+
+    /// The outbound need a far request on this door rides (`OnPieceOut::need`): the socket of the
+    /// provider the door's session dials (Gemini Live's for the Gemini door, OpenAI Realtime's for
+    /// the sideband and telephony doors), and busbar's own call to OpenAI Realtime for the SDP door
+    /// (row 132: busbar terminates the browser's media). The mint door dials nothing (`ROUTE_LOCAL`).
+    #[must_use]
+    pub const fn rides(self) -> u32 {
+        match self {
+            Door::Gemini => crate::door::RIDES_LIVE_SOCKET,
+            Door::Sdp => crate::door::RIDES_REALTIME_CALL,
+            Door::Mint | Door::Sideband | Door::Twilio => crate::door::RIDES_REALTIME_SOCKET,
+        }
+    }
 }
 
 /// What `arrive` answers for a claimed request.

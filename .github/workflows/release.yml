@@ -25,7 +25,7 @@ jobs:
     secrets: inherit
   release:
     needs: ci
-    uses: GetBusbar/busbar/.github/workflows/plugin-release.yml@bdafe7c65dc48fe9b845cab795c0d1a9c9551596
+    uses: GetBusbar/busbar/.github/workflows/plugin-release.yml@2bcdce8fdab80da45f828a2941c3eb99557b3107
     with:
       plugin_crate: busbar-plane-streaming-plugin
       manifest_name: busbar-plane-streaming
@@ -41,7 +41,7 @@ jobs:
   consumer-verify:
     needs: release
     if: ${{ !cancelled() }}
-    uses: GetBusbar/busbar/.github/workflows/plugin-consumer-verify.yml@bdafe7c65dc48fe9b845cab795c0d1a9c9551596
+    uses: GetBusbar/busbar/.github/workflows/plugin-consumer-verify.yml@2bcdce8fdab80da45f828a2941c3eb99557b3107
     with:
       version: ${{ github.ref_name }}
       asset_prefix: busbar-plane-streaming
