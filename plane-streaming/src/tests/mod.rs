@@ -178,6 +178,10 @@ mod alloc_counter;
 /// What one downlink Twilio audio frame may allocate, and the bytes it must still render.
 mod alloc_gate_tests;
 
+/// The voice corpus through the plane's own codecs: the round trip and the cross-dialect bridge
+/// busbar's voice conformance legs judged before the door-root made the codecs private.
+mod voice_corpus_tests;
+
 /// What reading one wire frame may allocate, borrowed against owned.
 mod codec_alloc_gate_tests;
 
