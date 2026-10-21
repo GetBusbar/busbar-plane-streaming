@@ -38,16 +38,6 @@ pub use codec::gemini::GeminiLiveCodec;
 pub use media::AudioFormat;
 pub use usage::IrDuplexUsage;
 
-// The IR's names in one place for the crate's own tests; the shipped code names each by its module.
+// The codec's names in one place for the crate's alloc gate; shipped code names each by its module.
 #[cfg(test)]
 pub use codec::{DecodeState, DuplexReader, OpenAiRealtimeCodec, WireEvent, WireRef};
-#[cfg(test)]
-pub use config::{MaxOutputTokens, SessionConfig};
-#[cfg(test)]
-pub use control::{Eagerness, IrDuplexControl, IrVad};
-#[cfg(test)]
-pub use event::{IrClientEvent, IrServerEvent};
-#[cfg(test)]
-pub use media::{truncate_point_ms, IrAudioFrame, UpDown};
-#[cfg(test)]
-pub use tool::{CallRef, IrDuplexTool};
