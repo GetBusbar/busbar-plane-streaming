@@ -15,7 +15,7 @@
 //! that could not be reached is the kernel's route terminal and is not answered here.
 
 use crate::broker::{
-    clamped_ttl_secs, mint_request_body, minted_answer, read_minted, rtc_call_id_of, CALLS_PATH,
+    clamped_ttl_secs, mint_request_body, minted_answer, read_minted, CALLS_PATH,
     CLIENT_SECRETS_PATH, SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
 };
 use crate::codec::ir::config::SessionConfig;
@@ -289,8 +289,6 @@ pub struct Reply {
     pub fields: Vec<(&'static str, String)>,
     /// The body.
     pub body: Vec<u8>,
-    /// For an SDP answer that names its call: the provider's `rtc_` call id, for the session record.
-    pub rtc_call_id: Option<String>,
 }
 
 /// The status the served plane answers a failed mint with.
@@ -306,7 +304,6 @@ pub fn mint_failed(reason: &str) -> Reply {
             "streaming ephemeral-secret mint failed: ephemeral token mint failed: {reason}"
         )
         .into_bytes(),
-        rtc_call_id: None,
     }
 }
 
@@ -325,14 +322,13 @@ pub fn mint_reply(status: u16, body: &[u8]) -> Reply {
             status: 200,
             fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
             body: minted_answer(&minted),
-            rtc_call_id: None,
         },
         Err(reason) => mint_failed(&reason),
     }
 }
 
 /// The caller's answer to the far end's SDP answer: its status, its body as an SDP answer, and its
-/// `Location` when it named one; the call id in that `Location` goes to the session record.
+/// `Location` when it named one.
 #[must_use]
 pub fn sdp_reply(status: u16, location: Option<&str>, body: &[u8]) -> Reply {
     let mut fields = vec![(FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string())];
@@ -343,7 +339,6 @@ pub fn sdp_reply(status: u16, location: Option<&str>, body: &[u8]) -> Reply {
         status,
         fields,
         body: body.to_vec(),
-        rtc_call_id: location.and_then(rtc_call_id_of),
     }
 }
 

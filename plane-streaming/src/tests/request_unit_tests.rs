@@ -133,7 +133,6 @@ fn the_sdp_offer_is_relayed_and_the_answer_keeps_its_location() {
     let r = reply(u.on_piece(far_first(201, b"v=0 answer", true, head)));
     assert_eq!(r.status, 201);
     assert_eq!(r.body, b"v=0 answer");
-    assert_eq!(r.rtc_call_id.as_deref(), Some("rtc_abc"));
     assert!(r
         .fields
         .iter()
@@ -149,7 +148,11 @@ fn a_new_attempt_forgets_the_previous_far_end() {
     let _ = u.on_piece(piece(From::Kernel(2), &[], false));
     let r = reply(u.on_piece(far_first(201, b"fresh", true, &[])));
     assert_eq!((r.status, r.body.as_slice()), (201, &b"fresh"[..]));
-    assert_eq!(r.rtc_call_id, None);
+    assert!(
+        !r.fields.iter().any(|(n, _)| *n == FIELD_LOCATION),
+        "the stale far end's location is forgotten: {:?}",
+        r.fields
+    );
 }
 
 #[test]
