@@ -81,6 +81,19 @@ impl Door {
     pub const fn is_session(self) -> bool {
         matches!(self, Door::Sideband | Door::Gemini | Door::Twilio)
     }
+
+    /// The outbound need a far request on this door rides (`OnPieceOut::need`): the socket of the
+    /// provider the door's session dials (Gemini Live's for the Gemini door, OpenAI Realtime's for
+    /// the sideband and telephony doors), and OpenAI Realtime's one-shot pass for the mint and the
+    /// SDP offer.
+    #[must_use]
+    pub const fn rides(self) -> u32 {
+        match self {
+            Door::Gemini => crate::door::RIDES_LIVE_SOCKET,
+            Door::Sideband | Door::Twilio => crate::door::RIDES_REALTIME_SOCKET,
+            Door::Mint | Door::Sdp => crate::door::RIDES_REALTIME_PASS,
+        }
+    }
 }
 
 /// What `arrive` answers for a claimed request.
