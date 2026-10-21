@@ -41,8 +41,6 @@
 //! units on every answer. A request unit on a session door is refused.
 
 use std::collections::BTreeMap;
-use std::mem::size_of;
-use std::ptr;
 use std::sync::Mutex;
 
 use crate::piece::{self, Owed};
@@ -50,11 +48,9 @@ use busbar_contract::abi::hook::REQUEST_STREAM;
 use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_INBOUND, DIRECTION_OUTBOUND, EGRESS_PROVIDER, KEEP_NAMED,
 };
-use busbar_contract::abi::mechanism::call::{
-    AbiStr, Blob, InHead, OutHead, Outcome, Span, BLOB_ABSENT,
-};
+use busbar_contract::abi::mechanism::call::{AbiStr, Blob, InHead, OutHead, Outcome, Span};
 use busbar_contract::abi::mechanism::door::{
-    KindTailHead, Section, Statement, SECTION_CONSUMED, SECTION_DECLARING,
+    Section, Statement, SECTION_CONSUMED, SECTION_DECLARING,
 };
 use busbar_contract::abi::mechanism::lifecycle::{
     GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
@@ -71,7 +67,9 @@ use busbar_contract::abi::plane::{
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
-use busbar_contract::abi::sdk::{Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, Wake};
+use busbar_contract::abi::sdk::{
+    Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, StaticWake, Wake,
+};
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
 use crate::claims::{Dialect, HTTP_TRANSPORT, WS_TRANSPORT};
@@ -115,7 +113,7 @@ pub const MOUNT_PATH: &str = "/v1/realtime";
 pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/v1/realtime";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr::ZERO;
+const NONE: AbiStr = AbiStr::ABSENT;
 
 const SECTIONS: &[Section] = &[
     Section {
@@ -218,29 +216,13 @@ const FEE_UNITS: &[AbiStr] = &[abi_str(PER_SESSION)];
 const EGRESS_TARGETS: &[AbiStr] = &[abi_str(EGRESS_TARGET)];
 
 const fn need(direction: u32, transport: &'static str, auth: AbiStr, target: AbiStr) -> Need {
-    Need {
-        direction,
-        egress_class: 0,
-        transport: abi_str(transport),
-        auth,
-        target_from: target,
-        trust_from: NONE,
-        details: Blob {
-            ptr: ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-            ..Blob::ZERO
-        },
-        keep_response_headers: ptr::null(),
-        keep_response_headers_len: 0,
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: ptr::null(),
-        deny_response_headers_len: 0,
-        ..Need::ZERO
-    }
+    let mut n = Need::EMPTY;
+    n.direction = direction;
+    n.transport = abi_str(transport);
+    n.auth = auth;
+    n.target_from = target;
+    n.keep_mode = KEEP_NAMED;
+    n
 }
 
 /// One outbound need: to a configured provider, its dials judged in the provider egress class, its
@@ -280,44 +262,29 @@ pub const RIDES_REALTIME_PASS: u32 = 5;
 pub const RIDES_LIVE_SOCKET: u32 = 6;
 
 /// THE STATEMENT TAIL.
-pub const TAIL: &PlaneTail = &PlaneTail {
-    head: KindTailHead {
-        size: size_of::<PlaneTail>() as u32,
-        ..KindTailHead::ZERO
-    },
-    ingress: INGRESS_REQUEST_RESPONSE | INGRESS_DUPLEX_SESSION,
-    dispatch_shape: SHAPE_PIECEWISE,
+pub const TAIL: &PlaneTail = &{
+    let mut t = PlaneTail::EMPTY
+        .with_dialects(DIALECTS)
+        .with_dialect_auth(DIALECT_AUTH)
+        .with_scope_kinds(SCOPE_KINDS)
+        .with_op_classes(OP_CLASSES)
+        .with_billable_classes(BILLABLE_CLASSES)
+        .with_fee_units(FEE_UNITS)
+        .with_egress_targets(EGRESS_TARGETS);
+    t.ingress = INGRESS_REQUEST_RESPONSE | INGRESS_DUPLEX_SESSION;
+    t.dispatch_shape = SHAPE_PIECEWISE;
     // The layout this plane writes its answers in: the contract's it was built against.
-    answer_layout: ANSWER_LAYOUT,
-    scope: abi_str(SCOPE),
-    label: abi_str(LABEL),
-    subject_noun: abi_str(SUBJECT_NOUN),
-    admin_noun: abi_str(ADMIN_NOUN),
-    audit_kind: abi_str(AUDIT_KIND),
-    signing_domain: NONE,
-    signing_kid_prefix: NONE,
-    cli_help: NONE,
-    dialects: DIALECTS.as_ptr(),
-    dialects_len: DIALECTS.len(),
-    dialect_auth: DIALECT_AUTH.as_ptr(),
-    dialect_auth_len: DIALECT_AUTH.len(),
-    scope_kinds: SCOPE_KINDS.as_ptr(),
-    scope_kinds_len: SCOPE_KINDS.len(),
-    op_classes: OP_CLASSES.as_ptr(),
-    op_classes_len: OP_CLASSES.len(),
-    billable_classes: BILLABLE_CLASSES.as_ptr(),
-    billable_classes_len: BILLABLE_CLASSES.len(),
-    fee_units: FEE_UNITS.as_ptr(),
-    fee_units_len: FEE_UNITS.len(),
-    egress_targets: EGRESS_TARGETS.as_ptr(),
-    egress_targets_len: EGRESS_TARGETS.len(),
-    caller_credential_refusal: NONE,
-    admin_openapi: Blob::ABSENT,
+    t.answer_layout = ANSWER_LAYOUT;
+    t.scope = abi_str(SCOPE);
+    t.label = abi_str(LABEL);
+    t.subject_noun = abi_str(SUBJECT_NOUN);
+    t.admin_noun = abi_str(ADMIN_NOUN);
+    t.audit_kind = abi_str(AUDIT_KIND);
     // No stream ceiling (ARCHITECT STREAM-CEILING, 2026-10-07): a live session runs as long as its
     // caller keeps it open, so the streaming plane states none; a streamed answer's send runs under
     // the deployment's ceiling.
     // No lane words of its own: its attempts' counters carry the kernel's own lane.
-    ..PlaneTail::ZERO
+    t
 };
 
 /// The inbound auth style of a door read without a credential (no door of the plane is, today).
@@ -579,7 +546,7 @@ pub struct Plane {
     /// The live sessions, by the kernel's stream.
     sessions: Mutex<Sessions>,
     /// The host's wake, as `open` handed it; `None` = no session output can be named.
-    wake: Option<Wake>,
+    wake: Option<StaticWake>,
     /// The instance's driver ticket, as its last `tick` was handed it, and that tick's clock
     /// reading in milliseconds.
     driver: Mutex<(Ticket, u64)>,
@@ -659,23 +626,23 @@ macro_rules! slot {
 }
 
 slot!(Validate, ValidateIn, OutHead, |_, input, out| {
-    match read_settings(&dealt_section(input.field(|i| &i.settings).bytes())) {
+    match read_settings(&dealt_section(input.settings().bytes())) {
         Ok(_) => Outcome::Ready,
         Err(words) => out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words)),
     }
 });
 
 slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
-    let Ok(cfg) = read_settings(input.field(|i| &i.open.settings).bytes()) else {
+    let Ok(cfg) = read_settings(input.open().settings().bytes()) else {
         return Outcome::Refused;
     };
     let public_url = input
-        .field(|i| &i.public_url)
+        .public_url()
         .as_str()
         .ok()
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let wake = input.field(|i| &i.open).host().and_then(|h| Wake::of(&h));
+    let wake = input.open().host().and_then(|h| Wake::of(&h));
     let p = Plane {
         public_url,
         generations: Mutex::new(Vec::new()),
@@ -685,7 +652,7 @@ slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
         wake,
         driver: Mutex::new((Ticket::NONE, 0)),
     };
-    p.publish(&mut out, |o| &o.snapshot, input.open.generation, cfg);
+    p.publish(&mut out, |o| &o.snapshot, input.open().generation(), cfg);
     instance.open(p);
     Outcome::Ready
 });
@@ -698,10 +665,10 @@ slot!(
         let Some(p) = instance.get() else {
             return Outcome::Failed;
         };
-        let Ok(cfg) = read_settings(input.field(|i| &i.settings).bytes()) else {
+        let Ok(cfg) = read_settings(input.settings().bytes()) else {
             return Outcome::Refused;
         };
-        p.publish(&mut out, |o| &o.snapshot, input.generation, cfg);
+        p.publish(&mut out, |o| &o.snapshot, input.generation(), cfg);
         Outcome::Ready
     }
 );
@@ -709,7 +676,7 @@ slot!(
 slot!(Retire, GenIn, OutHead, |instance, input, _out| {
     if let Some(p) = instance.get() {
         lock(&p.generations).retain(|(_, g)| g.generation() != input.generation);
-        p.snapshots.retire(input.generation);
+        p.snapshots.retire(input.generation());
     }
     Outcome::Ready
 });
@@ -718,15 +685,15 @@ slot!(Retire, GenIn, OutHead, |instance, input, _out| {
 // the tick clock, and a session that now owes its end names the driver ticket. While a live
 // generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`.
 slot!(Tick, TickIn, TickOut, |instance, input, out| {
-    let given = input.get();
+    let given = input;
     let next = match instance.get() {
         Some(p) => {
-            *lock(&p.driver) = (given.head.ticket, given.now_ns / 1_000_000);
-            if lock(&p.sessions).tick(given.now_ns) {
+            *lock(&p.driver) = (given.head().ticket(), given.now_ns() / 1_000_000);
+            if lock(&p.sessions).tick(given.now_ns()) {
                 p.wake_driver();
             }
             if p.any_ceiling() {
-                given.now_ns.saturating_add(CEILING_TICK_NS)
+                given.now_ns().saturating_add(CEILING_TICK_NS)
             } else {
                 0
             }
@@ -768,7 +735,7 @@ slot!(
     PlaneCancelOut,
     |instance, input, out| {
         if let Some(p) = instance.get() {
-            lock(&p.sessions).cancel(input.get().cancel.ticket);
+            lock(&p.sessions).cancel(input.cancel().ticket());
         }
         out.set(|o| &o.cancel.disposition, CANCEL_FAILED);
         Outcome::Ready
@@ -785,7 +752,7 @@ slot!(Close, InHead, OutHead, |_, _, _out| { Outcome::Ready });
 // folds that top-level catalog model into the plane's route table, so the kernel's door steps resolve
 // it as any section entry). The metadata door reaches none and names none.
 slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
-    let Some(a) = crate::driven::arrive(input.claim) else {
+    let Some(a) = crate::driven::arrive(input.claim()) else {
         out.set(|o| &o.refusal, REFUSAL_NO_DOOR);
         out.set(|o| &o.refusal_status, 404);
         return Outcome::Refused;
@@ -822,12 +789,12 @@ fn piece_of<'h, 'a: 'h>(
     input: Lent<'a, OnPieceIn>,
     head: &'h mut Vec<(&'a [u8], &'a [u8])>,
 ) -> Option<Piece<'h>> {
-    let given = input.get();
-    let has_status = given.flags & PIECE_HAS_STATUS != 0;
-    let from = match given.from {
+    let given = input;
+    let has_status = given.flags() & PIECE_HAS_STATUS != 0;
+    let from = match given.from() {
         FROM_CALLER => request_unit::From::Caller,
         FROM_FAR_END => request_unit::From::FarEnd,
-        FROM_KERNEL => request_unit::From::Kernel(given.attempt_no),
+        FROM_KERNEL => request_unit::From::Kernel(given.attempt_no()),
         _ => return None,
     };
     if has_status {
@@ -835,14 +802,14 @@ fn piece_of<'h, 'a: 'h>(
             input
                 .head_fields()
                 .iter()
-                .map(|f| (f.field(|f| &f.name).bytes(), f.field(|f| &f.value).bytes())),
+                .map(|f| (f.name().bytes(), f.value().bytes())),
         );
     }
     Some(Piece {
         from,
-        bytes: input.field(|i| &i.bytes).bytes(),
-        status: has_status.then(|| u16::try_from(given.status_code).unwrap_or(0)),
-        last: given.flags & PIECE_LAST != 0,
+        bytes: input.bytes().bytes(),
+        status: has_status.then(|| u16::try_from(given.status_code()).unwrap_or(0)),
+        last: given.flags() & PIECE_LAST != 0,
         head: head.as_slice(),
     })
 }
@@ -918,8 +885,8 @@ fn answer_piece(
 /// turn's request is the caller side's answer). Every answer reports the session's cumulative
 /// units and writes at most one frame; a session still owing output names the driver ticket.
 fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPieceOut>) -> Outcome {
-    let given = input.get();
-    let Some(door) = Door::of(given.claim).filter(|d| d.is_session()) else {
+    let given = input;
+    let Some(door) = Door::of(given.claim()).filter(|d| d.is_session()) else {
         return Outcome::Refused;
     };
     let Some(cfg) = p.newest() else {
@@ -929,19 +896,19 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     let mut sessions = lock(&p.sessions);
     // Only the caller's piece opens a session: a far-end piece or a collection for a stream the
     // door holds nothing for (an ended or cancelled session) is refused, never a fresh session.
-    let live = if given.from == FROM_CALLER {
-        sessions.get_or_open(given.stream, door, &cfg)
+    let live = if given.from() == FROM_CALLER {
+        sessions.get_or_open(given.stream(), door, &cfg)
     } else {
-        sessions.get(given.stream)
+        sessions.get(given.stream())
     };
     if live.is_none() {
         return Outcome::Refused;
     }
-    sessions.crossed(given.stream, given.head.ticket);
-    let Some(live) = sessions.get(given.stream) else {
+    sessions.crossed(given.stream(), given.head().ticket());
+    let Some(live) = sessions.get(given.stream()) else {
         return Outcome::Refused;
     };
-    let near = given.from != FROM_FAR_END;
+    let near = given.from() != FROM_FAR_END;
     // A re-call after a `more = 1` answer pays what that side's frame still owes.
     let owed = if near { &mut live.near } else { &mut live.far };
     if piece::is_recall(input) && owed.pending() {
@@ -956,9 +923,9 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     let emit = match short {
         Some(emit) => emit,
         None => {
-            let caller_last = given.from == FROM_CALLER && given.flags & PIECE_LAST != 0;
-            let bytes = input.field(|i| &i.bytes).bytes();
-            match given.from {
+            let caller_last = given.from() == FROM_CALLER && given.flags() & PIECE_LAST != 0;
+            let bytes = input.bytes().bytes();
+            match given.from() {
                 FROM_CALLER => live.from_caller(bytes, caller_last),
                 FROM_FAR_END => live.from_far_end(bytes, now_ms),
                 FROM_KERNEL => {}
@@ -971,7 +938,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                     frame: None,
                     done: true,
                 }
-            } else if given.from == FROM_KERNEL && given.attempt_no > 0 {
+            } else if given.from() == FROM_KERNEL && given.attempt_no() > 0 {
                 crate::session_door::Emit::default()
             } else {
                 live.next(near)
@@ -1026,7 +993,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     };
     let owes = live.ready();
     if done {
-        sessions.close(given.stream);
+        sessions.close(given.stream());
     } else if owes {
         drop(sessions);
         p.wake_driver();
@@ -1042,29 +1009,29 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     let Some(p) = instance.get() else {
         return Outcome::Failed;
     };
-    let given = input.get();
-    if given.stream != 0 {
+    let given = input;
+    if given.stream() != 0 {
         return session_piece(p, input, &mut out);
     }
     let mut units = lock(&p.units);
     if piece::is_recall(input) {
-        if let Some(held) = units.get_mut(&given.unit) {
+        if let Some(held) = units.get_mut(&given.unit()) {
             if held.owed.pending() {
                 if held.owed.pay(input, &mut out) {
-                    units.remove(&given.unit);
+                    units.remove(&given.unit());
                 }
                 return Outcome::Ready;
             }
         }
     }
-    if !units.contains_key(&given.unit) {
+    if !units.contains_key(&given.unit()) {
         let caller_ref = input
-            .field(|i| &i.caller_ref)
+            .caller_ref()
             .as_str()
             .ok()
             .filter(|r| !r.is_empty())
             .map(str::to_owned);
-        let Some(held) = p.held(given.claim, caller_ref) else {
+        let Some(held) = p.held(given.claim(), caller_ref) else {
             return Outcome::Refused;
         };
         while units.len() >= MAX_UNITS {
@@ -1072,9 +1039,9 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
                 break;
             }
         }
-        units.insert(given.unit, held);
+        units.insert(given.unit(), held);
     }
-    let Some(held) = units.get_mut(&given.unit) else {
+    let Some(held) = units.get_mut(&given.unit()) else {
         return Outcome::Failed;
     };
     let answer = match held.short.take() {
@@ -1089,7 +1056,7 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     };
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
     if done {
-        units.remove(&given.unit);
+        units.remove(&given.unit());
     }
     outcome
 });
@@ -1179,18 +1146,18 @@ pub fn session_cut_render(dialect: u32, text: &str) -> Vec<u8> {
 // `refusal`: the kernel's status and text (a hook's veto, an admission's refusal) in the dialects'
 // error shape, as JSON, before any upgrade; a live session's budget cut in its own stream.
 slot!(Refusal, RefusalIn, RefusalOut, |instance, input, out| {
-    let given = input.get();
-    let status = u16::try_from(given.status).unwrap_or(0);
-    let text = input.field(|i| &i.text).as_str().unwrap_or_default();
-    let cut = given.reason == RefusalCode::OverBudget as u32
-        && given.unit != 0
+    let given = input;
+    let status = u16::try_from(given.status()).unwrap_or(0);
+    let text = input.text().as_str().unwrap_or_default();
+    let cut = given.reason() == RefusalCode::OverBudget as u32
+        && given.unit() != 0
         && instance
             .get()
-            .is_some_and(|p| lock(&p.sessions).served(given.unit));
+            .is_some_and(|p| lock(&p.sessions).served(given.unit()));
     let body = if cut {
-        session_cut_render(given.dialect, text)
+        session_cut_render(given.dialect(), text)
     } else {
-        refusal_render(status, given.reason, text)
+        refusal_render(status, given.reason(), text)
     };
     let (mut reply, mut fields, mut arena) =
         (input.reply_buf(), input.fields_buf(), input.arena_buf());
@@ -1232,14 +1199,14 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
     let Some(p) = instance.get() else {
         return Outcome::Failed;
     };
-    let given = input.get();
-    let Some(door) = Door::of(given.claim) else {
+    let given = input;
+    let Some(door) = Door::of(given.claim()) else {
         return Outcome::Refused;
     };
     let Some(cfg) = p.newest() else {
         return Outcome::Refused;
     };
-    let rewrite = input.field(|i| &i.rewrite).bytes();
+    let rewrite = input.rewrite().bytes();
     let (body, rewritten) = if door.is_session() {
         let locked = Live::locked(door, &cfg);
         let params = if rewrite.is_empty() {
@@ -1247,7 +1214,7 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         } else {
             match committed_session_config(&locked, rewrite) {
                 Ok(params) => {
-                    lock(&p.sessions).rewrite(given.unit, params.clone());
+                    lock(&p.sessions).rewrite(given.unit(), params.clone());
                     params
                 }
                 Err(_) => return Outcome::Refused,
@@ -1318,14 +1285,10 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
 
 busbar_contract::plugin_door! {
     ops: busbar_contract::abi::plane::Ops,
-    statement: Statement {
-        kind_tail: ptr::from_ref(TAIL).cast::<KindTailHead>(),
-        sections: SECTIONS.as_ptr(),
-        sections_len: SECTIONS.len(),
-        needs: NEEDS.as_ptr(),
-        needs_len: NEEDS.len(),
-        ..statement(NAME, env!("CARGO_PKG_VERSION"), 64)
-    },
+    statement: statement(NAME, env!("CARGO_PKG_VERSION"), 64)
+        .with_sections(SECTIONS)
+        .with_needs(NEEDS)
+        .with_kind_tail(TAIL),
     lifecycle: {
         validate: Safe<Validate>, open: Safe<Open>, refresh: Safe<Refresh>, retire: Safe<Retire>,
         tick: Safe<Tick>, drive: Safe<Drive>, cancel: Safe<Cancel>, release: Safe<Release>,
