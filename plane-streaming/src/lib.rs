@@ -34,8 +34,7 @@
 //! A door instance holds its live generations; a live session's state (the codec's decode state, the
 //! open turn's counters, the session's cumulative units and record) is a [`session_unit::SessionUnit`].
 
-#![cfg_attr(not(test), forbid(unsafe_code))]
-#![cfg_attr(test, deny(unsafe_code))]
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
 mod broker;

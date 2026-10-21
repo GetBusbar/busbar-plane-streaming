@@ -11,7 +11,7 @@
 
 use crate::codec::ir::{DecodeState, DuplexReader, OpenAiRealtimeCodec, WireEvent, WireRef};
 
-use super::alloc_counter::allocations_of;
+use busbar_contract::alloc_counter::allocations_of;
 
 /// One downlink audio frame of the dialect, in the shape a session sees them by the thousand.
 const DOWNLINK: &str =
