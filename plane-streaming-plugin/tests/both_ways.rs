@@ -947,6 +947,9 @@ fn every_far_request_names_the_need_it_rides() {
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::with_units(1 << 18, 8);
+        // The sideband session attaches to a call the SDP door brokered for its caller.
+        let _ = broker(p, &mut b, 39, CALLER_REF, LIVE_CALL_LOCATION);
+        assert_eq!(arrive_at(p, 2, 40, LIVE_SIDEBAND), Outcome::Ready);
         let answer = b.call(p, &session(40, FROM_CALLER, 0, &uplink(100)));
         assert!(answer.contains("far=true"), "{answer}");
         assert_eq!(b.last_need, door::RIDES_REALTIME_SOCKET, "{answer}");
