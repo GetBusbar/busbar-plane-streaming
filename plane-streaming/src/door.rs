@@ -675,7 +675,7 @@ slot!(
 
 slot!(Retire, GenIn, OutHead, |instance, input, _out| {
     if let Some(p) = instance.get() {
-        lock(&p.generations).retain(|(_, g)| g.generation() != input.generation);
+        lock(&p.generations).retain(|(_, g)| g.generation() != input.generation());
         p.snapshots.retire(input.generation());
     }
     Outcome::Ready
