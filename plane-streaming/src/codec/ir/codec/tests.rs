@@ -831,6 +831,85 @@ fn ordinary_streaming_fragments_decode_byte_identically() {
     );
 }
 
+/// P-ITEM: VOICE TOOL-ARGS at the codec seam (spec DONE item 2, "All P-item behaviours match
+/// 1.5.5"; the drive log's P5, commit 470351a480: "streamed tool-call arguments are discarded").
+/// The OpenAI Realtime far end streams a call's arguments ONLY as fragments, and its close
+/// (`function_call_arguments.done`) states none of its own, so nothing but accumulation can deliver
+/// them. Read by the OpenAI Realtime reader and framed by the writer of a dialect that dispatches a
+/// call whole (Gemini Live's `toolCall`), no fragment frames a call on its own, and the one
+/// dispatched call carries the fragments concatenated in order, parsed as one whole: never `null`,
+/// never the first fragment alone. The session relay's sibling pin
+/// (`p_item_voice_tool_args_streamed_fragments_reach_the_caller_whole_and_once`) holds what the
+/// caller receives on a same-dialect session; this one holds the codec's accumulate-then-frame
+/// seam a translated call is dispatched through.
+///
+/// The 1.5.5 behaviour matched is the llm surface's streamed tool call (owner correction
+/// 2026-09-28): every argument fragment of an open tool block accumulated, the call emitted once on
+/// its block stop with the fully reassembled arguments (v1.5.5
+/// `crates/busbar/src/proto/gemini/writer.rs:734-780`).
+#[test]
+fn p_item_voice_tool_args_fragments_alone_reach_the_dispatched_call_whole() {
+    let reader = OpenAiRealtimeCodec;
+    let writer = crate::codec::ir::GeminiLiveCodec;
+    let mut read_st = DecodeState::default();
+    let mut write_st = DecodeState::default();
+    let mut frame = |event: Value| -> Vec<Value> {
+        reader
+            .read_down(wire(&event.to_string()), &mut read_st)
+            .into_iter()
+            .filter_map(|ir| writer.write_down(ir, &mut write_st))
+            .map(|w| as_value(&w))
+            .collect()
+    };
+    // A dispatched call: one Gemini `functionCall` carrying its arguments.
+    let dispatched = |frames: &[Value]| -> Vec<Value> {
+        frames
+            .iter()
+            .filter_map(|f| f["toolCall"]["functionCalls"].as_array())
+            .flatten()
+            .filter(|fc| fc.get("args").is_some())
+            .cloned()
+            .collect()
+    };
+
+    let opened = frame(json!({
+        "type": "response.output_item.added",
+        "item": { "type": "function_call", "call_id": "call_9", "name": "weather" },
+    }));
+    assert!(
+        dispatched(&opened).is_empty(),
+        "an announcement dispatches no call with arguments of its own: {opened:?}"
+    );
+    for fragment in ["{\"lo", "c\":\"S", "F\"}"] {
+        let framed = frame(json!({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call_9",
+            "delta": fragment,
+        }));
+        assert!(
+            framed.is_empty(),
+            "a fragment of a call's arguments frames nothing on its own: {framed:?}"
+        );
+    }
+    let closed = frame(json!({
+        "type": "response.function_call_arguments.done",
+        "call_id": "call_9",
+    }));
+    let calls = dispatched(&closed);
+    assert_eq!(
+        calls.len(),
+        1,
+        "the close dispatches the call once: {closed:?}"
+    );
+    assert_eq!(calls[0]["id"], "call_9");
+    assert_eq!(calls[0]["name"], "weather");
+    assert_eq!(
+        calls[0]["args"],
+        json!({ "loc": "SF" }),
+        "the fragments alone reach the dispatched call, whole and in order"
+    );
+}
+
 // ── tools: correlation across the call loop ──────────────────────────────────────────────────────
 
 #[test]
