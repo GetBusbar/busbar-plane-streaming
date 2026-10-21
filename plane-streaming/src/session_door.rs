@@ -19,7 +19,7 @@
 //!   the session's unsolicited output: the door wakes the instance's driver ticket, `drive` names
 //!   the session, and each collection (`FROM_KERNEL`, no bytes, no attempt) answers the next queued
 //!   frame, toward the side it is bound for.
-//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the six classes the plane counts over its
+//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the eight classes the plane counts over its
 //!   closed turns and its open turn's running counts (so a cancel or a cut, which reports nothing
 //!   of its own, bills what streamed from the last answer), and, once the far end has first
 //!   answered the session, its fee unit ([`PER_SESSION_CLASS`], `1`): a session whose far end never
@@ -56,7 +56,7 @@ const NS_PER_SEC: u64 = 1_000_000_000;
 /// reading on the tick clock, and a ceiling compared across two clocks is no ceiling.
 pub const CEILING_TICK_NS: u64 = NS_PER_SEC;
 
-/// The tail's class index of the session's fee unit (`per_session`), after the six counted
+/// The tail's class index of the session's fee unit (`per_session`), after the eight counted
 /// classes ([`crate::session_unit::CLASSES`]).
 pub const PER_SESSION_CLASS: u32 = crate::session_unit::CLASSES.len() as u32;
 
@@ -113,7 +113,9 @@ pub struct Live {
     started_ns: Option<u64>,
     /// The far end has answered the session: its fee unit was incurred.
     answered: bool,
-    /// The provider's call a sideband session attaches to, as its arrival named it.
+    /// The provider's call a sideband session attaches to, as its arrival named it. The call's
+    /// fee unit was reported by the SDP offer that brokered it, so an attached session reports
+    /// none of its own: one fee per call.
     call_id: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
     pub(crate) near: crate::piece::Owed,
@@ -295,12 +297,13 @@ impl Live {
     }
 
     /// The session's cumulative units, as the door reports them: (class index, amount), the zero
-    /// classes left out; the fee unit is `1` once the far end has answered.
+    /// classes left out; the fee unit is `1` once the far end has answered, unless the session is
+    /// attached to a call whose SDP offer already reported the call's fee.
     #[must_use]
     pub fn units(&self) -> Vec<(u32, u64)> {
         let units: CumulativeUnits = each!(&self.unit, |u| u.units());
         let mut out = Door::Sideband.meter(&units);
-        if self.answered {
+        if self.answered && self.call_id.is_none() {
             out.push((PER_SESSION_CLASS, 1));
         }
         out

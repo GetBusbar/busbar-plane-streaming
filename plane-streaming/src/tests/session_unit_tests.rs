@@ -242,7 +242,7 @@ fn a_stop_settles_the_open_turns_tool_calls_too() {
         s.from_caller(&json(serde_json::json!({"event":"stop"})))
             .end
     );
-    assert_eq!(s.units().0, [0, 0, 0, 0, 1, 1]);
+    assert_eq!(s.units().0, [0, 0, 0, 0, 1, 1, 0, 0]);
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn one_full_turn_reports_the_six_classes_the_served_plane_metered() {
         "output_token_details":{"audio_tokens":20,"text_tokens":4}}}}),
     );
     let _ = s.from_far_end(&done, 0);
-    assert_eq!(s.units().0, [10, 20, 3, 4, 1, 1]);
+    assert_eq!(s.units().0, [10, 20, 3, 4, 1, 1, 0, 0]);
 }
 
 #[test]

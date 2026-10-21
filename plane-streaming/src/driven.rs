@@ -14,10 +14,8 @@
 //! The caller's texts are the served plane's, byte for byte, where the far end answered. A far end
 //! that could not be reached is the kernel's route terminal and is not answered here.
 
-#[cfg(test)]
-use crate::broker::rtc_call_id_of;
 use crate::broker::{
-    clamped_ttl_secs, mint_request_body, minted_answer, read_minted, CALLS_PATH,
+    clamped_ttl_secs, mint_request_body, minted_answer, read_minted, rtc_call_id_of, CALLS_PATH,
     CLIENT_SECRETS_PATH, SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
 };
 use crate::codec::ir::config::SessionConfig;
@@ -317,9 +315,8 @@ pub struct Reply {
     pub fields: Vec<(&'static str, String)>,
     /// The body.
     pub body: Vec<u8>,
-    /// For an SDP answer that names its call: the provider's `rtc_` call id (the crate's tests'
-    /// reading of the answer's `Location`).
-    #[cfg(test)]
+    /// For an SDP answer that names its call: the provider's `rtc_` call id, read off its
+    /// `Location`: the call the caller's own sideband may attach to.
     pub rtc_call_id: Option<String>,
 }
 
@@ -336,7 +333,6 @@ pub fn mint_failed(reason: &str) -> Reply {
             "streaming ephemeral-secret mint failed: ephemeral token mint failed: {reason}"
         )
         .into_bytes(),
-        #[cfg(test)]
         rtc_call_id: None,
     }
 }
@@ -356,7 +352,6 @@ pub fn mint_reply(status: u16, body: &[u8]) -> Reply {
             status: 200,
             fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
             body: minted_answer(&minted),
-            #[cfg(test)]
             rtc_call_id: None,
         },
         Err(reason) => mint_failed(&reason),
@@ -387,7 +382,6 @@ pub fn sdp_reply(
         status,
         fields,
         body: body.to_vec(),
-        #[cfg(test)]
         rtc_call_id: location.and_then(rtc_call_id_of),
     }
 }

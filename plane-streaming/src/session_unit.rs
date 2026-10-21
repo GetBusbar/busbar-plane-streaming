@@ -27,19 +27,21 @@ use crate::splice::LockedKeys;
 
 /// The billable classes a session reports, in the tail's order (their index is the class a unit
 /// count names).
-pub const CLASSES: [busbar_contract::ids::MeterClassId; 6] = [
+pub const CLASSES: [busbar_contract::ids::MeterClassId; 8] = [
     meta::CLASS_AUDIO_TOKENS_IN,
     meta::CLASS_AUDIO_TOKENS_OUT,
     meta::CLASS_TEXT_TOKENS_IN,
     meta::CLASS_TEXT_TOKENS_OUT,
     meta::CLASS_AUDIO_SECONDS_IN,
     meta::CLASS_TOOL_CALLS,
+    meta::CLASS_IMAGE_TOKENS_IN,
+    meta::CLASS_VIDEO_TOKENS_IN,
 ];
 
 /// The session's units so far, per class: every closed turn adds to them, and the session always
 /// continues (the kernel owns the cut).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CumulativeUnits(pub [u64; 6]);
+pub struct CumulativeUnits(pub [u64; CLASSES.len()]);
 
 impl TurnSink for CumulativeUnits {
     fn turn_closed(&mut self, usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> bool {

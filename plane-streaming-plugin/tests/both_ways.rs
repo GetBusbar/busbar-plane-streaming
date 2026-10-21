@@ -422,6 +422,8 @@ fn the_tail_states_what_the_served_plane_declares() {
             "text_tokens_out/token",
             "audio_seconds_in/duration",
             "tool_calls/count",
+            "image_tokens_in/token",
+            "video_tokens_in/token",
             "per_session/count",
         ]
     );
@@ -454,8 +456,9 @@ const SESSION: &[u8] = br#"{"session":{"model":"m-cap"}}"#;
 const CALLER_REF: &str = "c0ffee";
 /// The body the served plane sent its far end for that mint (the recorded
 /// `streams|mint|client-secrets` cell, `golden/1.6.0-pre`).
-const MINT_BODY: &str =
-    r#"{"expires_after":{"anchor":"created_at","seconds":600},"session":{"model":"m-cap"}}"#;
+/// The session goes in the GA shape (`type: realtime`) under the section's two token ceilings (the
+/// defaults, 4096 and 32768).
+const MINT_BODY: &str = r#"{"expires_after":{"anchor":"created_at","seconds":600},"session":{"max_output_tokens":4096,"model":"m-cap","truncation":{"retention_ratio":1.0,"token_limits":{"post_instructions":28672},"type":"retention_ratio"},"type":"realtime"}}"#;
 /// The far end's mint answer.
 const MINTED: &[u8] = br#"{"value":"ek_oracle_0001","expires_at":1767225600}"#;
 /// The caller's SDP offer, and the far end's answer and where its call lives.
@@ -486,6 +489,8 @@ struct Bufs {
     last_units: String,
     /// The need the last answer named for its far request (`0` = none).
     last_need: u32,
+    /// The caller reference the kernel lends each piece.
+    caller: &'static str,
 }
 
 /// One piece pushed to a unit: whose it is, its flags, bytes, status and kept head fields.
@@ -515,6 +520,7 @@ impl Bufs {
             arena: [0; 256],
             last_units: String::new(),
             last_need: 0,
+            caller: CALLER_REF,
         }
     }
 
@@ -525,7 +531,7 @@ impl Bufs {
         (i.unit, i.claim, i.from, i.flags) = (push.unit, push.claim, push.from, push.flags);
         i.stream = push.stream;
         (i.attempt_no, i.bytes, i.status_code) = (push.attempt_no, octets(push.bytes), push.status);
-        i.caller_ref = text(CALLER_REF);
+        i.caller_ref = text(self.caller);
         if !push.head.is_empty() {
             (i.head_fields, i.head_fields_len) = (push.head.as_ptr(), push.head.len());
         }
@@ -706,6 +712,45 @@ fn uplink(ms: usize) -> Vec<u8> {
 
 const USAGE_DONE: &[u8] = br#"{"type":"response.done","response":{"usage":{"input_token_details":{"audio_tokens":10,"text_tokens":3},"output_token_details":{"audio_tokens":20,"text_tokens":4}}}}"#;
 
+/// The SDP offer of `unit` by `caller`, whose far end answers 201 with its call at `location`: the
+/// call that caller's sideband may attach to. The far end's answer, as text.
+fn broker(p: &Plugin<Plane>, unit: u64, location: &'static str, caller: &'static str) -> String {
+    let mut b = Bufs::new(256);
+    b.caller = caller;
+    let _ = b.call(p, &attempt(unit, 1));
+    let _ = b.call(p, &push(unit, 1, FROM_CALLER, PIECE_LAST, OFFER));
+    let head = [Field {
+        name: text("location"),
+        value: text(location),
+    }];
+    let far = Push {
+        status: 201,
+        head: &head,
+        ..push(
+            unit,
+            1,
+            FROM_FAR_END,
+            PIECE_HAS_STATUS | PIECE_LAST,
+            SDP_ANSWER,
+        )
+    };
+    b.call(p, &far)
+}
+
+/// The SDP offer the test caller makes for call `location` (on a unit of its own), then `arrive`
+/// of `unit` on the sideband door at `target` (`/v1/realtime/sideband/{call_id}`): the provider
+/// call the unit's session attaches to.
+fn attach_sideband(
+    p: &Plugin<Plane>,
+    unit: u64,
+    location: &'static str,
+    target: &'static str,
+) -> Outcome {
+    let brokered = broker(p, unit + 100_000, location, CALLER_REF);
+    assert!(brokered.contains("status=201"), "{brokered}");
+    arrive_sideband(p, unit, target)
+}
+
 /// `arrive` of `unit` on the sideband door at `target` (`/v1/realtime/sideband/{call_id}`): the
 /// provider call the unit's session attaches to.
 fn arrive_sideband(p: &Plugin<Plane>, unit: u64, target: &'static str) -> Outcome {
@@ -725,9 +770,14 @@ fn session_script(p: &Plugin<Plane>) -> Vec<String> {
     let mut t = vec![format!("open {:?}", open(p, 1, SESSION, Some(PUBLIC)).0)];
     t.push(format!(
         "arrive {:?}",
-        arrive_sideband(p, 20, "/v1/realtime/sideband/rtc_both0020")
+        attach_sideband(
+            p,
+            20,
+            "/v1/realtime/calls/rtc_both0020",
+            "/v1/realtime/sideband/rtc_both0020"
+        )
     ));
-    let mut b = Bufs::with_units(1 << 18, 6);
+    let mut b = Bufs::with_units(1 << 18, 8);
     let line = |t: &mut Vec<String>, b: &mut Bufs, what: &str, push: &Push<'_>| {
         let answer = b.call(p, push);
         t.push(format!("{what} {answer} units=[{}]", b.last_units));
@@ -803,26 +853,25 @@ fn a_live_session_is_answered_through_the_door() {
     let far = line("far usage");
     assert!(
         far.contains("far=false done=false")
-            && far.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=2 6:1=1]"),
-        "the closed turn's tokens, its two admitted seconds and the answered session's fee \
-         unit, reported: {far}"
+            && far.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=2]"),
+        "the closed turn's tokens and its two admitted seconds, and no fee unit: the call's fee \
+         was the SDP offer's: {far}"
     );
     assert!(line("collect ").contains("emitted= more=0 far=false done=false"));
     assert!(
-        line("short ").starts_with("short Failed") && line("short ").ends_with("units=[needed 6]"),
+        line("short ").starts_with("short Failed") && line("short ").ends_with("units=[needed 5]"),
         "{}",
         line("short ")
     );
     let recall = line("short re-call");
     assert!(
-        recall.contains("far=true")
-            && recall.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=4 6:1=1]"),
+        recall.contains("far=true") && recall.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=4]"),
         "the re-call answers the same piece once, its audio not counted twice (the open turn's \
          two running seconds over the closed turn's two): {recall}"
     );
     let end = line("caller end");
     assert!(
-        end.contains("done=true") && end.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=4 6:1=1]"),
+        end.contains("done=true") && end.ends_with("units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=4]"),
         "the caller's end settles the open turn's two seconds once: {end}"
     );
     assert!(line("request unit on a session door")
@@ -845,7 +894,12 @@ fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
         let unnamed = b.call(p, &session(60, FROM_CALLER, 0, &uplink(100)));
         assert!(unnamed.starts_with("Refused"), "{unnamed}");
         assert_eq!(
-            arrive_sideband(p, 61, "/v1/realtime/sideband/rtc_both0061"),
+            attach_sideband(
+                p,
+                61,
+                "/v1/realtime/calls/rtc_both0061",
+                "/v1/realtime/sideband/rtc_both0061"
+            ),
             Outcome::Ready
         );
         let named = b.call(p, &session(61, FROM_CALLER, 0, &uplink(100)));
@@ -861,6 +915,84 @@ fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
         );
         let forged = b.call(p, &session(62, FROM_CALLER, 0, &uplink(100)));
         assert!(forged.starts_with("Refused"), "{forged}");
+    }
+}
+
+/// RED-BEFORE-GREEN (THE DESIGN #45's browser trust boundary; owner ruling: a sideband attaches only
+/// to a call its own caller's SDP offer created): a call another caller's offer brokered is
+/// refused, however well-formed its id, and so is a call no offer through this door created; the
+/// caller whose offer created it attaches. RED: any well-formed id was dialled, so one caller could
+/// take control of another's call on the operator's account. Both ways.
+#[test]
+fn a_sideband_attaches_only_to_its_own_callers_call() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let theirs = broker(p, 90, "/v1/realtime/calls/rtc_theirs0001", "beef");
+        assert!(theirs.contains("status=201"), "{theirs}");
+        let mut b = Bufs::with_units(1 << 18, 8);
+        assert_eq!(
+            arrive_sideband(p, 91, "/v1/realtime/sideband/rtc_theirs0001"),
+            Outcome::Ready
+        );
+        let foreign = b.call(p, &session(91, FROM_CALLER, 0, &uplink(100)));
+        assert!(
+            foreign.starts_with("Refused"),
+            "another caller's call: {foreign}"
+        );
+        assert_eq!(
+            arrive_sideband(p, 92, "/v1/realtime/sideband/rtc_unbrokered01"),
+            Outcome::Ready
+        );
+        let unknown = b.call(p, &session(92, FROM_CALLER, 0, &uplink(100)));
+        assert!(
+            unknown.starts_with("Refused"),
+            "a call no offer here created: {unknown}"
+        );
+        b.caller = "beef";
+        assert_eq!(
+            arrive_sideband(p, 93, "/v1/realtime/sideband/rtc_theirs0001"),
+            Outcome::Ready
+        );
+        let own = b.call(p, &session(93, FROM_CALLER, 0, &uplink(100)));
+        assert!(
+            own.contains("far=true")
+                && own.contains("verb=GET target=/v1/realtime?call_id=rtc_theirs0001 "),
+            "the offer's own caller attaches: {own}"
+        );
+    }
+}
+
+/// RED-BEFORE-GREEN (MONEY: one session fee per call): the SDP offer that brokers a call reports
+/// the call's fee unit, and the sideband that joins that call reports its tokens and no second fee.
+/// RED: the joined session reported its own `per_session` once its far end answered, so one call
+/// was charged the fee twice. Both ways.
+#[test]
+fn a_sideband_joining_a_brokered_call_adds_no_second_fee() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let brokered = broker(p, 94, "/v1/realtime/calls/rtc_fee0001", CALLER_REF);
+        assert!(brokered.contains("status=201"), "{brokered}");
+        assert_eq!(
+            arrive_sideband(p, 95, "/v1/realtime/sideband/rtc_fee0001"),
+            Outcome::Ready
+        );
+        let mut b = Bufs::with_units(1 << 18, 8);
+        let _ = b.call(p, &session(95, FROM_CALLER, 0, &uplink(100)));
+        let far = Push {
+            status: 101,
+            ..session(95, FROM_FAR_END, PIECE_HAS_STATUS, USAGE_DONE)
+        };
+        let answered = b.call(p, &far);
+        assert!(answered.starts_with("Ready"), "{answered}");
+        assert!(
+            b.last_units.contains("0:1=10") && !b.last_units.contains("8:1="),
+            "the joined call's tokens, and no second fee: {}",
+            b.last_units
+        );
     }
 }
 
@@ -887,7 +1019,7 @@ fn a_brokered_browser_session_reports_its_session_fee() {
         };
         let minted = b.call(p, &far);
         assert!(minted.contains("done=true status=200"), "{minted}");
-        assert_eq!(b.last_units, "6:1=1", "the minted session's fee: {minted}");
+        assert_eq!(b.last_units, "8:1=1", "the minted session's fee: {minted}");
 
         let _ = b.call(p, &attempt(71, 1));
         let _ = b.call(p, &push(71, 1, FROM_CALLER, PIECE_LAST, OFFER));
@@ -898,7 +1030,7 @@ fn a_brokered_browser_session_reports_its_session_fee() {
         let answered = b.call(p, &far);
         assert!(answered.contains("done=true status=201"), "{answered}");
         assert_eq!(
-            b.last_units, "6:1=1",
+            b.last_units, "8:1=1",
             "the offered session's fee: {answered}"
         );
 
@@ -1071,7 +1203,12 @@ fn every_far_request_names_the_need_it_rides() {
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         assert_eq!(
-            arrive_sideband(p, 40, "/v1/realtime/sideband/rtc_both0040"),
+            attach_sideband(
+                p,
+                40,
+                "/v1/realtime/calls/rtc_both0040",
+                "/v1/realtime/sideband/rtc_both0040"
+            ),
             Outcome::Ready
         );
         let mut b = Bufs::with_units(1 << 18, 8);
@@ -1222,11 +1359,19 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(1 << 16);
         let audio = uplink(100);
-        for (unit, target) in [
-            (130, "/v1/realtime/sideband/rtc_both0130"),
-            (132, "/v1/realtime/sideband/rtc_both0132"),
+        for (unit, location, target) in [
+            (
+                130,
+                "/v1/realtime/calls/rtc_both0130",
+                "/v1/realtime/sideband/rtc_both0130",
+            ),
+            (
+                132,
+                "/v1/realtime/calls/rtc_both0132",
+                "/v1/realtime/sideband/rtc_both0132",
+            ),
         ] {
-            assert_eq!(arrive_sideband(p, unit, target), Outcome::Ready);
+            assert_eq!(attach_sideband(p, unit, location, target), Outcome::Ready);
         }
         let _ = b.call(p, &session(130, FROM_CALLER, 0, &audio));
         let _ = b.call(p, &session(132, FROM_CALLER, 0, &audio));

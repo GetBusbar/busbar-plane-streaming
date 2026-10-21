@@ -25,6 +25,12 @@ pub struct IrDuplexUsage {
     pub text_in: u64,
     /// Text output tokens produced this turn.
     pub text_out: u64,
+    /// Image input tokens consumed this turn (OpenAI `input_token_details.image_tokens`, Gemini's
+    /// IMAGE modality entries): a class of their own, priced on their own.
+    pub image_in: u64,
+    /// Video input tokens consumed this turn (Gemini's VIDEO modality entries): a class of their
+    /// own, priced on their own.
+    pub video_in: u64,
     /// Cached tokens billed at the cache rate this turn.
     pub cached: u64,
 }

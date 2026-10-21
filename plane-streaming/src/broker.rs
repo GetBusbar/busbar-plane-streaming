@@ -43,14 +43,15 @@ pub fn clamped_ttl_secs(requested: Option<u64>) -> u64 {
 }
 
 /// The mint request's body: the secret's lifetime, anchored at its creation, and the locked session
-/// params the browser's session is bound to.
+/// params the browser's session is bound to, in the GA `session` shape the GA client-secret endpoint
+/// reads ([`SessionConfig::ga_session`]: `type` is `realtime`).
 ///
 /// # Errors
 /// The serializer's text when the body does not serialize.
 pub fn mint_request_body(ttl_secs: u64, config: &SessionConfig) -> Result<Vec<u8>, String> {
     let body = serde_json::json!({
         "expires_after": { "anchor": "created_at", "seconds": ttl_secs },
-        "session": config,
+        "session": serde_json::Value::Object(config.ga_session()),
     });
     serde_json::to_vec(&body).map_err(|e| format!("mint request body did not serialize: {e}"))
 }
@@ -131,7 +132,6 @@ pub fn minted_answer(minted: &Minted) -> Vec<u8> {
 
 /// The provider's call id in an SDP answer's `Location`: the last path segment starting `rtc_`, less
 /// any query or fragment.
-#[cfg(test)]
 #[must_use]
 pub fn rtc_call_id_of(location: &str) -> Option<String> {
     location

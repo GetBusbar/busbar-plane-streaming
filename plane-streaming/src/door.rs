@@ -11,7 +11,7 @@
 //! ## What the plane states once
 //!
 //! The Statement tail ([`TAIL`]): the `streams:` section it declares (and the `providers:` section
-//! a document must carry when the plane is linked), its dialects, the `session` grant kind, the six
+//! a document must carry when the plane is linked), its dialects, the `session` grant kind, the eight
 //! billable classes a session counts in, the per-session fee, its connection needs per direction
 //! and the config path its egress target is read from.
 //!
@@ -200,7 +200,7 @@ const fn class(class: &'static str, family: &'static str) -> BillableClass {
     }
 }
 
-/// The six classes a session counts in (`cached_tokens` is attribution only, never billed), then
+/// The eight classes a session counts in (`cached_tokens` is attribution only, never billed), then
 /// the session's fee unit: `per_session`, reported `1` once the far end first answers the session
 /// and never before, so a session whose open failed refunds its fee (ARCHITECT Q-L5-FEE (A), Q17-6;
 /// the fee unit is a billable class reported as a count of 0 or 1 and never ledgered, Q17-5 (c)).
@@ -211,6 +211,8 @@ const BILLABLE_CLASSES: &[BillableClass] = &[
     class(meta::CLASS_TEXT_TOKENS_OUT.as_str(), TOKEN_FAMILY),
     class(meta::CLASS_AUDIO_SECONDS_IN.as_str(), "duration"),
     class(meta::CLASS_TOOL_CALLS.as_str(), "count"),
+    class(meta::CLASS_IMAGE_TOKENS_IN.as_str(), TOKEN_FAMILY),
+    class(meta::CLASS_VIDEO_TOKENS_IN.as_str(), TOKEN_FAMILY),
     class(PER_SESSION, "count"),
 ];
 
@@ -578,6 +580,10 @@ pub const MAX_UNITS: usize = 4096;
 /// arrival's is forgotten and its session, should it open, is refused.
 pub const MAX_PENDING_CALLS: usize = 4096;
 
+/// The most calls the SDP door has brokered that an instance keeps the owner of; past it, the
+/// oldest is forgotten and a sideband to it is refused (never attached unchecked).
+pub const MAX_BROKERED_CALLS: usize = 4096;
+
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
 struct Held {
     /// The plane's answers to the unit's pieces.
@@ -652,6 +658,9 @@ pub struct Plane {
     /// The provider call each sideband arrival names, by the kernel's unit key, until the unit's
     /// session opens (oldest first).
     calls: Mutex<BTreeMap<u64, String>>,
+    /// The calls the SDP door brokered, oldest first, each with the caller reference of the unit
+    /// whose offer created it: a sideband attaches only to its own caller's call.
+    brokered: Mutex<std::collections::VecDeque<(String, String)>>,
     /// The live sessions, by the kernel's stream.
     sessions: Mutex<Sessions>,
     /// The host's wake, as `open` handed it; `None` = no session output can be named.
@@ -669,7 +678,10 @@ impl Plane {
         let door = Door::of(claim)?;
         let generations = lock(&self.generations);
         let (cfg, _) = generations.last()?;
-        let unit = RequestUnit::open(door, cfg.session.clone(), caller_ref)?;
+        // The mint binds the browser's session to the section's session under its two token
+        // ceilings, as a socket session is locked.
+        let locked = crate::session_door::with_ceilings(cfg.session.clone(), cfg);
+        let unit = RequestUnit::open(door, locked, caller_ref)?;
         Some(Held {
             unit,
             owed: Owed::default(),
@@ -758,6 +770,7 @@ slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
         snapshots: Generations::new(),
         units: Mutex::new(Units::default()),
         calls: Mutex::new(BTreeMap::new()),
+        brokered: Mutex::new(std::collections::VecDeque::new()),
         sessions: Mutex::new(Sessions::default()),
         wake,
         driver: Mutex::new((Ticket::NONE, 0)),
@@ -1033,13 +1046,22 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     };
     let now_ms = lock(&p.driver).1;
     let mut sessions = lock(&p.sessions);
-    // A sideband session attaches to the provider call its arrival named; one whose arrival named
-    // none is refused, never dialled as a fresh session.
+    // A sideband session attaches to the provider call its arrival named, and only to a call the
+    // SDP door brokered for this same caller; any other is refused, never dialled as a fresh
+    // session and never attached to another caller's call.
     let opening = given.from == FROM_CALLER && sessions.get(given.stream).is_none();
     let call = if opening && door == Door::Sideband {
         let Some(call) = lock(&p.calls).remove(&given.unit) else {
             return Outcome::Refused;
         };
+        let caller = input.field(|i| &i.caller_ref).as_str().unwrap_or_default();
+        let owned = !caller.is_empty()
+            && lock(&p.brokered)
+                .iter()
+                .any(|(id, owner)| *id == call && owner == caller);
+        if !owned {
+            return Outcome::Refused;
+        }
         Some(call)
     } else {
         None
@@ -1218,6 +1240,26 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
             held.unit.on_piece(piece)
         }
     };
+    // An SDP answer that created a call names it: the call is this caller's, the one their own
+    // sideband may attach to.
+    let brokered = match &answer {
+        Answer::ToCaller(reply) if (200..300).contains(&reply.status) => reply.rtc_call_id.clone(),
+        _ => None,
+    };
+    let caller = input
+        .field(|i| &i.caller_ref)
+        .as_str()
+        .ok()
+        .filter(|r| !r.is_empty());
+    if let (Some(call), Some(caller)) = (brokered, caller) {
+        let mut calls = lock(&p.brokered);
+        while calls.len() >= MAX_BROKERED_CALLS {
+            if calls.pop_front().is_none() {
+                break;
+            }
+        }
+        calls.push_back((call, caller.to_string()));
+    }
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
     if done || outcome == Outcome::Refused {
         units.forget(given.unit);
