@@ -453,7 +453,7 @@ fn object(
     };
     for m in &members {
         let name = field_name(&m.key, proto);
-        if cut.contains(&&*name) || set.contains_key(&*name) || capped(&*name) {
+        if cut.contains(&&*name) || set.contains_key(&*name) || capped(&name) {
             continue;
         }
         sep(&mut out);
