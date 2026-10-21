@@ -488,12 +488,17 @@ impl Route {
 /// Judge a settings blob with the plane's grammar; an empty blob is the default section.
 ///
 /// # Errors
-/// The grammar's reason when the blob is not a `streams:` section.
+/// The grammar's reason when the blob is not a `streams:` section, or the section's reason when
+/// its token ceilings conflict ([`StreamsCfg::ceilings_conflict`]).
 pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
     if settings.is_empty() {
         return Ok(StreamsCfg::default());
     }
-    serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())
+    let cfg = serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())?;
+    match cfg.ceilings_conflict() {
+        Some(reason) => Err(reason),
+        None => Ok(cfg),
+    }
 }
 
 /// THE SECTION A DEALT `validate` BLOB CARRIES. The boot's stage-3g deal hands a declared-verb
