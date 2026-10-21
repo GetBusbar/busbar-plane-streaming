@@ -116,7 +116,6 @@ webpki-roots = "1"
 zeroize = "1"
 # busbar .github/fleet/deps.toml [plugin-deps], at bc610c636a1208b96ad7e47e4a6dfe3a02dbf9bc
 fallible-iterator = "0.2"
-httparse = { version = "1", default-features = false }
 ldap3 = { version = "0.12", default-features = false, features = ["sync"] }
 mysql = { version = "28", default-features = false, features = ["minimal-rust"] }
 mysql_common = { version = "0.35", default-features = false }
