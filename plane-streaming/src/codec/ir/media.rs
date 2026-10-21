@@ -56,6 +56,17 @@ impl AudioFormat {
         }
     }
 
+    /// The GA `session` format object for this format (`audio.input.format`, `audio.output.format`):
+    /// `audio/pcm` at its rate, or `audio/pcmu` for G.711 µ-law.
+    #[must_use]
+    pub fn ga_format(self) -> serde_json::Value {
+        match self {
+            AudioFormat::Pcm16 => serde_json::json!({ "type": "audio/pcm", "rate": 24_000 }),
+            AudioFormat::G711Ulaw => serde_json::json!({ "type": "audio/pcmu" }),
+            AudioFormat::Pcm16At16k => serde_json::json!({ "type": "audio/pcm", "rate": 16_000 }),
+        }
+    }
+
     /// Parse a dialect wire token into a format, or `None` for an unrecognized one. `g711_alaw` is
     /// deliberately not modeled yet — the plane speaks only the two formats it negotiates today.
     #[must_use]

@@ -357,9 +357,52 @@ fn the_telephony_door_tells_the_far_end_its_locked_session_at_the_carriers_start
     };
     let v: serde_json::Value = serde_json::from_slice(&frame).expect("json");
     assert_eq!(v["type"], "session.update", "{v}");
-    assert_eq!(v["session"]["input_audio_format"], "g711_ulaw", "{v}");
-    assert_eq!(v["session"]["output_audio_format"], "g711_ulaw", "{v}");
+    assert_eq!(v["session"]["type"], "realtime", "{v}");
+    assert_eq!(
+        v["session"]["audio"]["input"]["format"]["type"], "audio/pcmu",
+        "{v}"
+    );
+    assert_eq!(
+        v["session"]["audio"]["output"]["format"]["type"], "audio/pcmu",
+        "{v}"
+    );
     assert_eq!(v["session"]["instructions"], "be brief", "{v}");
+}
+
+/// RED-BEFORE-GREEN (the GA `/v1/realtime` socket the doors dial with no `OpenAI-Beta` header;
+/// OpenAI's beta-to-GA migration: "set `session.type`, move output audio configuration under
+/// `session.audio.output`"): the telephony lock is told in the GA `session` shape, with no
+/// pre-GA top-level key. RED: the lock was `{input_audio_format: g711_ulaw, ...}` with no
+/// `session.type`, which the GA socket does not read, so the far end read µ-law as 24 kHz PCM.
+#[test]
+fn the_telephony_lock_is_told_in_the_ga_session_shape() {
+    let mut s = Live::open(Door::Twilio, &StreamsCfg::default()).expect("a session door");
+    s.from_caller(
+        &json(
+            serde_json::json!({"event":"start","start":{"streamSid":"MZ1","callSid":"CA1",
+            "mediaFormat":{"encoding":"audio/x-mulaw","sampleRate":8000,"channels":1}}}),
+        ),
+        false,
+    );
+    let Some((Side::FarEnd, frame)) = s.next(true).frame else {
+        panic!("the locked session goes to the far end");
+    };
+    let v: serde_json::Value = serde_json::from_slice(&frame).expect("json");
+    let session = v["session"].as_object().expect("a session object");
+    for beta in [
+        "input_audio_format",
+        "output_audio_format",
+        "turn_detection",
+        "modalities",
+        "voice",
+    ] {
+        assert!(!session.contains_key(beta), "no pre-GA `{beta}`: {v}");
+    }
+    assert_eq!(v["session"]["type"], "realtime", "{v}");
+    assert_eq!(
+        v["session"]["audio"]["input"]["turn_detection"]["type"], "server_vad",
+        "the section's turn detection, under audio.input: {v}"
+    );
 }
 
 /// The class index of tool calls, in the tail's order.
@@ -421,4 +464,63 @@ fn a_turns_close_moves_its_running_counts_and_the_total_never_falls() {
     );
     s.from_caller(&uplink(200), false);
     assert!(s.units().contains(&(seconds(), 3)), "{:?}", s.units());
+}
+
+/// RED-BEFORE-GREEN (`streams.max_output_tokens` and `streams.context_window_tokens`, the section's
+/// two token ceilings): each is stated to the far end in the dialect's own key when the session is
+/// locked, the output cap lowered to the session's own where that is lower. RED: both keys were
+/// parsed, defaulted and never read, so an operator's cap was no cap.
+#[test]
+fn the_sections_token_ceilings_reach_the_far_end() {
+    let cfg = StreamsCfg {
+        max_output_tokens: 1000,
+        context_window_tokens: 16_384,
+        ..StreamsCfg::default()
+    };
+    let mut s = Live::open(Door::Twilio, &cfg).expect("a session door");
+    s.from_caller(
+        &json(
+            serde_json::json!({"event":"start","start":{"streamSid":"MZ1","callSid":"CA1",
+            "mediaFormat":{"encoding":"audio/x-mulaw","sampleRate":8000,"channels":1}}}),
+        ),
+        false,
+    );
+    let Some((Side::FarEnd, frame)) = s.next(true).frame else {
+        panic!("the locked session goes to the far end");
+    };
+    let v: serde_json::Value = serde_json::from_slice(&frame).expect("json");
+    assert_eq!(v["session"]["max_output_tokens"], 1000, "{v}");
+    assert_eq!(v["session"]["truncation"]["type"], "retention_ratio", "{v}");
+    assert_eq!(
+        v["session"]["truncation"]["token_limits"]["post_instructions"],
+        16_384 - 1000,
+        "the context left once the response's own output is room: {v}"
+    );
+
+    let lower = StreamsCfg {
+        session: crate::codec::ir::config::SessionConfig {
+            max_output_tokens: Some(crate::codec::ir::config::MaxOutputTokens::Limit(200)),
+            ..cfg.session.clone()
+        },
+        ..cfg.clone()
+    };
+    let mut g = Live::open(Door::Gemini, &lower).expect("a session door");
+    g.from_caller(
+        &json(serde_json::json!({"setup":{"model":"models/gemini-live",
+            "generationConfig":{"temperature":0.3}}})),
+        false,
+    );
+    let Some((Side::FarEnd, frame)) = g.next(true).frame else {
+        panic!("the caller's setup goes to the far end");
+    };
+    let v: serde_json::Value = serde_json::from_slice(&frame).expect("json");
+    assert_eq!(
+        v["setup"]["generationConfig"]["maxOutputTokens"], 200,
+        "the session's own lower cap stands: {v}"
+    );
+    assert_eq!(v["setup"]["generationConfig"]["temperature"], 0.3, "{v}");
+    assert_eq!(
+        v["setup"]["contextWindowCompression"]["triggerTokens"], 16_384,
+        "{v}"
+    );
 }

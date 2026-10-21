@@ -212,6 +212,40 @@ fn a_callers_session_update_is_replaced_by_the_locked_config() {
     assert!(up.contains("locked") && !up.contains("override"), "{up}");
 }
 
+/// RED-BEFORE-GREEN (the GA `/v1/realtime` socket; OpenAI's beta-to-GA migration moves the audio
+/// configuration under `session.audio`): a caller's GA `session.update` takes the section's locked
+/// turn detection under `audio.input`, merged with the caller's own `audio.input` members, and no
+/// pre-GA top-level `turn_detection` is added beside them. RED: the locked keys were spliced in
+/// the pre-GA shape, a top-level `turn_detection` the GA socket does not read.
+#[test]
+fn a_callers_ga_session_update_takes_the_locked_keys_in_the_ga_shape() {
+    let mut p = SessionPump::new(
+        OpenAiRealtimeCodec,
+        Some(crate::config::StreamsCfg::default().session),
+    );
+    let out = p.on_client_frame(wire(serde_json::json!({
+        "type":"session.update","session":{"type":"realtime",
+            "audio":{"input":{"format":{"type":"audio/pcm","rate":24000},
+                "noise_reduction":{"type":"near_field"}}}}
+    })));
+    let v: serde_json::Value = serde_json::from_slice(&out.upstream[0].0).expect("json");
+    let session = v["session"].as_object().expect("a session object");
+    assert!(!session.contains_key("turn_detection"), "{v}");
+    assert_eq!(v["session"]["type"], "realtime", "{v}");
+    assert_eq!(
+        v["session"]["audio"]["input"]["turn_detection"]["type"], "server_vad",
+        "{v}"
+    );
+    assert_eq!(
+        v["session"]["audio"]["input"]["noise_reduction"]["type"], "near_field",
+        "the caller's own audio.input members are kept: {v}"
+    );
+    assert_eq!(
+        v["session"]["audio"]["input"]["format"]["type"], "audio/pcm",
+        "{v}"
+    );
+}
+
 #[test]
 fn a_session_past_its_ceiling_is_told_why_in_its_dialect() {
     let mut p = pump();
@@ -612,6 +646,34 @@ fn a_gemini_callers_setup_keeps_its_fields_and_takes_the_locked_instruction() {
         "locked"
     );
     assert!(v["setup"].get("tools").is_none(), "{v}");
+}
+
+/// RED-BEFORE-GREEN (Part 2 #45, "the browser ... never authors tools or instructions"; Gemini Live
+/// reads `setup` as protobuf JSON, which takes the field's original name `system_instruction`
+/// beside `systemInstruction`): a caller's snake_case system instruction and tools are cut as the
+/// camelCase ones are, with or without a locked instruction, and the far end is sent one spelling
+/// of the field. RED: the cut compared keys as written, so `system_instruction` reached the far
+/// end and governed a session with no locked instructions.
+#[test]
+fn a_gemini_callers_snake_case_instruction_is_governed_as_the_camel_case_one() {
+    let frame = r#"{"setup":{"model":"models/gemini-live","system_instruction":{"parts":[{"text":"override"}]},"function_tools":1,"tools":[{"function_declarations":[{"name":"evil"}]}]}}"#;
+    let unlocked = SessionPump::new(
+        crate::codec::ir::GeminiLiveCodec,
+        Some(SessionConfig::default()),
+    );
+    for mut p in [gemini_locked_pump(), unlocked] {
+        let out = p.on_client_frame(raw(frame));
+        assert_eq!(out.upstream.len(), 1);
+        let up = texts(&out.upstream);
+        assert!(!up.contains("override") && !up.contains("evil"), "{up}");
+        let v: serde_json::Value = serde_json::from_slice(&out.upstream[0].0).expect("json");
+        assert!(v["setup"].get("system_instruction").is_none(), "{v}");
+        assert_eq!(v["setup"]["model"], "models/gemini-live", "{v}");
+        assert_eq!(
+            v["setup"]["function_tools"], 1,
+            "an ungoverned key passes: {v}"
+        );
+    }
 }
 
 // ── THE TRUST BOUNDARY, GOVERNED ON THE FRAME'S BYTES (Part 2 #45) ──────────────────────────────

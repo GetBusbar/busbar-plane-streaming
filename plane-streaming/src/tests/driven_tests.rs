@@ -94,7 +94,12 @@ fn the_sdp_offer_is_relayed_and_its_answer_names_the_call() {
     );
     assert_eq!(a.body, b"v=0\r\n");
 
-    let r = sdp_reply(201, Some("/v1/realtime/calls/rtc_abc"), b"v=0 answer");
+    let r = sdp_reply(
+        201,
+        Some("/v1/realtime/calls/rtc_abc"),
+        Some("application/sdp"),
+        b"v=0 answer",
+    );
     assert_eq!(r.status, 201);
     assert_eq!(r.rtc_call_id.as_deref(), Some("rtc_abc"));
     assert_eq!(
@@ -104,7 +109,53 @@ fn the_sdp_offer_is_relayed_and_its_answer_names_the_call() {
             ("location", "/v1/realtime/calls/rtc_abc".to_string()),
         ]
     );
-    assert_eq!(sdp_reply(400, None, b"no").rtc_call_id, None);
+    assert_eq!(sdp_reply(400, None, None, b"no").rtc_call_id, None);
+}
+
+/// RED-BEFORE-GREEN (the caller is answered what the far end answered): an SDP offer the far end
+/// refuses is answered with the far end's error body under the far end's own `Content-Type`, never
+/// labelled an SDP answer; a far end that states no type gets none invented. RED: every answer
+/// said `application/sdp`, so a JSON error body was handed over declared to be an SDP answer.
+#[test]
+fn a_failed_sdp_offers_error_body_keeps_the_far_ends_content_type() {
+    let error = br#"{"error":{"message":"bad offer","type":"invalid_request_error"}}"#;
+    let r = sdp_reply(400, None, Some("application/json"), error);
+    assert_eq!(r.status, 400);
+    assert_eq!(r.body, error.to_vec());
+    assert_eq!(
+        r.fields,
+        vec![("content-type", "application/json".to_string())]
+    );
+    assert!(sdp_reply(502, None, None, b"upstream down")
+        .fields
+        .is_empty());
+    assert_eq!(
+        sdp_reply(201, None, Some("text/plain"), b"v=0").fields,
+        vec![("content-type", "application/sdp".to_string())],
+        "a success is an SDP answer"
+    );
+}
+
+/// The sideband door's `{call_id}` is read off the arrival's target, and only an id made of the
+/// provider's characters is taken: it is dialled as a query value.
+#[test]
+fn a_sideband_arrival_names_its_call() {
+    assert_eq!(
+        sideband_call_id("/v1/realtime/sideband/rtc_abc123"),
+        Some("rtc_abc123")
+    );
+    assert_eq!(
+        sideband_call_id("/v1/realtime/sideband/rtc_abc?x=1"),
+        Some("rtc_abc")
+    );
+    for bad in [
+        "/v1/realtime/sideband/",
+        "/v1/realtime/sideband/rtc_a&model=x",
+        "/v1/realtime/sideband/rtc%20a",
+        "/v1/realtime/calls/rtc_abc",
+    ] {
+        assert_eq!(sideband_call_id(bad), None, "{bad}");
+    }
 }
 
 #[test]

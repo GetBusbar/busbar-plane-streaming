@@ -447,7 +447,7 @@ fn u64_at(v: &Value, key: &str) -> u64 {
 }
 
 /// The wire error code a present-but-unreadable BILLED count surfaces as on the session.
-const USAGE_UNREADABLE: &str = "usage_unreadable";
+pub(crate) const USAGE_UNREADABLE: &str = "usage_unreadable";
 
 /// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity
 /// was reported), a readable count is the count (through the crate's one seam,
@@ -836,51 +836,38 @@ impl DuplexReader for OpenAiRealtimeCodec {
 /// Extract the split token classes from a `response.done.usage` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
 /// SEPARATE classes; extraction-only, never client-translated).
 ///
-/// The per-modality breakdown (`input_token_details`/`output_token_details`) is a REFINEMENT of the
-/// stated `input_tokens`/`output_tokens` totals, never their sole source — OpenAI Realtime can state
-/// the totals while omitting the breakdown. Reading a missing breakdown as zero tokens metered a
-/// real turn at ZERO (silent under-billing, the one outcome #42 forbids outside billing being off);
-/// when the breakdown yields nothing, the stated total is billed instead, attributed to `text` (the
-/// conservative default when the split is unknown — this only changes the audio/text LABEL, never
-/// the input/output lane the billing fold sums onto, and it is an integer passthrough of the wire
-/// figure, no rate lookup or multiply, so #71's hot-path rule is untouched).
+/// The stated `input_tokens`/`output_tokens` totals are what the far end bills ("Usage statistics
+/// for the Response, this will correspond to billing", the Realtime API reference), and the
+/// per-modality breakdown (`input_token_details`/`output_token_details`) only SPLITS them. So each
+/// side bills the larger of its stated total and the sum of every entry its breakdown carries
+/// (`audio_tokens`, `text_tokens`, and on input `image_tokens`), never the audio and text entries
+/// alone: a turn that also carried image input billed its audio and text and dropped the rest.
+/// Audio bills as audio; every other token the side bills is attributed to `text` (the plane
+/// declares no image class: image tokens bill at the text rate, never at zero). This only changes
+/// the audio/text LABEL, never the input/output lane, and it is an integer passthrough of the wire
+/// figures, no rate lookup or multiply, so #71's hot-path rule is untouched.
 ///
-/// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` fallback (D26, in
-/// `gemini/mod.rs`): the same defect was fixed there and left standing here, so one session metered
-/// at zero on this dialect and correctly on the other.
+/// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` (`gemini/mod.rs`).
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
 /// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     let ind = u.get("input_token_details");
     let outd = u.get("output_token_details");
-    let (audio_in, text_in) = {
-        let (a, t) = (
-            billed_count(ind, "audio_tokens")?,
-            billed_count(ind, "text_tokens")?,
-        );
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "input_tokens")?)
-        } else {
-            (a, t)
-        }
-    };
-    let (audio_out, text_out) = {
-        let (a, t) = (
-            billed_count(outd, "audio_tokens")?,
-            billed_count(outd, "text_tokens")?,
-        );
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "output_tokens")?)
-        } else {
-            (a, t)
-        }
-    };
+    let audio_in = billed_count(ind, "audio_tokens")?;
+    let input = billed_count(Some(u), "input_tokens")?.max(
+        audio_in
+            .saturating_add(billed_count(ind, "text_tokens")?)
+            .saturating_add(billed_count(ind, "image_tokens")?),
+    );
+    let audio_out = billed_count(outd, "audio_tokens")?;
+    let output = billed_count(Some(u), "output_tokens")?
+        .max(audio_out.saturating_add(billed_count(outd, "text_tokens")?));
     Ok(IrDuplexUsage {
         audio_in,
         audio_out,
-        text_in,
-        text_out,
+        text_in: input - audio_in,
+        text_out: output - audio_out,
         cached: billed_count(ind, "cached_tokens")?,
     })
 }

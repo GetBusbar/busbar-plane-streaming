@@ -1,10 +1,11 @@
-//! The claims this plane makes over arriving bytes, and the four dialects they name.
+//! The transports the door's routes are carried on ([`WS_TRANSPORT`], [`HTTP_TRANSPORT`]), and the
+//! claim table the crate's tests read through the plane's test-only meta declaration.
 //!
-//! `docs/design/BUSBAR-1.6.0.md`'s protocol-inventory table (the row keyed `voice`) names the
-//! dialect roster this plane speaks and the transports it claims them on:
-//!
-//! `openai-realtime, gemini-live, twilio-media-streams, one-shot transcribe/tts` over
-//! `ws, webrtc, twilio-media, http`.
+//! WHAT THE SHIPPED PLANE PUBLISHES IS ITS DOOR'S FIVE ROUTES (`crate::door::ROUTES`: the secret
+//! mint, the SDP offer, the sideband socket, the Gemini Live socket and the telephony socket), with
+//! the dialects its Statement tail names. The table below ([`DIALECT_CLAIMS`]) is not published:
+//! no door claims it, and its two one-shot operations (`/v1/audio/*`) are served by no door. It is
+//! kept as the tests' fixture of a claim-shaped declaration over the plane's dialects.
 //!
 //! Two carriers bring those dialects in: the WebSocket carrier (both duplex JSON dialects AND the
 //! Twilio telephony dialect) and the request/response carrier (the two one-shot operations). The
@@ -72,13 +73,15 @@ pub enum Dialect {
 }
 
 impl Dialect {
-    /// The dialect's own name, as recorded in facts and answered by the `dialects` admin verb.
+    /// The dialect's own name: the spelling the door's Statement tail names it by
+    /// (`crate::door::DIALECTS_BY_NAME`), one spelling for every dialect.
+    #[cfg(test)]
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Dialect::OpenaiRealtime => "openai-realtime",
-            Dialect::GeminiLive => "gemini-live",
-            Dialect::TwilioMediaStreams => "twilio-media-streams",
+            Dialect::OpenaiRealtime => crate::provider::OPENAI_REALTIME,
+            Dialect::GeminiLive => crate::provider::GEMINI_LIVE,
+            Dialect::TwilioMediaStreams => crate::provider::TWILIO_MEDIA_STREAMS,
             Dialect::OneShotTranscribe => "transcribe",
             Dialect::OneShotTts => "tts",
         }

@@ -131,6 +131,7 @@ pub fn minted_answer(minted: &Minted) -> Vec<u8> {
 
 /// The provider's call id in an SDP answer's `Location`: the last path segment starting `rtc_`, less
 /// any query or fragment.
+#[cfg(test)]
 #[must_use]
 pub fn rtc_call_id_of(location: &str) -> Option<String> {
     location

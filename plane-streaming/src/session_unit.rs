@@ -21,6 +21,7 @@ use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
 use crate::meta;
 use crate::session::{class_counts, TurnCounters};
 use crate::session_pump::{SessionPump, TurnSink};
+#[cfg(test)]
 use crate::session_row::VoiceSessionRow;
 use crate::splice::LockedKeys;
 
@@ -73,14 +74,21 @@ pub const FRAMES_ARE_TEXT: bool = true;
 #[derive(Debug)]
 pub struct SessionUnit<C> {
     pump: SessionPump<C>,
-    /// The session's record: opened, its turn cursor, its provider call id, its end.
+    /// The session's record as the crate's tests read it: opened, its turn cursor, its provider
+    /// call id, its end. The door writes no session record: the kernel writes the session's one
+    /// line at its end.
+    #[cfg(test)]
     row: VoiceSessionRow,
-    /// Record writes not yet handed to the kernel, oldest first.
+    /// The record writes the tests take, oldest first.
+    #[cfg(test)]
     writes: Vec<VoiceSessionRow>,
     units: CumulativeUnits,
     twilio: Option<TwilioBridge>,
     /// The far end has been sent the locked session the telephony carrier's start called for.
     locked_told: bool,
+    /// The far end reported usage the reader could not read, and the session ended on it; not yet
+    /// reported to the kernel.
+    unmetered: bool,
     /// The open's clock and ceiling, read by [`Self::tick`] (the crate's tests' clock: the door's
     /// sessions are bounded by the host's measure, `close_at_ceiling`).
     #[cfg(test)]
@@ -95,9 +103,7 @@ where
     C: DuplexReader + DuplexWriter + LockedKeys,
 {
     /// A session over `codec`, locked to `locked`, opened at `now_ns`, bounded by `ceiling_secs`.
-    /// `telephony` puts the telephony carrier's envelope on the caller's side. `id` names the
-    /// session and `owner` is the caller's reference (never the principal); the session's record is
-    /// written at open.
+    /// `telephony` puts the telephony carrier's envelope on the caller's side.
     pub fn open(
         codec: C,
         locked: SessionConfig,
@@ -108,7 +114,8 @@ where
         Self::open_as(codec, locked, telephony, now_ns, ceiling_secs, "", "")
     }
 
-    /// [`Self::open`], naming the session `id` for `owner`.
+    /// [`Self::open`], naming the session `id` for `owner` (the caller's reference, never the
+    /// principal) on the record the crate's tests read.
     pub fn open_as(
         codec: C,
         locked: SessionConfig,
@@ -121,7 +128,8 @@ where
         // A shipped session's ceiling is the host's to measure (`close_at_ceiling`); only the
         // tests' own clock (`tick`) reads it here.
         #[cfg(not(test))]
-        let _ = ceiling_secs;
+        let _ = (now_ns, ceiling_secs, id, owner);
+        #[cfg(test)]
         let row = VoiceSessionRow {
             id: id.to_string(),
             owner: owner.to_string(),
@@ -131,12 +139,15 @@ where
             rtc_call_id: None,
         };
         SessionUnit {
+            #[cfg(test)]
             writes: vec![row.clone()],
+            #[cfg(test)]
             row,
             pump: SessionPump::new(codec, Some(locked)),
             units: CumulativeUnits::default(),
             twilio: telephony.then(TwilioBridge::default),
             locked_told: false,
+            unmetered: false,
             #[cfg(test)]
             opened_ns: now_ns,
             #[cfg(test)]
@@ -230,6 +241,11 @@ where
 
     /// A piece from the far end, at `now_ms`. A tool call in it is relayed to the caller as-is: the
     /// caller runs the tool (Law 11).
+    ///
+    /// A usage report the reader cannot read (a billed count present but not a count) is REFUSED:
+    /// the turn's tokens cannot be metered, so the session is not served on unmetered. The far end's
+    /// frame still reaches the caller, the caller is told why in its dialect, and the session ends;
+    /// [`Self::take_unmetered`] reports it to the kernel once.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) -> Plan {
         if self.ended {
@@ -240,11 +256,26 @@ where
             now_ms,
             &mut self.units,
         );
+        let mut to_caller = self.caller_frames(out.downlink);
+        if out.usage_unreadable {
+            self.unmetered = true;
+            let told = self.pump.unmetered_error();
+            to_caller.extend(self.caller_frames(told.into_iter().collect()));
+            let mut plan = self.end();
+            plan.to_caller = to_caller;
+            return plan;
+        }
         Plan {
             to_far_end: out.upstream.into_iter().map(|w| w.0.to_vec()).collect(),
-            to_caller: self.caller_frames(out.downlink),
+            to_caller,
             end: false,
         }
+    }
+
+    /// Whether the session ended on a usage report it could not read and the kernel has not been
+    /// told; telling clears it, so it is reported once.
+    pub fn take_unmetered(&mut self) -> bool {
+        std::mem::take(&mut self.unmetered)
     }
 
     /// The clock, at `now_ns`: a session past its ceiling is told why and ends.
@@ -274,13 +305,16 @@ where
         plan
     }
 
-    /// The session ends: its open turn settles once, and the session's record is written terminal.
+    /// The session ends: its open turn settles once (and the tests' record is written terminal).
     pub fn end(&mut self) -> Plan {
         if !self.ended {
             self.ended = true;
             self.pump.settle_open_turn(&mut self.units);
-            self.row.terminal = true;
-            self.writes.push(self.row.clone());
+            #[cfg(test)]
+            {
+                self.row.terminal = true;
+                self.writes.push(self.row.clone());
+            }
         }
         Plan {
             end: true,

@@ -91,7 +91,12 @@
       ],
       "answer": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
       "answer_out": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
-      "units": []
+      "units": [
+        [
+          6,
+          1
+        ]
+      ]
     },
     "narrow": {
       "unit": 9,
@@ -110,6 +115,16 @@
         "stream": 20,
         "reply_cap": 262144,
         "steps": [
+          {
+            "label": "arrive",
+            "arrive": {
+              "method": "GET",
+              "target": "/v1/realtime/sideband/rtc_conf0020"
+            },
+            "want": {
+              "outcome": "Ready"
+            }
+          },
           {
             "label": "caller audio",
             "piece": {

@@ -34,6 +34,11 @@ pub struct Rule {
     /// The locked members put in, each over the caller's own (an object over an object is merged
     /// member by member).
     pub set: Map<String, Value>,
+    /// The far end reads the object as protobuf JSON, which takes a field under its original
+    /// snake_case name as well as its lowerCamelCase JSON name (`system_instruction` is
+    /// `systemInstruction`): every key is compared under the lowerCamelCase name, so each spelling
+    /// of a governed field is governed.
+    pub proto_names: bool,
 }
 
 /// THE DIALECT'S GOVERNED KEYS: which caller frames a session's lock splices, and how. Every rule
@@ -47,6 +52,10 @@ pub trait LockedKeys {
     /// The rule for the object that asks for one response under its own settings; `None` for a
     /// dialect with no such object.
     fn response_rule(&self) -> Option<Rule>;
+    /// The frame that tells the far end the session is locked to `locked`, in the shape its
+    /// socket reads, for a caller-side envelope that configures nothing itself (the telephony
+    /// carrier); `None` for a dialect whose writer frames it.
+    fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>>;
     /// Whether `frame` carries an item the caller may never author: a conversation item, or a
     /// per-response input item, in a role that instructs the model (`system`, `developer`). Such a
     /// frame goes nowhere. A frame whose bytes cannot be read here is answered `true`.
@@ -67,14 +76,15 @@ const LIVE_CUT: &[&str] = &["systemInstruction", "tools"];
 const INSTRUCTING_ROLES: &[&str] = &["system", "developer"];
 
 impl LockedKeys for OpenAiRealtimeCodec {
+    /// The locked keys in the GA `session` shape the GA socket reads
+    /// ([`SessionConfig::ga_session`]): a caller's GA members are merged with them member by
+    /// member (`audio.input`, `audio.output`).
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
         Rule {
             at: "session",
             cut: REALTIME_CUT,
-            set: match serde_json::to_value(locked) {
-                Ok(Value::Object(m)) => m,
-                _ => Map::new(),
-            },
+            set: locked.ga_session(),
+            proto_names: false,
         }
     }
 
@@ -83,7 +93,17 @@ impl LockedKeys for OpenAiRealtimeCodec {
             at: "response",
             cut: REALTIME_CUT,
             set: Map::new(),
+            proto_names: false,
         })
+    }
+
+    /// A GA `session.update` carrying the locked session ([`SessionConfig::ga_session`]).
+    fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "session.update",
+            "session": Value::Object(locked.ga_session()),
+        }))
+        .ok()
     }
 
     /// `conversation.item.create`'s `item`, and `response.create`'s `response.input` items, read
@@ -281,10 +301,15 @@ impl LockedKeys for GeminiLiveCodec {
             at: "setup",
             cut: LIVE_CUT,
             set: setup_locked(locked),
+            proto_names: true,
         }
     }
 
     fn response_rule(&self) -> Option<Rule> {
+        None
+    }
+
+    fn locked_frame(&self, _locked: &SessionConfig) -> Option<Vec<u8>> {
         None
     }
 
@@ -315,7 +340,7 @@ pub fn splice(frame: &[u8], rule: &Rule) -> Option<Vec<u8>> {
         if frame.get(m.value.0) != Some(&b'{') {
             continue;
         }
-        let edited = object(frame, m.value.0, rule.cut, &rule.set)?;
+        let edited = object(frame, m.value.0, rule.cut, &rule.set, rule.proto_names)?;
         out.extend_from_slice(&frame[at..m.value.0]);
         out.extend_from_slice(&edited);
         at = m.value.1;
@@ -331,9 +356,37 @@ struct JsonMember {
     value: (usize, usize),
 }
 
+/// `key` as a protobuf JSON reader resolves it when `proto` (its lowerCamelCase JSON name: an
+/// underscore is dropped and the letter after it raised), else as written.
+fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
+    if !proto || !key.contains('_') {
+        return std::borrow::Cow::Borrowed(key);
+    }
+    let mut out = String::with_capacity(key.len());
+    let mut raise = false;
+    for c in key.chars() {
+        if c == '_' {
+            raise = true;
+        } else if raise {
+            out.extend(c.to_uppercase());
+            raise = false;
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 /// The object at `b[open]`, rebuilt: the caller's members not cut and not set, in order and byte
-/// for byte, then each `set` member (merged into the caller's when both are objects).
-fn object(b: &[u8], open: usize, cut: &[&str], set: &Map<String, Value>) -> Option<Vec<u8>> {
+/// for byte, then each `set` member (merged into the caller's when both are objects). Keys are
+/// compared under [`field_name`].
+fn object(
+    b: &[u8],
+    open: usize,
+    cut: &[&str],
+    set: &Map<String, Value>,
+    proto: bool,
+) -> Option<Vec<u8>> {
     let (members, _) = members(b, open)?;
     let mut out = vec![b'{'];
     let mut first = true;
@@ -343,7 +396,8 @@ fn object(b: &[u8], open: usize, cut: &[&str], set: &Map<String, Value>) -> Opti
         }
     };
     for m in &members {
-        if cut.contains(&m.key.as_str()) || set.contains_key(&m.key) {
+        let name = field_name(&m.key, proto);
+        if cut.contains(&&*name) || set.contains_key(&*name) {
             continue;
         }
         sep(&mut out);
@@ -356,10 +410,10 @@ fn object(b: &[u8], open: usize, cut: &[&str], set: &Map<String, Value>) -> Opti
         let theirs = members
             .iter()
             .rev()
-            .find(|m| &m.key == key && b.get(m.value.0) == Some(&b'{'));
+            .find(|m| field_name(&m.key, proto) == key.as_str() && b.get(m.value.0) == Some(&b'{'));
         match (value, theirs) {
             (Value::Object(locked), Some(m)) => {
-                out.extend_from_slice(&object(b, m.value.0, &[], locked)?);
+                out.extend_from_slice(&object(b, m.value.0, &[], locked, proto)?);
             }
             _ => out.extend_from_slice(&serde_json::to_vec(value).ok()?),
         }
