@@ -72,22 +72,6 @@ pub enum Dialect {
     OneShotTts,
 }
 
-impl Dialect {
-    /// The dialect's own name: the spelling the door's Statement tail names it by
-    /// (`crate::door::DIALECTS_BY_NAME`), one spelling for every dialect.
-    #[cfg(test)]
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Dialect::OpenaiRealtime => crate::provider::OPENAI_REALTIME,
-            Dialect::GeminiLive => crate::provider::GEMINI_LIVE,
-            Dialect::TwilioMediaStreams => crate::provider::TWILIO_MEDIA_STREAMS,
-            Dialect::OneShotTranscribe => "transcribe",
-            Dialect::OneShotTts => "tts",
-        }
-    }
-}
-
 /// One claim with the dialect it names recorded beside it, the same pairing
 /// `busbar_plane_llm::claims::LadderClaim` uses for its ladder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
