@@ -1206,11 +1206,7 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         Answer::ToCaller(reply) if (200..300).contains(&reply.status) => reply.rtc_call_id.clone(),
         _ => None,
     };
-    let caller = input
-        .caller_ref()
-        .as_str()
-        .ok()
-        .filter(|r| !r.is_empty());
+    let caller = input.caller_ref().as_str().ok().filter(|r| !r.is_empty());
     if let (Some(call), Some(caller)) = (brokered, caller) {
         let mut calls = lock(&p.brokered);
         while calls.len() >= MAX_BROKERED_CALLS {
