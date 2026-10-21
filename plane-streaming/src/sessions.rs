@@ -10,7 +10,7 @@ use crate::codec::ir::codec::OpenAiRealtimeCodec;
 use crate::codec::ir::config::SessionConfig;
 use crate::driven::Door;
 use crate::session_params::g711_config;
-use crate::session_unit::{CumulativeUnits, Plan, SessionUnit};
+use crate::session_unit::{Plan, SessionUnit};
 
 /// One live session, over the codec its door speaks.
 #[derive(Debug)]
@@ -69,27 +69,11 @@ pub fn open(
 
 impl Session {
     /// A piece from the caller.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8]) -> Plan {
         match self {
             Session::Realtime(s) => s.from_caller(bytes),
             Session::Gemini(s) => s.from_caller(bytes),
-        }
-    }
-
-    /// A piece from the far end, at `now_ms`.
-    pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) -> Plan {
-        match self {
-            Session::Realtime(s) => s.from_far_end(bytes, now_ms),
-            Session::Gemini(s) => s.from_far_end(bytes, now_ms),
-        }
-    }
-
-    /// The session's cumulative units.
-    #[must_use]
-    pub fn units(&self) -> CumulativeUnits {
-        match self {
-            Session::Realtime(s) => s.units(),
-            Session::Gemini(s) => s.units(),
         }
     }
 }

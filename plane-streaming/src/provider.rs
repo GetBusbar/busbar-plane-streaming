@@ -17,6 +17,7 @@ pub const GEMINI_LIVE: &str = "gemini_live";
 /// dialect's realtime endpoint answers on. Carries no credential: the dialect's
 /// [`credential_placement`] says where the host presents one, and the host adds it to the upgrade
 /// request only, so this plane never holds or formats the secret.
+#[cfg(test)]
 #[must_use]
 pub fn provider_ws_url(base_url: &str, dialect: &str) -> String {
     let ws = base_url
@@ -32,6 +33,7 @@ pub fn provider_ws_url(base_url: &str, dialect: &str) -> String {
 
 /// Where a dialect's provider dial presents its credential — declared here as data, applied by the
 /// host to the upgrade request.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialPlacement {
     /// A query parameter with this name on the request target.
@@ -48,6 +50,7 @@ pub enum CredentialPlacement {
 /// THE DIALECT'S NATIVE CREDENTIAL SCHEME on its realtime socket: Gemini Live takes the documented
 /// `?key=` query parameter (the bytes on the wire are the ones this plane has always sent); OpenAI
 /// Realtime takes `Authorization: Bearer`.
+#[cfg(test)]
 #[must_use]
 pub fn credential_placement(dialect: &str) -> CredentialPlacement {
     if dialect == GEMINI_LIVE {

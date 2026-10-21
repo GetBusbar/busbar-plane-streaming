@@ -98,6 +98,7 @@ pub const ADMIN_NOUN: &str = "streaming-session";
 pub const AUDIT_KIND: &str = "streaming_session";
 /// The one value a key's `session` grant names to open a live session here: the pool every session
 /// is served on.
+#[cfg(test)]
 pub const SESSION_POOL: &str = "streaming-server";
 /// The section the plane reads but does not own: the upstream destinations (core's grammar, as the
 /// llm door consumes it).
@@ -378,6 +379,7 @@ impl Route {
     }
 
     /// `true` for an exact path, `false` for a pattern.
+    #[cfg(test)]
     #[must_use]
     pub const fn exact(&self) -> bool {
         let b = self.target.as_bytes();
@@ -530,18 +532,6 @@ impl Generation {
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation
-    }
-
-    /// The audience a caller's token must carry; empty = no receiving side.
-    #[must_use]
-    pub fn audience(&self) -> &str {
-        &self.audience
-    }
-
-    /// The metadata URL a refused caller is pointed at; empty = no receiving side.
-    #[must_use]
-    pub fn resource_metadata(&self) -> &str {
-        &self.resource_metadata
     }
 
     /// Its snapshot as the plane publishes it: every door claimed and the audience and metadata

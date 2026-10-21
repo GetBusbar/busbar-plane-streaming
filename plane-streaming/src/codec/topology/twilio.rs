@@ -61,6 +61,7 @@ pub enum TwilioError {
     },
     /// The connection presented a `streamSid` that does not match the one bound at admission — a forged
     /// or replayed connection, refused before any byte is admitted.
+    #[cfg(test)]
     Forged {
         /// The `streamSid` bound to this call at admission.
         expected: String,
@@ -83,6 +84,7 @@ impl std::fmt::Display for TwilioError {
                 f,
                 "Twilio media format refused: {encoding} {sample_rate}Hz {channels}ch is not g711_ulaw/8000Hz/mono"
             ),
+            #[cfg(test)]
             TwilioError::Forged { expected, actual } => {
                 write!(f, "Twilio streamSid mismatch: expected {expected}, got {actual}")
             }
@@ -368,12 +370,14 @@ pub fn assert_g711_ulaw(fmt: &MediaFormat) -> Result<(), TwilioError> {
 /// embedded in the `<Stream>` URL; `stream_sid` is the value Twilio declares at `start` and repeats on
 /// every later frame. The proxy/session engine do not authenticate the caller — this guard does, so a
 /// replayed or forged WS connection cannot inject audio into a call it does not own.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdmissionGuard {
     call_id: String,
     stream_sid: String,
 }
 
+#[cfg(test)]
 impl AdmissionGuard {
     /// Bind the guard from the webhook-minted `call_id` and the `stream_sid` the `start` event
     /// declared. The route calls this once, after [`assert_g711_ulaw`] clears the `start` format.
@@ -414,6 +418,7 @@ impl AdmissionGuard {
 /// Build the `wss://…/twilio/{call_id}` URL Twilio dials, from a WS base and the webhook-minted
 /// `call_id`. Kept next to the TwiML renderer so the URL the webhook advertises and the route the WS
 /// accepts are derived the one way.
+#[cfg(test)]
 #[must_use]
 pub fn stream_url(ws_base: &str, call_id: &str) -> String {
     format!("{}/twilio/{}", ws_base.trim_end_matches('/'), call_id)
@@ -421,6 +426,7 @@ pub fn stream_url(ws_base: &str, call_id: &str) -> String {
 
 /// Render the inbound-webhook TwiML that tells Twilio to open a Media Streams WS to `ws_url`. Pure: it
 /// carries no audio and no provider secret, exactly one variable (the URL, XML-escaped).
+#[cfg(test)]
 #[must_use]
 pub fn render_connect_stream(ws_url: &str) -> String {
     format!(
@@ -431,11 +437,13 @@ pub fn render_connect_stream(ws_url: &str) -> String {
 
 /// Render the webhook TwiML directly from a WS base and the minted `call_id` — the composition the
 /// webhook handler uses.
+#[cfg(test)]
 #[must_use]
 pub fn render_twiml_for_call(ws_base: &str, call_id: &str) -> String {
     render_connect_stream(&stream_url(ws_base, call_id))
 }
 
+#[cfg(test)]
 fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -485,6 +493,7 @@ impl TwilioBridge {
     /// is a frame that is not Twilio's shape or carries a payload that is not clean base64 (data
     /// resuming after padding is never billed as a longer payload). An event this reader does not
     /// model is dropped.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, frame: &[u8]) -> CallerStep {
         match TwilioEnvelope::decode(frame) {
             Ok(TwilioEvent::Start(start)) => {

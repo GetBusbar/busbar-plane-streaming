@@ -66,6 +66,7 @@ pub struct Plan {
 }
 
 /// Every frame a session emits is one text message: the door sets the text bit on each.
+#[cfg(test)]
 pub const FRAMES_ARE_TEXT: bool = true;
 
 /// ONE LIVE SESSION over the far end's codec `C`.
@@ -80,7 +81,11 @@ pub struct SessionUnit<C> {
     twilio: Option<TwilioBridge>,
     /// The far end has been sent the locked session the telephony carrier's start called for.
     locked_told: bool,
+    /// The open's clock and ceiling, read by [`Self::tick`] (the crate's tests' clock: the door's
+    /// sessions are bounded by the host's measure, `close_at_ceiling`).
+    #[cfg(test)]
     opened_ns: u64,
+    #[cfg(test)]
     ceiling_secs: Option<u64>,
     ended: bool,
 }
@@ -113,6 +118,10 @@ where
         id: &str,
         owner: &str,
     ) -> Self {
+        // A shipped session's ceiling is the host's to measure (`close_at_ceiling`); only the
+        // tests' own clock (`tick`) reads it here.
+        #[cfg(not(test))]
+        let _ = ceiling_secs;
         let row = VoiceSessionRow {
             id: id.to_string(),
             owner: owner.to_string(),
@@ -128,7 +137,9 @@ where
             units: CumulativeUnits::default(),
             twilio: telephony.then(TwilioBridge::default),
             locked_told: false,
+            #[cfg(test)]
             opened_ns: now_ns,
+            #[cfg(test)]
             ceiling_secs,
             ended: false,
         }
@@ -150,11 +161,13 @@ where
     }
 
     /// The record writes not yet handed to the kernel, oldest first; taking them clears them.
+    #[cfg(test)]
     pub fn take_writes(&mut self) -> Vec<VoiceSessionRow> {
         std::mem::take(&mut self.writes)
     }
 
     /// The provider named the session's call: it goes on the session's record.
+    #[cfg(test)]
     pub fn set_rtc_call_id(&mut self, rtc_call_id: &str, now_s: u64) {
         self.row.rtc_call_id = Some(rtc_call_id.to_string());
         self.row.updated_at = now_s;
@@ -162,6 +175,7 @@ where
     }
 
     /// `true` once the session has ended.
+    #[cfg(test)]
     #[must_use]
     pub fn ended(&self) -> bool {
         self.ended
@@ -180,6 +194,7 @@ where
     /// A piece from the caller. Behind the telephony carrier's envelope, the carrier's start is
     /// translated into the locked session the far end is told before any audio (the carrier
     /// configures nothing itself: µ-law both ways over the operator's session).
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8]) -> Plan {
         if self.ended {
             return Plan::default();
@@ -215,6 +230,7 @@ where
 
     /// A piece from the far end, at `now_ms`. A tool call in it is relayed to the caller as-is: the
     /// caller runs the tool (Law 11).
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) -> Plan {
         if self.ended {
             return Plan::default();
@@ -232,6 +248,7 @@ where
     }
 
     /// The clock, at `now_ns`: a session past its ceiling is told why and ends.
+    #[cfg(test)]
     pub fn tick(&mut self, now_ns: u64, _now_ms: u64) -> Plan {
         if self.ended {
             return Plan::default();

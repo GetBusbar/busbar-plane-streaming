@@ -128,6 +128,7 @@ impl Live {
     /// The session a stream's first piece on `door` opens, under `cfg`; `None` for a door that
     /// answers one request. The telephony door locks the carrier's µ-law on both legs; the other
     /// doors lock the section's session.
+    #[cfg(test)]
     #[must_use]
     pub fn open(door: Door, cfg: &StreamsCfg) -> Option<Live> {
         Self::open_locked(door, cfg, None)
@@ -197,6 +198,7 @@ impl Live {
     }
 
     /// A caller piece; `last` = the caller's side ended.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8], last: bool) {
         let plan = each!(&mut self.unit, |u| {
             let mut plan = if bytes.is_empty() {
@@ -214,6 +216,7 @@ impl Live {
     }
 
     /// A far-end piece, at `now_ms`. The first one incurs the session's fee unit.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) {
         self.answered = true;
         let plan = each!(&mut self.unit, |u| u.from_far_end(bytes, now_ms));
@@ -406,6 +409,7 @@ impl Sessions {
     }
 
     /// How many streams' sessions owe an answer of their own.
+    #[cfg(test)]
     #[must_use]
     pub fn ready_count(&self) -> usize {
         self.live.values().filter(|l| l.ready()).count()
@@ -419,15 +423,10 @@ impl Sessions {
     }
 
     /// How many sessions are live.
+    #[cfg(test)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.live.len()
-    }
-
-    /// Whether none is.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.live.is_empty()
     }
 }
 

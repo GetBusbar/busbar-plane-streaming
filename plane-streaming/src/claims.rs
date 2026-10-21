@@ -22,7 +22,10 @@
 //!   reads). It is unclaimed: a claim is declared independently, and the boot's own overlap check
 //!   is what proves the claims stay disjoint when it is added.
 
-use busbar_contract::grammar::{one_level_under, Claim, Selector};
+use busbar_contract::grammar::{Claim, Selector};
+
+#[cfg(test)]
+use busbar_contract::grammar::one_level_under;
 
 /// The transport the three WebSocket dialects (`openai-realtime`, `gemini-live`,
 /// `twilio-media-streams`) are claimed against.
@@ -79,27 +82,6 @@ impl Dialect {
             Dialect::OneShotTranscribe => "transcribe",
             Dialect::OneShotTts => "tts",
         }
-    }
-
-    /// Whether this dialect is one of the two JSON duplex wires this plane can also DIAL an
-    /// upstream as (the codec-backed dialects, as opposed to the ingress-only Twilio and one-shot
-    /// claims).
-    #[must_use]
-    pub const fn is_duplex_upstream(self) -> bool {
-        matches!(self, Dialect::OpenaiRealtime | Dialect::GeminiLive)
-    }
-
-    /// Whether a unit on this dialect authenticates once at session open and rides the session
-    /// (`CredentialLocator::from_session`), rather than presenting a credential on every unit.
-    ///
-    /// True for the three session-bound dialects; false for the two one-shot HTTP operations, which
-    /// present a credential on the one request they are.
-    #[must_use]
-    pub const fn authenticates_from_session(self) -> bool {
-        matches!(
-            self,
-            Dialect::OpenaiRealtime | Dialect::GeminiLive | Dialect::TwilioMediaStreams
-        )
     }
 }
 
@@ -196,6 +178,7 @@ const _: () = assert!(CLAIMS.len() == DIALECT_CLAIMS.len());
 /// The same walk the kernel runs itself from the declared claims, exposed here so the decode step
 /// can name the dialect it is about to read without a second, differently-ordered answer existing
 /// anywhere.
+#[cfg(test)]
 #[must_use]
 pub fn dialect_for(path: &str) -> Option<Dialect> {
     DIALECT_CLAIMS
@@ -207,6 +190,7 @@ pub fn dialect_for(path: &str) -> Option<Dialect> {
 /// Whether one selector matches a request path.
 ///
 /// Only the forms this plane's claims actually use are answered.
+#[cfg(test)]
 pub(crate) fn matches_selector(s: &Selector, path: &str) -> bool {
     match s {
         Selector::PathSuffix(suffix) => path.ends_with(suffix),

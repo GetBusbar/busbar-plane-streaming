@@ -54,16 +54,6 @@ pub trait TurnSink {
     fn turn_closed(&mut self, usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> bool;
 }
 
-/// No turn sink: an ungoverned session. A closed turn attributes to nobody and never closes it.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Unmetered;
-
-impl TurnSink for Unmetered {
-    fn turn_closed(&mut self, _: Option<&IrDuplexUsage>, _: TurnCounters) -> bool {
-        true
-    }
-}
-
 /// THE SESSION PUMP over the session's codec `C`.
 #[derive(Debug)]
 pub struct SessionPump<C> {
