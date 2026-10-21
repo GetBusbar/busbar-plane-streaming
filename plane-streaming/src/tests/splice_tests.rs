@@ -135,3 +135,39 @@ fn a_response_naming_no_cap_asks_for_the_ceiling() {
     let frame = br#"{"type":"response.create","response":{"modalities":["text"]}}"#;
     assert_eq!(asked(frame, 1000), 1000);
 }
+
+/// RED-BEFORE-GREEN (lead ruling): the pre-GA spelling of the output ceiling a caller writes in its
+/// `session.update`, `max_response_output_tokens`, is held under the same ceiling as
+/// `max_output_tokens`: the lower of the caller's value and the cap, the cap for `"inf"`. A frame
+/// that does not write it is not given it; the GA `max_output_tokens` the lock sets carries the
+/// cap. RED: the beta key was neither cut nor set, so a caller's 5000 or `"inf"` reached the far
+/// end past the section's 1000.
+#[test]
+fn a_callers_pre_ga_session_output_cap_is_held_under_the_ceiling() {
+    let locked = SessionConfig {
+        max_output_tokens: Some(MaxOutputTokens::Limit(1000)),
+        ..SessionConfig::default()
+    };
+    let rule = OpenAiRealtimeCodec.configure_rule(&locked);
+    let session = |frame: &[u8]| -> Value {
+        let out = splice(frame, &rule).expect("spliced");
+        let v: Value = serde_json::from_slice(&out).expect("json");
+        v["session"].clone()
+    };
+    let above =
+        session(br#"{"type":"session.update","session":{"max_response_output_tokens":5000}}"#);
+    assert_eq!(above["max_response_output_tokens"], 1000, "{above}");
+    assert_eq!(above["max_output_tokens"], 1000, "{above}");
+    let inf =
+        session(br#"{"type":"session.update","session":{"max_response_output_tokens":"inf"}}"#);
+    assert_eq!(inf["max_response_output_tokens"], 1000, "{inf}");
+    let below =
+        session(br#"{"type":"session.update","session":{"max_response_output_tokens":200}}"#);
+    assert_eq!(below["max_response_output_tokens"], 200, "{below}");
+    let absent = session(br#"{"type":"session.update","session":{"voice":"verse"}}"#);
+    assert!(
+        absent.get("max_response_output_tokens").is_none(),
+        "{absent}"
+    );
+    assert_eq!(absent["max_output_tokens"], 1000, "{absent}");
+}

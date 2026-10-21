@@ -39,10 +39,22 @@ pub struct Rule {
     /// `systemInstruction`): every key is compared under the lowerCamelCase name, so each spelling
     /// of a governed field is governed.
     pub proto_names: bool,
-    /// A numeric member capped at the session's ceiling: `(key, cap)`. The member is written once,
-    /// as the lower of the caller's own value and `cap`, and as `cap` where the caller wrote none,
-    /// wrote one that is not a whole number (`"inf"`), or wrote one above it.
-    pub cap: Option<(&'static str, u64)>,
+    /// A numeric member capped at the session's ceiling ([`Cap`]).
+    pub cap: Option<Cap>,
+}
+
+/// A numeric member a rule caps: written once, as the lower of the caller's own value and
+/// `ceiling`, and as `ceiling` where the caller wrote one that is not a whole number (`"inf"`) or
+/// one above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cap {
+    /// The member's key.
+    pub key: &'static str,
+    /// The ceiling.
+    pub ceiling: u64,
+    /// Whether the member is written at `ceiling` where the caller wrote none; otherwise a frame
+    /// that does not name the key is left without it.
+    pub when_absent: bool,
 }
 
 /// THE DIALECT'S GOVERNED KEYS: which caller frames a session's lock splices, and how. Every rule
@@ -73,6 +85,16 @@ pub trait LockedKeys {
 
 /// The OpenAI Realtime member a response's output ceiling is written in.
 const MAX_OUTPUT_TOKENS: &str = "max_output_tokens";
+/// The pre-GA spelling of a session's per-response output ceiling, which a far end may still read.
+const MAX_RESPONSE_OUTPUT_TOKENS: &str = "max_response_output_tokens";
+
+/// The output ceiling `locked` states, as a whole number; `None` for none (or `"inf"`).
+fn output_ceiling(locked: &SessionConfig) -> Option<u64> {
+    match locked.max_output_tokens {
+        Some(MaxOutputTokens::Limit(n)) => Some(u64::from(n)),
+        _ => None,
+    }
+}
 
 /// OpenAI Realtime: `session.update`'s `session`, and `response.create`'s `response`. A stored
 /// `prompt` is instructions by reference, so it is the caller's to author no more than they are.
@@ -92,7 +114,14 @@ impl LockedKeys for OpenAiRealtimeCodec {
             cut: REALTIME_CUT,
             set: locked.ga_session(),
             proto_names: false,
-            cap: None,
+            // The GA `max_output_tokens` is set by the lock above; the pre-GA spelling a caller
+            // writes is held under the same ceiling. A frame that does not write it is not given
+            // it (the GA session object reads the GA key, which carries the ceiling).
+            cap: output_ceiling(locked).map(|ceiling| Cap {
+                key: MAX_RESPONSE_OUTPUT_TOKENS,
+                ceiling,
+                when_absent: false,
+            }),
         }
     }
 
@@ -100,16 +129,16 @@ impl LockedKeys for OpenAiRealtimeCodec {
     /// session's output ceiling ([`crate::session_door::with_ceilings`]); the response asks for
     /// the lower of the two, and for the ceiling where the caller names none.
     fn response_rule(&self, locked: &SessionConfig) -> Option<Rule> {
-        let cap = match locked.max_output_tokens {
-            Some(MaxOutputTokens::Limit(n)) => Some((MAX_OUTPUT_TOKENS, u64::from(n))),
-            _ => None,
-        };
         Some(Rule {
             at: "response",
             cut: REALTIME_CUT,
             set: Map::new(),
             proto_names: false,
-            cap,
+            cap: output_ceiling(locked).map(|ceiling| Cap {
+                key: MAX_OUTPUT_TOKENS,
+                ceiling,
+                when_absent: true,
+            }),
         })
     }
 
@@ -411,10 +440,10 @@ fn object(
     cut: &[&str],
     set: &Map<String, Value>,
     proto: bool,
-    cap: Option<(&str, u64)>,
+    cap: Option<Cap>,
 ) -> Option<Vec<u8>> {
     let (members, _) = members(b, open)?;
-    let capped = |name: &str| cap.is_some_and(|(key, _)| key == name);
+    let capped = |name: &str| cap.is_some_and(|c| c.key == name);
     let mut out = vec![b'{'];
     let mut first = true;
     let mut sep = |out: &mut Vec<u8>| {
@@ -445,18 +474,28 @@ fn object(
             _ => out.extend_from_slice(&serde_json::to_vec(value).ok()?),
         }
     }
-    if let Some((key, ceiling)) = cap {
+    if let Some(Cap {
+        key,
+        ceiling,
+        when_absent,
+    }) = cap
+    {
         // Every value the caller wrote under the key is read; one that is not a whole number
         // (`"inf"`, a fraction, a string) asks for no ceiling of its own, so the cap stands.
-        let asked = members
+        let written: Vec<&JsonMember> = members
             .iter()
             .filter(|m| field_name(&m.key, proto) == key)
-            .map(|m| serde_json::from_slice::<u64>(&b[m.value.0..m.value.1]).unwrap_or(ceiling))
-            .fold(ceiling, u64::min);
-        sep(&mut out);
-        out.extend_from_slice(&serde_json::to_vec(key).ok()?);
-        out.push(b':');
-        out.extend_from_slice(asked.to_string().as_bytes());
+            .collect();
+        if when_absent || !written.is_empty() {
+            let asked = written
+                .iter()
+                .map(|m| serde_json::from_slice::<u64>(&b[m.value.0..m.value.1]).unwrap_or(ceiling))
+                .fold(ceiling, u64::min);
+            sep(&mut out);
+            out.extend_from_slice(&serde_json::to_vec(key).ok()?);
+            out.push(b':');
+            out.extend_from_slice(asked.to_string().as_bytes());
+        }
     }
     out.push(b'}');
     Some(out)
