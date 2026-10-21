@@ -1012,14 +1012,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                 out.set(|o| &o.verb, verb);
                 out.set(|o| &o.target, path);
             }
-            out.set(
-                |o| &o.need,
-                if door == Door::Gemini {
-                    RIDES_LIVE_SOCKET
-                } else {
-                    RIDES_REALTIME_SOCKET
-                },
-            );
+            out.set(|o| &o.need, door.rides());
             // A realtime dialect's frame is a JSON text message on its socket.
             live.near
                 .owe(&frame, EMIT_TO_FAR_END | PIECE_OUT_TEXT, input, out);
@@ -1352,6 +1345,10 @@ busbar_contract::plugin_door! {
 #[cfg(test)]
 #[path = "tests/ladder_tests.rs"]
 mod ladder_tests;
+
+#[cfg(test)]
+#[path = "tests/door_tests.rs"]
+mod door_tests;
 
 const _: () = {
     // The ride constants name the needs they say they name.
