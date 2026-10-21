@@ -40,7 +40,7 @@
 //! session's unsolicited output named on the instance's driver ticket, and the session's cumulative
 //! units on every answer. A request unit on a session door is refused.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
 use crate::piece::{self, Owed};
@@ -539,22 +539,31 @@ pub const REFUSAL_NO_DOOR: u32 = 1;
 /// wait for their sessions: the instance holds as many as it admits (a 429).
 pub const REFUSAL_CALLS_FULL: u32 = 2;
 
-/// The status [`REFUSAL_CALLS_FULL`] wears.
+/// The status [`REFUSAL_CALLS_FULL`] wears, and the status an SDP offer refused at a brokered-call
+/// bound is answered with.
 pub const STATUS_CALLS_FULL: u32 = 429;
 
+/// The words an SDP offer refused at a brokered-call bound is answered with.
+pub const CALLS_FULL_TEXT: &str =
+    "busbar is holding as many realtime calls for this caller as it admits at once; retry once one has ended";
+
 /// The most request units an instance keeps state for at once; past it, a new unit is refused (a
-/// unit in flight is never dropped to make room; only a unit past its deadline that the far end
-/// never answered is, `Units::room`).
+/// unit in flight is never dropped to make room).
 pub const MAX_UNITS: usize = 4096;
 
 /// The most sideband arrivals whose call is kept until their session opens; past it, a new
-/// sideband arrival is refused ([`REFUSAL_CALLS_FULL`]): no pending call is dropped to make room,
-/// save one past its deadline whose session never opened (`Calls::pend`).
+/// sideband arrival is refused ([`REFUSAL_CALLS_FULL`]): no pending call is dropped to make room.
 pub const MAX_PENDING_CALLS: usize = 4096;
 
-/// The most calls the SDP door has brokered that an instance keeps the owner of; past it, the
-/// oldest is forgotten and a sideband to it is refused (never attached unchecked).
+/// The most live calls the SDP door has brokered that an instance keeps the owner of; at it, a new
+/// SDP offer is refused ([`STATUS_CALLS_FULL`]). No live call is dropped to make room (THE DESIGN:
+/// retention bounds only settled handles); a call leaves when it ends.
 pub const MAX_BROKERED_CALLS: usize = 4096;
+
+/// The most live brokered calls one caller (one `caller_ref`) holds at once; at it, that caller's
+/// next SDP offer is refused ([`STATUS_CALLS_FULL`]), and no other caller's is. `MAX_BROKERED_CALLS
+/// / 64`: at least 64 callers each hold their whole allowance before the instance's bound is met.
+pub const MAX_CALLS_PER_CALLER: usize = MAX_BROKERED_CALLS / 64;
 
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
 struct Held {
@@ -565,19 +574,6 @@ struct Held {
     /// An answer that did not fit its field or arena buffer: the re-call carries the same piece,
     /// which is answered from here rather than read twice.
     short: Option<Answer>,
-    /// The unit's deadline on the kernel's coarse clock, as its first piece carried it; `0` =
-    /// none.
-    deadline_ns: u64,
-    /// Whether the far end's first piece has reached the unit.
-    answered: bool,
-}
-
-impl Held {
-    /// Whether the unit is past its deadline and the far end never answered it: the kernel has
-    /// cut it, so nothing will finish it, and its room may be taken back.
-    fn stale(&self, now_ns: u64) -> bool {
-        !self.answered && self.deadline_ns != 0 && self.deadline_ns <= now_ns
-    }
 }
 
 /// The request units in flight, by the kernel's unit key, and the tickets their pieces crossed on,
@@ -589,38 +585,20 @@ struct Units {
 }
 
 impl Units {
-    /// WHETHER A NEW UNIT HAS ROOM at `now_ns` (the kernel's coarse clock): below [`MAX_UNITS`] it
-    /// has; at it, every stale unit ([`Held::stale`]: past its deadline, never answered) is
-    /// forgotten in the one pass, and a unit the far end has answered or still inside its deadline
-    /// is never dropped (THE DESIGN: admission bounds live work, nothing evicts it). A table full
-    /// of live units has no room.
-    fn room(&mut self, now_ns: u64) -> bool {
-        if self.held.len() < MAX_UNITS {
-            return true;
-        }
-        self.held.retain(|_, h| !h.stale(now_ns));
-        let held = &self.held;
-        self.tickets.retain(|_, u| held.contains_key(u));
-        self.held.len() < MAX_UNITS
+    /// Whether a new unit is refused: the table is at [`MAX_UNITS`]. No unit is dropped to make
+    /// room (THE DESIGN: admission bounds live work, nothing evicts it); a unit leaves when it ends.
+    fn full(&self) -> bool {
+        self.held.len() >= MAX_UNITS
     }
 
-    /// Hold `held` for unit `unit` at `now_ns`. Answers `false`, holding nothing, when the table has
-    /// no room ([`Units::room`]).
-    fn hold(&mut self, unit: u64, held: Held, now_ns: u64) -> bool {
-        if !self.held.contains_key(&unit) && !self.room(now_ns) {
+    /// Hold `held` for unit `unit`. Answers `false`, holding nothing, at the bound: no unit in
+    /// flight is dropped to make room.
+    fn hold(&mut self, unit: u64, held: Held) -> bool {
+        if !self.held.contains_key(&unit) && self.full() {
             return false;
         }
         self.held.insert(unit, held);
         true
-    }
-
-    /// The earliest deadline after `now_ns` at which a held unit turns stale, if any.
-    fn next_stale(&self, now_ns: u64) -> Option<u64> {
-        self.held
-            .values()
-            .filter(|h| !h.answered && h.deadline_ns > now_ns)
-            .map(|h| h.deadline_ns)
-            .min()
     }
 
     /// A piece of unit `unit` crossed on `ticket`.
@@ -651,31 +629,26 @@ impl Units {
 }
 
 /// The provider call each sideband arrival names, by the kernel's unit key, kept until the unit's
-/// session opens, or the unit ends (refused, cancelled), with the deadline its arrival carried.
+/// session opens, or the unit ends (refused, cancelled).
 #[derive(Default)]
 struct Calls {
-    pending: BTreeMap<u64, (String, u64)>,
+    pending: BTreeMap<u64, String>,
 }
 
 impl Calls {
-    /// Keep `call` for unit `unit`, whose deadline is `deadline_ns` (`0` = none), at `now_ns`.
-    /// Answers `false`, keeping nothing, when [`MAX_PENDING_CALLS`] calls wait: at the bound every
-    /// call past its deadline (its session never opened, and the kernel has cut it) is forgotten
-    /// in the one pass, and no other is dropped to make room; the arrival is refused instead.
-    fn pend(&mut self, unit: u64, call: String, deadline_ns: u64, now_ns: u64) -> bool {
+    /// Keep `call` for unit `unit`. Answers `false`, keeping nothing, when [`MAX_PENDING_CALLS`]
+    /// calls wait: no pending call is dropped to make room; the arrival is refused instead.
+    fn pend(&mut self, unit: u64, call: String) -> bool {
         if self.pending.len() >= MAX_PENDING_CALLS && !self.pending.contains_key(&unit) {
-            self.pending.retain(|_, (_, d)| *d == 0 || *d > now_ns);
-            if self.pending.len() >= MAX_PENDING_CALLS {
-                return false;
-            }
+            return false;
         }
-        self.pending.insert(unit, (call, deadline_ns));
+        self.pending.insert(unit, call);
         true
     }
 
     /// Unit `unit`'s session opens: its call, taken.
     fn take(&mut self, unit: u64) -> Option<String> {
-        self.pending.remove(&unit).map(|(call, _)| call)
+        self.pending.remove(&unit)
     }
 
     /// Unit `unit` ended before its session opened: its call is forgotten. Answers whether one
@@ -683,14 +656,61 @@ impl Calls {
     fn forget(&mut self, unit: u64) -> bool {
         self.pending.remove(&unit).is_some()
     }
+}
 
-    /// The earliest deadline after `now_ns` at which a kept call turns stale, if any.
-    fn next_stale(&self, now_ns: u64) -> Option<u64> {
-        self.pending
-            .values()
-            .map(|(_, d)| *d)
-            .filter(|d| *d > now_ns)
-            .min()
+/// THE LIVE CALLS THE SDP DOOR BROKERED, each with the caller reference of the unit whose offer
+/// created it (a sideband attaches only to its own caller's call), and how many each caller holds.
+/// A call leaves when it ends (the session attached to it closes), never to make room: at
+/// [`MAX_BROKERED_CALLS`], or at a caller's [`MAX_CALLS_PER_CALLER`], that caller's next offer is
+/// refused instead.
+#[derive(Default)]
+struct Brokered {
+    owners: HashMap<String, String>,
+    per_caller: HashMap<String, usize>,
+}
+
+impl Brokered {
+    /// Whether `caller` may broker one more call: the instance is below [`MAX_BROKERED_CALLS`] and
+    /// the caller below [`MAX_CALLS_PER_CALLER`].
+    fn admits(&self, caller: &str) -> bool {
+        self.owners.len() < MAX_BROKERED_CALLS
+            && self.per_caller.get(caller).copied().unwrap_or(0) < MAX_CALLS_PER_CALLER
+    }
+
+    /// The far end created `call` for `caller`. Recorded whatever the bounds read now: the call is
+    /// live at the far end, and offers admitted at once may each have passed [`Brokered::admits`]
+    /// (never more past the bound than the units in flight, [`MAX_UNITS`]).
+    fn record(&mut self, call: String, caller: String) {
+        if let Some(previous) = self.owners.insert(call, caller.clone()) {
+            self.release(&previous);
+        }
+        *self.per_caller.entry(caller).or_default() += 1;
+    }
+
+    /// Whether `call` is live and `caller`'s.
+    fn owns(&self, call: &str, caller: &str) -> bool {
+        self.owners.get(call).is_some_and(|owner| owner == caller)
+    }
+
+    /// `call` ended: its row is freed. Answers whether it was held.
+    fn end(&mut self, call: &str) -> bool {
+        match self.owners.remove(call) {
+            Some(owner) => {
+                self.release(&owner);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// One of `caller`'s calls left.
+    fn release(&mut self, caller: &str) {
+        if let Some(n) = self.per_caller.get_mut(caller) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.per_caller.remove(caller);
+            }
+        }
     }
 }
 
@@ -707,9 +727,9 @@ pub struct Plane {
     /// The provider call each sideband arrival names, by the kernel's unit key, until the unit's
     /// session opens or the unit ends.
     calls: Mutex<Calls>,
-    /// The calls the SDP door brokered, oldest first, each with the caller reference of the unit
-    /// whose offer created it: a sideband attaches only to its own caller's call.
-    brokered: Mutex<std::collections::VecDeque<(String, String)>>,
+    /// The live calls the SDP door brokered, by owner: a sideband attaches only to its own
+    /// caller's call.
+    brokered: Mutex<Brokered>,
     /// The live sessions, by the kernel's stream.
     sessions: Mutex<Sessions>,
     /// The host's wake, as `open` handed it; `None` = no session output can be named.
@@ -723,7 +743,7 @@ impl Plane {
     /// A unit arriving on claim `claim`, under the newest live generation's session params, naming
     /// its caller by `caller_ref`. `None` for a claim the plane never published, and for a door
     /// that opens a live session.
-    fn held(&self, claim: u32, caller_ref: Option<String>, deadline_ns: u64) -> Option<Held> {
+    fn held(&self, claim: u32, caller_ref: Option<String>) -> Option<Held> {
         let door = Door::of(claim)?;
         let generations = lock(&self.generations);
         let (cfg, _) = generations.last()?;
@@ -735,15 +755,7 @@ impl Plane {
             unit,
             owed: Owed::default(),
             short: None,
-            deadline_ns,
-            answered: false,
         })
-    }
-
-    /// The kernel's coarse clock as the instance's last `tick` read it, in nanoseconds (to the
-    /// millisecond); `0` before the first tick.
-    fn now_ns(&self) -> u64 {
-        lock(&self.driver).1.saturating_mul(1_000_000)
     }
 
     /// Unit `unit` is over (refused, or its refusal is about to be told): what the door holds for
@@ -753,14 +765,15 @@ impl Plane {
         lock(&self.calls).forget(unit);
     }
 
-    /// The earliest deadline after `now_ns` at which a held unit or a pending call turns stale: the
-    /// tick that reads the clock past it, so the room check sees it.
-    fn next_stale(&self, now_ns: u64) -> Option<u64> {
-        let units = lock(&self.units).next_stale(now_ns);
-        let calls = lock(&self.calls).next_stale(now_ns);
-        match (units, calls) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
+    /// The calls whose sessions `sessions` has closed since last asked have ended: their brokered
+    /// rows are freed.
+    fn calls_ended(&self, sessions: &mut Sessions) {
+        let ended = sessions.take_ended_calls();
+        if !ended.is_empty() {
+            let mut brokered = lock(&self.brokered);
+            for call in ended {
+                brokered.end(&call);
+            }
         }
     }
 
@@ -845,7 +858,7 @@ slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
         snapshots: Generations::new(),
         units: Mutex::new(Units::default()),
         calls: Mutex::new(Calls::default()),
-        brokered: Mutex::new(std::collections::VecDeque::new()),
+        brokered: Mutex::new(Brokered::default()),
         sessions: Mutex::new(Sessions::default()),
         wake,
         driver: Mutex::new((Ticket::NONE, 0)),
@@ -881,9 +894,7 @@ slot!(Retire, GenIn, OutHead, |instance, input, _out| {
 
 // The tick: the instance's driver ticket is noted, every live session's clock and ceiling read on
 // the tick clock, and a session that now owes its end names the driver ticket. While a live
-// generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`; while a held
-// unit or a pending call has a deadline ahead, it asks to be ticked at the earliest, so the clock
-// the room checks read has passed it.
+// generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`.
 slot!(Tick, TickIn, TickOut, |instance, input, out| {
     let given = input;
     let next = match instance.get() {
@@ -892,15 +903,10 @@ slot!(Tick, TickIn, TickOut, |instance, input, out| {
             if lock(&p.sessions).tick(given.now_ns()) {
                 p.wake_driver();
             }
-            let ceiling = if p.any_ceiling() {
+            if p.any_ceiling() {
                 given.now_ns().saturating_add(CEILING_TICK_NS)
             } else {
                 0
-            };
-            match (ceiling, p.next_stale(given.now_ns())) {
-                (0, Some(at)) => at,
-                (ceiling, Some(at)) => ceiling.min(at),
-                (ceiling, None) => ceiling,
             }
         }
         None => 0,
@@ -944,7 +950,11 @@ slot!(
         if let Some(p) = instance.get() {
             let ticket = input.cancel().ticket();
             let unit = input.unit();
-            lock(&p.sessions).cancel(ticket);
+            {
+                let mut sessions = lock(&p.sessions);
+                sessions.cancel(ticket);
+                p.calls_ended(&mut sessions);
+            }
             lock(&p.units).cancel(ticket, unit);
             if unit != 0 {
                 lock(&p.calls).forget(unit);
@@ -972,7 +982,7 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
     };
     // A sideband arrival's call is kept until its session opens. At the bound the arrival is
     // refused: no pending call is dropped to make room (THE DESIGN: admission bounds live work,
-    // nothing evicts it), save one past its deadline whose session never opened.
+    // nothing evicts it).
     if a.door == Door::Sideband {
         let call = input
             .target()
@@ -980,9 +990,7 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
             .ok()
             .and_then(crate::driven::sideband_call_id);
         if let (Some(p), Some(call)) = (instance.get(), call) {
-            let now_ns = p.now_ns();
-            let deadline_ns = input.head().deadline_ns();
-            if !lock(&p.calls).pend(input.unit(), call.to_string(), deadline_ns, now_ns) {
+            if !lock(&p.calls).pend(input.unit(), call.to_string()) {
                 out.set(|o| &o.refusal, REFUSAL_CALLS_FULL);
                 out.set(|o| &o.refusal_status, STATUS_CALLS_FULL);
                 return Outcome::Refused;
@@ -1145,10 +1153,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
             return Outcome::Refused;
         };
         let caller = input.caller_ref().as_str().unwrap_or_default();
-        let owned = !caller.is_empty()
-            && lock(&p.brokered)
-                .iter()
-                .any(|(id, owner)| *id == call && owner == caller);
+        let owned = !caller.is_empty() && lock(&p.brokered).owns(&call, caller);
         if !owned {
             return Outcome::Refused;
         }
@@ -1268,6 +1273,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     let owes = live.ready();
     if done {
         sessions.close(given.stream());
+        p.calls_ended(&mut sessions);
     } else if owes {
         drop(sessions);
         p.wake_driver();
@@ -1290,14 +1296,15 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     if given.from() == FROM_KERNEL && given.flags() & PIECE_REFUSED != 0 {
         p.end_unit(given.unit());
         if given.stream() != 0 {
-            lock(&p.sessions).close(given.stream());
+            let mut sessions = lock(&p.sessions);
+            sessions.close(given.stream());
+            p.calls_ended(&mut sessions);
         }
         return Outcome::Ready;
     }
     if given.stream() != 0 {
         return session_piece(p, input, &mut out);
     }
-    let now_ns = p.now_ns();
     let mut units = lock(&p.units);
     if piece::is_recall(input) {
         if let Some(held) = units.held.get_mut(&given.unit()) {
@@ -1310,9 +1317,8 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         }
     }
     if !units.held.contains_key(&given.unit()) {
-        // At the bound a new unit is refused: no unit in flight is dropped to make room, only a
-        // stale one ([`Units::room`]).
-        if !units.room(now_ns) {
+        // At the bound a new unit is refused: no unit in flight is dropped to make room.
+        if units.full() {
             return Outcome::Refused;
         }
         let caller_ref = input
@@ -1321,10 +1327,10 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
             .ok()
             .filter(|r| !r.is_empty())
             .map(str::to_owned);
-        let Some(held) = p.held(given.claim(), caller_ref, given.head().deadline_ns()) else {
+        let Some(held) = p.held(given.claim(), caller_ref) else {
             return Outcome::Refused;
         };
-        if !units.hold(given.unit(), held, now_ns) {
+        if !units.hold(given.unit(), held) {
             return Outcome::Refused;
         }
     }
@@ -1332,11 +1338,19 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     let Some(held) = units.held.get_mut(&given.unit()) else {
         return Outcome::Failed;
     };
-    if given.from() == FROM_FAR_END {
-        held.answered = true;
-    }
+    let caller = input.caller_ref().as_str().ok().filter(|r| !r.is_empty());
     let answer = match held.short.take() {
         Some(answer) => answer,
+        // An SDP offer's ATTEMPT, from a caller holding as many live calls as it is admitted (or
+        // on an instance holding as many as it keeps), is answered before anything is dialled:
+        // no live call is dropped to make room for it.
+        None if Door::of(given.claim()) == Some(Door::Sdp)
+            && given.from() == FROM_KERNEL
+            && given.attempt_no() > 0
+            && !lock(&p.brokered).admits(caller.unwrap_or_default()) =>
+        {
+            Answer::ToCaller(calls_full_reply())
+        }
         None => {
             let mut head = Vec::new();
             let Some(piece) = piece_of(input, &mut head) else {
@@ -1351,15 +1365,8 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         Answer::ToCaller(reply) if (200..300).contains(&reply.status) => reply.rtc_call_id.clone(),
         _ => None,
     };
-    let caller = input.caller_ref().as_str().ok().filter(|r| !r.is_empty());
     if let (Some(call), Some(caller)) = (brokered, caller) {
-        let mut calls = lock(&p.brokered);
-        while calls.len() >= MAX_BROKERED_CALLS {
-            if calls.pop_front().is_none() {
-                break;
-            }
-        }
-        calls.push_back((call, caller.to_string()));
+        lock(&p.brokered).record(call, caller.to_string());
     }
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
     if done || outcome == Outcome::Refused {
@@ -1377,6 +1384,18 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
 #[must_use]
 pub fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     error_envelope(status, text, None)
+}
+
+/// The answer to an SDP offer refused at a brokered-call bound: [`STATUS_CALLS_FULL`] with
+/// [`CALLS_FULL_TEXT`] in the dialects' error shape.
+fn calls_full_reply() -> crate::driven::Reply {
+    let status = STATUS_CALLS_FULL as u16;
+    crate::driven::Reply {
+        status,
+        fields: vec![(FIELD_CONTENT_TYPE, CONTENT_TYPE_JSON.to_string())],
+        body: refusal_body(status, CALLS_FULL_TEXT),
+        rtc_call_id: None,
+    }
 }
 
 /// The message the realtime dialects answer a bad or missing credential with: the vendor's own copy,
