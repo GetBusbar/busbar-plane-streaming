@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 
 use crate::codec::ir::codec::gemini::{setup_locked, GeminiLiveCodec};
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
-use crate::codec::ir::config::SessionConfig;
+use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
 use crate::codec::ir::media::AudioFormat;
 
 /// Where in a dialect's caller frame the governed object sits, and what is done to it.
@@ -39,6 +39,10 @@ pub struct Rule {
     /// `systemInstruction`): every key is compared under the lowerCamelCase name, so each spelling
     /// of a governed field is governed.
     pub proto_names: bool,
+    /// A numeric member capped at the session's ceiling: `(key, cap)`. The member is written once,
+    /// as the lower of the caller's own value and `cap`, and as `cap` where the caller wrote none,
+    /// wrote one that is not a whole number (`"inf"`), or wrote one above it.
+    pub cap: Option<(&'static str, u64)>,
 }
 
 /// THE DIALECT'S GOVERNED KEYS: which caller frames a session's lock splices, and how. Every rule
@@ -49,9 +53,9 @@ pub trait LockedKeys {
     /// The rule for the object that configures the session (`session.update`'s `session`, `setup`),
     /// locked to `locked`.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule;
-    /// The rule for the object that asks for one response under its own settings; `None` for a
-    /// dialect with no such object.
-    fn response_rule(&self) -> Option<Rule>;
+    /// The rule for the object that asks for one response under its own settings, capped at the
+    /// output ceiling `locked` states; `None` for a dialect with no such object.
+    fn response_rule(&self, locked: &SessionConfig) -> Option<Rule>;
     /// The frame that tells the far end the session is locked to `locked`, in the shape its
     /// socket reads, for a caller-side envelope that configures nothing itself (the telephony
     /// carrier); `None` for a dialect whose writer frames it.
@@ -66,6 +70,9 @@ pub trait LockedKeys {
     /// would read audio at a rate the plane does not count it at.
     fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable>;
 }
+
+/// The OpenAI Realtime member a response's output ceiling is written in.
+const MAX_OUTPUT_TOKENS: &str = "max_output_tokens";
 
 /// OpenAI Realtime: `session.update`'s `session`, and `response.create`'s `response`. A stored
 /// `prompt` is instructions by reference, so it is the caller's to author no more than they are.
@@ -85,15 +92,24 @@ impl LockedKeys for OpenAiRealtimeCodec {
             cut: REALTIME_CUT,
             set: locked.ga_session(),
             proto_names: false,
+            cap: None,
         }
     }
 
-    fn response_rule(&self) -> Option<Rule> {
+    /// `response.create`'s `response`: a caller's own `max_output_tokens` never lifts the
+    /// session's output ceiling ([`crate::session_door::with_ceilings`]); the response asks for
+    /// the lower of the two, and for the ceiling where the caller names none.
+    fn response_rule(&self, locked: &SessionConfig) -> Option<Rule> {
+        let cap = match locked.max_output_tokens {
+            Some(MaxOutputTokens::Limit(n)) => Some((MAX_OUTPUT_TOKENS, u64::from(n))),
+            _ => None,
+        };
         Some(Rule {
             at: "response",
             cut: REALTIME_CUT,
             set: Map::new(),
             proto_names: false,
+            cap,
         })
     }
 
@@ -302,10 +318,11 @@ impl LockedKeys for GeminiLiveCodec {
             cut: LIVE_CUT,
             set: setup_locked(locked),
             proto_names: true,
+            cap: None,
         }
     }
 
-    fn response_rule(&self) -> Option<Rule> {
+    fn response_rule(&self, _locked: &SessionConfig) -> Option<Rule> {
         None
     }
 
@@ -340,7 +357,14 @@ pub fn splice(frame: &[u8], rule: &Rule) -> Option<Vec<u8>> {
         if frame.get(m.value.0) != Some(&b'{') {
             continue;
         }
-        let edited = object(frame, m.value.0, rule.cut, &rule.set, rule.proto_names)?;
+        let edited = object(
+            frame,
+            m.value.0,
+            rule.cut,
+            &rule.set,
+            rule.proto_names,
+            rule.cap,
+        )?;
         out.extend_from_slice(&frame[at..m.value.0]);
         out.extend_from_slice(&edited);
         at = m.value.1;
@@ -377,8 +401,9 @@ fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// The object at `b[open]`, rebuilt: the caller's members not cut and not set, in order and byte
-/// for byte, then each `set` member (merged into the caller's when both are objects). Keys are
+/// The object at `b[open]`, rebuilt: the caller's members not cut, not set and not capped, in order
+/// and byte for byte, then each `set` member (merged into the caller's when both are objects), then
+/// the `cap` member at the lower of the caller's values and the cap ([`Rule::cap`]). Keys are
 /// compared under [`field_name`].
 fn object(
     b: &[u8],
@@ -386,8 +411,10 @@ fn object(
     cut: &[&str],
     set: &Map<String, Value>,
     proto: bool,
+    cap: Option<(&str, u64)>,
 ) -> Option<Vec<u8>> {
     let (members, _) = members(b, open)?;
+    let capped = |name: &str| cap.is_some_and(|(key, _)| key == name);
     let mut out = vec![b'{'];
     let mut first = true;
     let mut sep = |out: &mut Vec<u8>| {
@@ -397,7 +424,7 @@ fn object(
     };
     for m in &members {
         let name = field_name(&m.key, proto);
-        if cut.contains(&&*name) || set.contains_key(&*name) {
+        if cut.contains(&&*name) || set.contains_key(&*name) || capped(&*name) {
             continue;
         }
         sep(&mut out);
@@ -413,10 +440,23 @@ fn object(
             .find(|m| field_name(&m.key, proto) == key.as_str() && b.get(m.value.0) == Some(&b'{'));
         match (value, theirs) {
             (Value::Object(locked), Some(m)) => {
-                out.extend_from_slice(&object(b, m.value.0, &[], locked, proto)?);
+                out.extend_from_slice(&object(b, m.value.0, &[], locked, proto, None)?);
             }
             _ => out.extend_from_slice(&serde_json::to_vec(value).ok()?),
         }
+    }
+    if let Some((key, ceiling)) = cap {
+        // Every value the caller wrote under the key is read; one that is not a whole number
+        // (`"inf"`, a fraction, a string) asks for no ceiling of its own, so the cap stands.
+        let asked = members
+            .iter()
+            .filter(|m| field_name(&m.key, proto) == key)
+            .map(|m| serde_json::from_slice::<u64>(&b[m.value.0..m.value.1]).unwrap_or(ceiling))
+            .fold(ceiling, u64::min);
+        sep(&mut out);
+        out.extend_from_slice(&serde_json::to_vec(key).ok()?);
+        out.push(b':');
+        out.extend_from_slice(asked.to_string().as_bytes());
     }
     out.push(b'}');
     Some(out)

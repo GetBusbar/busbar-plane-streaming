@@ -524,3 +524,31 @@ fn the_sections_token_ceilings_reach_the_far_end() {
         "{v}"
     );
 }
+
+/// RED-BEFORE-GREEN (lead ruling: a caller's own `max_output_tokens` never bypasses the configured
+/// output cap), through a live session: a `response.create` reaches the far end asking for the
+/// lower of the caller's value and `streams.max_output_tokens`, and for the cap where it names
+/// none. RED: the caller's 5000 went out as written, past the section's 1000.
+#[test]
+fn a_callers_response_create_cannot_lift_the_output_ceiling() {
+    let cfg = StreamsCfg {
+        max_output_tokens: 1000,
+        ..StreamsCfg::default()
+    };
+    for (asked, sent) in [(Some(5000), 1000), (Some(200), 200), (None, 1000)] {
+        let mut s = Live::open(Door::Sideband, &cfg).expect("a session door");
+        let response = match asked {
+            Some(n) => serde_json::json!({"max_output_tokens": n}),
+            None => serde_json::json!({}),
+        };
+        s.from_caller(
+            &json(serde_json::json!({"type":"response.create","response":response})),
+            false,
+        );
+        let Some((Side::FarEnd, frame)) = s.next(true).frame else {
+            panic!("the response request goes to the far end");
+        };
+        let v: serde_json::Value = serde_json::from_slice(&frame).expect("json");
+        assert_eq!(v["response"]["max_output_tokens"], sent, "{asked:?}: {v}");
+    }
+}
