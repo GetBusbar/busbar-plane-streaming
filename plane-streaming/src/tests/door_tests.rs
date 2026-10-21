@@ -54,7 +54,7 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         assert_eq!(declared.direction, DIRECTION_OUTBOUND, "{door:?}");
         assert_eq!(declared.egress_class, EGRESS_PROVIDER, "{door:?}");
         let attempt = door
-            .route(&cfg.session, None, &[])
+            .route(&cfg.session, None)
             .expect("a session door's dial is a request")
             .expect("a session door dials");
         assert_eq!(
