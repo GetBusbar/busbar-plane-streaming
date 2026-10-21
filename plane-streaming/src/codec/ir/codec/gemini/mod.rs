@@ -377,23 +377,39 @@ fn setup_from_session_config(cfg: &SessionConfig) -> Value {
 
 // ── usage ↔ usageMetadata ─────────────────────────────────────────────────────────────────────────
 
-/// The `(AUDIO entry, sum of every entry)` of a Gemini `*TokensDetails` array (`[{modality,
-/// tokenCount}]`). BILLED COUNTS, read through [`billed_count`]: an absent array, modality or count is
-/// zero, a present but unreadable count is an `Err` the caller turns into a refusal (#42).
-fn modality_split(details: Option<&Value>) -> Result<(u64, u64), String> {
-    let (mut audio, mut all) = (0_u64, 0_u64);
+/// The modality split of a Gemini `*TokensDetails` array (`[{modality, tokenCount}]`): its AUDIO,
+/// IMAGE and VIDEO entries, and the sum of every entry. BILLED COUNTS, read through
+/// [`billed_count`]: an absent array, modality or count is zero, a present but unreadable count is
+/// an `Err` the caller turns into a refusal (#42).
+#[derive(Default)]
+struct Split {
+    audio: u64,
+    image: u64,
+    video: u64,
+    all: u64,
+}
+
+fn modality_split(details: Option<&Value>) -> Result<Split, String> {
+    let mut split = Split::default();
     for d in details.and_then(Value::as_array).into_iter().flatten() {
         let n = billed_count(Some(d), "tokenCount")?;
-        all = all.saturating_add(n);
-        let is_audio = d
+        split.all = split.all.saturating_add(n);
+        let modality = d
             .get("modality")
             .and_then(Value::as_str)
-            .is_some_and(|m| m.eq_ignore_ascii_case("AUDIO"));
-        if is_audio {
-            audio = audio.saturating_add(n);
-        }
+            .unwrap_or_default();
+        let class = if modality.eq_ignore_ascii_case("AUDIO") {
+            &mut split.audio
+        } else if modality.eq_ignore_ascii_case("IMAGE") {
+            &mut split.image
+        } else if modality.eq_ignore_ascii_case("VIDEO") {
+            &mut split.video
+        } else {
+            continue;
+        };
+        *class = class.saturating_add(n);
     }
-    Ok((audio, all))
+    Ok(split)
 }
 
 /// Extract the split token classes from a Gemini `usageMetadata` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
@@ -406,30 +422,36 @@ fn modality_split(details: Option<&Value>) -> Result<(u64, u64), String> {
 /// of `toolUsePromptTokenCount` and its `toolUsePromptTokensDetails`); output is the response (the
 /// larger of `responseTokenCount` and its `responseTokensDetails`) plus `thoughtsTokenCount`, which
 /// Google prices as output ("Output price (including thinking tokens)"). Where `totalTokenCount`
-/// states more than that sum, the remainder bills as input text. Audio bills as audio; every other
-/// token is attributed to `text` (the plane declares no image or video class: such tokens bill at
-/// the text rate, never at zero) — this only changes the audio/text LABEL, never the input/output
-/// lane, and it is an integer passthrough of the wire figures, no rate lookup or multiply.
+/// states more than that sum, the remainder bills as input text. AUDIO, IMAGE and VIDEO entries bill
+/// as their own declared classes; every other token is attributed to `text`. It is an integer
+/// passthrough of the wire figures, no rate lookup or multiply.
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
 /// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
 fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
-    let (audio_in, prompt_all) = modality_split(u.get("promptTokensDetails"))?;
-    let (tool_audio, tool_all) = modality_split(u.get("toolUsePromptTokensDetails"))?;
-    let (audio_out, response_all) = modality_split(u.get("responseTokensDetails"))?;
-    let audio_in = audio_in.saturating_add(tool_audio);
+    let prompt = modality_split(u.get("promptTokensDetails"))?;
+    let tool = modality_split(u.get("toolUsePromptTokensDetails"))?;
+    let response = modality_split(u.get("responseTokensDetails"))?;
+    let audio_in = prompt.audio.saturating_add(tool.audio);
+    let image_in = prompt.image.saturating_add(tool.image);
+    let video_in = prompt.video.saturating_add(tool.video);
     let input = billed_count(Some(u), "promptTokenCount")?
-        .max(prompt_all)
-        .saturating_add(billed_count(Some(u), "toolUsePromptTokenCount")?.max(tool_all));
+        .max(prompt.all)
+        .saturating_add(billed_count(Some(u), "toolUsePromptTokenCount")?.max(tool.all));
     let output = billed_count(Some(u), "responseTokenCount")?
-        .max(response_all)
+        .max(response.all)
         .saturating_add(billed_count(Some(u), "thoughtsTokenCount")?);
     let input = input.max(billed_count(Some(u), "totalTokenCount")?.saturating_sub(output));
     Ok(IrDuplexUsage {
         audio_in,
-        text_in: input.saturating_sub(audio_in),
-        audio_out,
-        text_out: output.saturating_sub(audio_out),
+        text_in: input
+            .saturating_sub(audio_in)
+            .saturating_sub(image_in)
+            .saturating_sub(video_in),
+        audio_out: response.audio,
+        text_out: output.saturating_sub(response.audio),
+        image_in,
+        video_in,
         cached: billed_count(Some(u), "cachedContentTokenCount")?,
     })
 }
@@ -439,11 +461,15 @@ fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
 /// The sums SATURATE for the same reason the OpenAI re-frame's do: these counts came off an
 /// upstream `usageMetadata` object, and a wrapped total is a small number that is false.
 fn usage_to_metadata(u: &IrDuplexUsage) -> Value {
-    json!({
-        "promptTokenCount": u.audio_in.saturating_add(u.text_in),
+    let prompt = u
+        .audio_in
+        .saturating_add(u.text_in)
+        .saturating_add(u.image_in)
+        .saturating_add(u.video_in);
+    let mut meta = json!({
+        "promptTokenCount": prompt,
         "responseTokenCount": u.audio_out.saturating_add(u.text_out),
-        "totalTokenCount": u.audio_in
-            .saturating_add(u.text_in)
+        "totalTokenCount": prompt
             .saturating_add(u.audio_out)
             .saturating_add(u.text_out),
         "cachedContentTokenCount": u.cached,
@@ -455,7 +481,15 @@ fn usage_to_metadata(u: &IrDuplexUsage) -> Value {
             { "modality": "AUDIO", "tokenCount": u.audio_out },
             { "modality": "TEXT", "tokenCount": u.text_out },
         ],
-    })
+    });
+    if let Some(details) = meta["promptTokensDetails"].as_array_mut() {
+        for (modality, n) in [("IMAGE", u.image_in), ("VIDEO", u.video_in)] {
+            if n != 0 {
+                details.push(json!({ "modality": modality, "tokenCount": n }));
+            }
+        }
+    }
+    meta
 }
 
 // ── reader ──────────────────────────────────────────────────────────────────────────────────────

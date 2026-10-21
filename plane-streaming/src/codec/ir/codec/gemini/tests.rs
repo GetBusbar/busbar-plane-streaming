@@ -217,6 +217,8 @@ fn usage_metadata_totals_saturate_rather_than_wrap() {
         audio_out: u64::MAX,
         text_in: 1,
         text_out: 1,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let meta = usage_to_metadata(&u);
@@ -1163,9 +1165,9 @@ fn usage_of(meta: Value) -> IrDuplexUsage {
 }
 
 /// RED-BEFORE-GREEN (MONEY; the `Modality` enum names TEXT, IMAGE, VIDEO, AUDIO and DOCUMENT): a
-/// turn whose prompt carried camera frames bills its IMAGE and VIDEO tokens, at the text class, so
-/// the input classes sum to the prompt. RED: only the AUDIO and TEXT entries were read, so the
-/// image and video tokens billed zero.
+/// turn whose prompt carried camera frames bills its IMAGE and VIDEO tokens, each under its own
+/// class, and the input classes sum to the prompt. RED: only the AUDIO and TEXT entries were read,
+/// so the image and video tokens billed zero.
 #[test]
 fn image_and_video_prompt_tokens_are_billed() {
     let u = usage_of(json!({
@@ -1183,8 +1185,19 @@ fn image_and_video_prompt_tokens_are_billed() {
             { "modality": "TEXT", "tokenCount": 10 }
         ]
     }));
-    assert_eq!((u.audio_in, u.text_in), (80, 80), "{u:?}");
+    assert_eq!(
+        (u.audio_in, u.text_in, u.image_in, u.video_in),
+        (80, 15, 25, 40),
+        "{u:?}"
+    );
     assert_eq!((u.audio_out, u.text_out), (40, 10), "{u:?}");
+    let billed = crate::session::class_counts(Some(&u), crate::session::TurnCounters::default());
+    for (class, n) in [
+        (crate::meta::CLASS_IMAGE_TOKENS_IN, 25),
+        (crate::meta::CLASS_VIDEO_TOKENS_IN, 40),
+    ] {
+        assert!(billed.contains(&(class, n)), "{class:?}: {billed:?}");
+    }
 }
 
 /// RED-BEFORE-GREEN (MONEY; the owner's gemini-tool-use-billing ruling: "a grounded Gemini turn

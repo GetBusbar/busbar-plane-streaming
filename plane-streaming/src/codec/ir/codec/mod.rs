@@ -842,9 +842,8 @@ impl DuplexReader for OpenAiRealtimeCodec {
 /// side bills the larger of its stated total and the sum of every entry its breakdown carries
 /// (`audio_tokens`, `text_tokens`, and on input `image_tokens`), never the audio and text entries
 /// alone: a turn that also carried image input billed its audio and text and dropped the rest.
-/// Audio bills as audio; every other token the side bills is attributed to `text` (the plane
-/// declares no image class: image tokens bill at the text rate, never at zero). This only changes
-/// the audio/text LABEL, never the input/output lane, and it is an integer passthrough of the wire
+/// Audio bills as audio and image tokens as image tokens (each its own declared class); every
+/// other token the side bills is attributed to `text`. It is an integer passthrough of the wire
 /// figures, no rate lookup or multiply, so #71's hot-path rule is untouched.
 ///
 /// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` (`gemini/mod.rs`).
@@ -855,10 +854,11 @@ fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     let ind = u.get("input_token_details");
     let outd = u.get("output_token_details");
     let audio_in = billed_count(ind, "audio_tokens")?;
+    let image_in = billed_count(ind, "image_tokens")?;
     let input = billed_count(Some(u), "input_tokens")?.max(
         audio_in
             .saturating_add(billed_count(ind, "text_tokens")?)
-            .saturating_add(billed_count(ind, "image_tokens")?),
+            .saturating_add(image_in),
     );
     let audio_out = billed_count(outd, "audio_tokens")?;
     let output = billed_count(Some(u), "output_tokens")?
@@ -866,8 +866,10 @@ fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     Ok(IrDuplexUsage {
         audio_in,
         audio_out,
-        text_in: input - audio_in,
+        text_in: input - audio_in - image_in,
         text_out: output - audio_out,
+        image_in,
+        video_in: 0,
         cached: billed_count(ind, "cached_tokens")?,
     })
 }
@@ -1056,11 +1058,13 @@ impl DuplexWriter for OpenAiRealtimeCodec {
 /// turn pins the count, never wraps small"): these counts came off an upstream `usage` object, and
 /// a wrapped total is a small, believable number that is false.
 fn usage_to_wire(u: &IrDuplexUsage) -> Value {
-    json!({
+    let mut wire = json!({
         "total_tokens": u.audio_in
             .saturating_add(u.audio_out)
             .saturating_add(u.text_in)
-            .saturating_add(u.text_out),
+            .saturating_add(u.text_out)
+            .saturating_add(u.image_in)
+            .saturating_add(u.video_in),
         "input_token_details": {
             "audio_tokens": u.audio_in,
             "text_tokens": u.text_in,
@@ -1070,7 +1074,12 @@ fn usage_to_wire(u: &IrDuplexUsage) -> Value {
             "audio_tokens": u.audio_out,
             "text_tokens": u.text_out,
         },
-    })
+    });
+    // The dialect names image input and no video input: video tokens stay in the total only.
+    if u.image_in != 0 {
+        wire["input_token_details"]["image_tokens"] = json!(u.image_in);
+    }
+    wire
 }
 
 /// THE SECOND DIALECT — Gemini Live (`BidiGenerateContent`). Its codec maps the Gemini wire to/from

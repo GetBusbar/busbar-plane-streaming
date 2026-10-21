@@ -633,6 +633,8 @@ fn usage_totals_saturate_rather_than_wrap() {
         audio_out: 1,
         text_in: 1,
         text_out: 1,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let wire = usage_to_wire(&u);
@@ -1065,9 +1067,9 @@ fn response_done_usage_extracts_split_token_classes() {
 
 /// RED-BEFORE-GREEN (MONEY; the Realtime API reference: `usage` "will correspond to billing", and
 /// `input_token_details.image_tokens` is "The number of image tokens used as input for the
-/// Response"): a turn whose input carried an image bills its image tokens, at the text class, and
-/// the input classes sum to the stated `input_tokens`. RED: only the audio and text entries were
-/// read, so the 10 image tokens billed zero.
+/// Response"): a turn whose input carried an image bills its image tokens under their own class,
+/// and the input classes sum to the stated `input_tokens`. RED: only the audio and text entries
+/// were read, so the 10 image tokens billed zero.
 #[test]
 fn image_input_tokens_are_billed() {
     let src = json!({
@@ -1086,7 +1088,12 @@ fn image_input_tokens_are_billed() {
     let IrServerEvent::Usage(u) = &ir[0] else {
         panic!("expected Usage")
     };
-    assert_eq!((u.audio_in, u.text_in), (100, 50), "{u:?}");
+    assert_eq!((u.audio_in, u.text_in, u.image_in), (100, 40, 10), "{u:?}");
+    let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
+    assert!(
+        billed.contains(&(crate::meta::CLASS_IMAGE_TOKENS_IN, 10)),
+        "the image tokens bill as their own class: {billed:?}"
+    );
     assert_eq!((u.audio_out, u.text_out), (60, 20), "{u:?}");
 }
 
@@ -1104,7 +1111,7 @@ fn image_input_tokens_are_billed_without_a_stated_total() {
     let IrServerEvent::Usage(u) = &ir[0] else {
         panic!("expected Usage")
     };
-    assert_eq!((u.audio_in, u.text_in), (0, 304), "{u:?}");
+    assert_eq!((u.audio_in, u.text_in, u.image_in), (0, 4, 300), "{u:?}");
 }
 
 #[test]
@@ -1359,6 +1366,8 @@ fn usage_extraction_survives_reencode() {
         audio_out: 4,
         text_in: 1,
         text_out: 2,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let w = down(&codec, IrServerEvent::Usage(u));

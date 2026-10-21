@@ -1,10 +1,10 @@
 //! What this plane declares about itself.
 //!
 //! Everything here is a constant, because everything here is read once at registration and sealed
-//! into policy. The meter-class list, in particular, is the exact list
-//! `docs/design/BUSBAR-1.6.0.md`'s protocol-inventory table names for the `voice` row —
-//! `audio_tokens_in/out, text_tokens_in/text_tokens_out, cached_tokens, audio_seconds_in,
-//! tool_calls` — and no other class is declared, because the table names that list and no other.
+//! into policy. The meter-class list is the voice row's list (`audio_tokens_in/out`,
+//! `text_tokens_in/out`, `audio_seconds_in`, `tool_calls`; `cached_tokens` is attribution only)
+//! and the two input classes the providers bill apart from text, `image_tokens_in` and
+//! `video_tokens_in` (#77(4): classes are strings the plane declares).
 //!
 //! In particular the table names `audio_seconds_in` and no outbound twin. Metering the downlink by
 //! duration would be a second reading of the same audio the `audio_tokens_out` class already prices,
@@ -129,6 +129,18 @@ const METER_CLASSES: &[MeterClassDecl] = &[
         direction: ClassDirection::Response,
         default_divisor: CALLS_PER_UNIT,
     },
+    MeterClassDecl {
+        key: CLASS_IMAGE_TOKENS_IN,
+        family: TOKEN_FAMILY,
+        direction: ClassDirection::Input,
+        default_divisor: BYTES_PER_TOKEN,
+    },
+    MeterClassDecl {
+        key: CLASS_VIDEO_TOKENS_IN,
+        family: TOKEN_FAMILY,
+        direction: ClassDirection::Input,
+        default_divisor: BYTES_PER_TOKEN,
+    },
 ];
 
 /// The class key the audio a turn RECEIVED is counted under.
@@ -178,6 +190,15 @@ pub const CLASS_CACHED_TOKENS: MeterClassId = MeterClassId::new("cached_tokens")
 /// unit price, and a root that spelled it out inline would be one more chance for that spelling to
 /// drift from the declaration above.
 pub const CLASS_AUDIO_SECONDS_IN: MeterClassId = MeterClassId::new("audio_seconds_in");
+
+/// The class key the image input tokens of a turn are counted under (OpenAI Realtime's
+/// `input_token_details.image_tokens`, Gemini Live's IMAGE modality entries): its own class, because
+/// the providers price image input apart from text (#77(4): classes are strings the plane declares).
+pub const CLASS_IMAGE_TOKENS_IN: MeterClassId = MeterClassId::new("image_tokens_in");
+
+/// The class key the video input tokens of a turn are counted under (Gemini Live's VIDEO modality
+/// entries): its own class, because the provider prices video input apart from text.
+pub const CLASS_VIDEO_TOKENS_IN: MeterClassId = MeterClassId::new("video_tokens_in");
 
 /// The class key a tool call is counted under.
 ///
