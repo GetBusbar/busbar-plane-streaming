@@ -1416,3 +1416,113 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
         );
     }
 }
+
+/// One `tick` at `now_ns`: its outcome and the next tick it asks for (`0` = none).
+fn tick(p: &Plugin<Plane>, now_ns: u64) -> (Outcome, u64) {
+    let mut k: Frame<TickIn, TickOut> = Frame::new(z(), z());
+    k.input.head = in_head();
+    k.input.now_ns = now_ns;
+    k.out.head = out_head();
+    let c = p.call(life::TICK, &mut k);
+    (c.outcome, k.out.next_tick_ns)
+}
+
+/// `cancel` of `unit` by its key, as the host cancels a unit itself.
+fn cancel_unit(p: &Plugin<Plane>, unit: u64) -> Outcome {
+    let mut x: Frame<
+        busbar_contract::abi::plane::PlaneCancelIn,
+        busbar_contract::abi::plane::PlaneCancelOut,
+    > = Frame::new(z(), z());
+    x.input.cancel.head = in_head();
+    x.input.unit = unit;
+    x.out.cancel.head = out_head();
+    p.call(life::CANCEL, &mut x).outcome
+}
+
+/// The brokered calls' published lifetime, in nanoseconds (OpenAI Realtime's 60 minutes).
+const CALL_LIFETIME_NS: u64 = 60 * 60 * 1_000_000_000;
+
+/// RED-BEFORE-GREEN (review round 4, B1): with no session ceiling configured, a door holding a
+/// brokered call still asks to be ticked, its tick reads the clock the call's age is counted on,
+/// and a tick past the call's lifetime expires its row, so a sideband to that call is refused and
+/// the door asks for no further tick. RED: `tick` asked for a next tick only under a ceiling
+/// (`next_tick_ns` 0 here), so the clock never moved, no row ever expired and a full instance's
+/// 429 never cleared. Both ways, through the `tick` slot.
+#[test]
+fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(tick(p, 5), (Outcome::Ready, 0), "nothing held, no ceiling");
+        let brokered = broker(p, 300, "/v1/realtime/calls/rtc_tick0300", CALLER_REF);
+        assert!(brokered.contains("status=201"), "{brokered}");
+        let (outcome, next) = tick(p, 1_000_000_000);
+        assert_eq!(outcome, Outcome::Ready);
+        assert_eq!(
+            next,
+            1_000_000_000 + CALL_LIFETIME_NS,
+            "the row's age starts at this tick, and the door asks to be ticked when it expires"
+        );
+        let mut b = Bufs::with_units(1 << 18, 8);
+        assert_eq!(
+            arrive_sideband(p, 301, "/v1/realtime/sideband/rtc_tick0300"),
+            Outcome::Ready
+        );
+        let live = b.call(p, &session(301, FROM_CALLER, 0, &uplink(100)));
+        assert!(live.contains("far=true"), "inside its lifetime: {live}");
+        assert_eq!(
+            tick(p, next),
+            (Outcome::Ready, 0),
+            "the expired row is freed, and nothing is left to tick for"
+        );
+        assert_eq!(
+            arrive_sideband(p, 302, "/v1/realtime/sideband/rtc_tick0300"),
+            Outcome::Ready
+        );
+        let expired = b.call(p, &session(302, FROM_CALLER, 0, &uplink(100)));
+        assert!(
+            expired.starts_with("Refused"),
+            "past its lifetime: {expired}"
+        );
+    }
+}
+
+/// RED-BEFORE-GREEN (lead ruling: a sideband may reconnect to a live call; review round 4, B2): a
+/// sideband the caller ends (its last piece) and one the host cancels by its unit both leave their
+/// call's row, so the caller's next sideband to the same call attaches. RED (at 7027da0, the
+/// sideband-close rule): closing the first sideband freed the call's row, and every later sideband
+/// to the live call was refused. Both ways, through `on_piece` and `cancel`.
+#[test]
+fn a_sideband_reconnect_after_a_sideband_close_is_admitted() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let brokered = broker(p, 310, "/v1/realtime/calls/rtc_back0310", CALLER_REF);
+        assert!(brokered.contains("status=201"), "{brokered}");
+        let target = "/v1/realtime/sideband/rtc_back0310";
+        let mut b = Bufs::with_units(1 << 18, 8);
+
+        assert_eq!(arrive_sideband(p, 311, target), Outcome::Ready);
+        let first = b.call(p, &session(311, FROM_CALLER, 0, &uplink(100)));
+        assert!(first.contains("far=true"), "{first}");
+        let ended = b.call(p, &session(311, FROM_CALLER, PIECE_LAST, &[]));
+        assert!(ended.contains("done=true"), "the caller ends it: {ended}");
+
+        assert_eq!(arrive_sideband(p, 312, target), Outcome::Ready);
+        let second = b.call(p, &session(312, FROM_CALLER, 0, &uplink(100)));
+        assert!(
+            second.contains("far=true"),
+            "reconnects after the caller's end: {second}"
+        );
+        assert_eq!(cancel_unit(p, 312), Outcome::Ready);
+
+        assert_eq!(arrive_sideband(p, 313, target), Outcome::Ready);
+        let third = b.call(p, &session(313, FROM_CALLER, 0, &uplink(100)));
+        assert!(
+            third.contains("far=true"),
+            "reconnects after a cancel: {third}"
+        );
+    }
+}
