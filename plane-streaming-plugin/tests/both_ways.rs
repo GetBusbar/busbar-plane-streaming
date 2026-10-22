@@ -1419,12 +1419,39 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
 
 /// One `tick` at `now_ns`: its outcome and the next tick it asks for (`0` = none).
 fn tick(p: &Plugin<Plane>, now_ns: u64) -> (Outcome, u64) {
+    tick_on(
+        p,
+        busbar_contract::abi::mechanism::ticket::Ticket::NONE,
+        now_ns,
+    )
+}
+
+/// One `tick` at `now_ns` on `driver`, the ticket the door names when it has work of its own.
+fn tick_on(
+    p: &Plugin<Plane>,
+    driver: busbar_contract::abi::mechanism::ticket::Ticket,
+    now_ns: u64,
+) -> (Outcome, u64) {
     let mut k: Frame<TickIn, TickOut> = Frame::new(z(), z());
     k.input.head = in_head();
+    k.input.head.ticket = driver;
     k.input.now_ns = now_ns;
     k.out.head = out_head();
     let c = p.call(life::TICK, &mut k);
     (c.outcome, k.out.next_tick_ns)
+}
+
+/// Whether the host saw a wake land on a retired ticket within a few seconds of `before` (its
+/// count of such wakes when the test started waiting): the door named the ticket it was ticked on.
+fn woke_retired(d: &Dispatcher, before: u64) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < until {
+        if d.stats().stale_wakes > before {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    false
 }
 
 /// `cancel` of `unit` by its key, as the host cancels a unit itself.
@@ -1442,21 +1469,36 @@ fn cancel_unit(p: &Plugin<Plane>, unit: u64) -> Outcome {
 /// The brokered calls' published lifetime, in nanoseconds (OpenAI Realtime's 60 minutes).
 const CALL_LIFETIME_NS: u64 = 60 * 60 * 1_000_000_000;
 
-/// RED-BEFORE-GREEN (review round 4, B1): with no session ceiling configured, a door holding a
-/// brokered call still asks to be ticked, its tick reads the clock the call's age is counted on,
-/// and a tick past the call's lifetime expires its row, so a sideband to that call is refused and
-/// the door asks for no further tick. RED: `tick` asked for a next tick only under a ceiling
-/// (`next_tick_ns` 0 here), so the clock never moved, no row ever expired and a full instance's
-/// 429 never cleared. Both ways, through the `tick` slot.
+/// RED-BEFORE-GREEN (review rounds 4 and 5, B1): an instance with no session ceiling and no row
+/// asks for no tick, so the kernel ticks it again only when its driver ticket is woken. Recording
+/// a brokered call wakes that ticket: the host OBSERVES the wake (the door is ticked on a ticket
+/// the host has since retired, so the wake the record names lands as a late wake the host counts),
+/// and nothing ticks the door by hand in between. The tick that follows starts the row's age and
+/// asks for the tick it expires at; a tick past the lifetime expires the row, a sideband to the
+/// call is refused, and the door asks for no further tick. RED (at fb7f530): the record woke
+/// nothing, so an idle SDP-only instance was never ticked again and its rows never expired; RED
+/// (at d7aa995): `tick` asked for no next tick at all. Both ways, through `on_piece` and `tick`.
 #[test]
 fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
     let d = Dispatcher::new(DispatchConfig::default());
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        assert_eq!(tick(p, 5), (Outcome::Ready, 0), "nothing held, no ceiling");
+        let driver = d.mint(0).expect("a ticket on worker 0");
+        assert_eq!(
+            tick_on(p, driver, 5),
+            (Outcome::Ready, 0),
+            "nothing held, no ceiling: no tick is asked for"
+        );
+        d.recycle(driver);
+        let before = d.stats().stale_wakes;
         let brokered = broker(p, 300, "/v1/realtime/calls/rtc_tick0300", CALLER_REF);
         assert!(brokered.contains("status=201"), "{brokered}");
+        assert!(
+            woke_retired(&d, before),
+            "recording the call wakes the driver ticket the door was ticked on"
+        );
+        // The host drives the woken instance and polls its `tick`.
         let (outcome, next) = tick(p, 1_000_000_000);
         assert_eq!(outcome, Outcome::Ready);
         assert_eq!(
