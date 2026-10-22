@@ -585,7 +585,11 @@ pub const REALTIME_CALL_MAX_MS: u64 = 60 * 60 * 1000;
 
 /// While a brokered row waits for its age to start (no tick has run since it was recorded), the
 /// longest the door waits for its next tick, in milliseconds: a row's age starts at most this late,
-/// so it expires at most this much after its lifetime, never before it.
+/// so it expires at most this much after its lifetime, never before it. A row is recorded with a
+/// wake of the driver ticket, so its tick normally follows at once; should a host keep only the
+/// tick it was last asked for, a row recorded behind an older row whose age has started is stamped
+/// at that older row's deadline, so its lifetime can stretch to about twice
+/// [`REALTIME_CALL_MAX_MS`]: late, the conservative direction, never early.
 pub const BROKERED_TICK_MS: u64 = 60 * 1000;
 
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
@@ -1484,6 +1488,10 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     };
     if let (Some(call), Some(caller)) = (brokered, caller) {
         lock(&p.brokered).record(call, caller.to_string(), now_ms);
+        // The row needs the clock read: the driver ticket is named, so the host drives the
+        // instance and polls `tick`, which starts the row's age and asks for the tick it expires at
+        // (an idle instance with no ceiling is otherwise never ticked again).
+        p.wake_driver();
     }
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
     if done || outcome == Outcome::Refused {
