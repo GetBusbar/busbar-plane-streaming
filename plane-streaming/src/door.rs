@@ -583,6 +583,11 @@ pub const MAX_CALLS_PER_CALLER: usize = MAX_BROKERED_CALLS / 64;
 /// PROVISIONAL: awaiting the owner's ratification.
 pub const REALTIME_CALL_MAX_MS: u64 = 60 * 60 * 1000;
 
+/// While a brokered row waits for its age to start (no tick has run since it was recorded), the
+/// longest the door waits for its next tick, in milliseconds: a row's age starts at most this late,
+/// so it expires at most this much after its lifetime, never before it.
+pub const BROKERED_TICK_MS: u64 = 60 * 1000;
+
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
 struct Held {
     /// The plane's answers to the unit's pieces.
@@ -682,7 +687,7 @@ impl Calls {
 /// (seen through its sideband), when it is older than [`REALTIME_CALL_MAX_MS`] (it has certainly
 /// ended), or when its own caller's next call displaces it at [`MAX_CALLS_PER_CALLER`]; never to
 /// make room for another caller. At [`MAX_BROKERED_CALLS`] unexpired rows a new offer is refused
-/// instead. Expiry is read lazily, at an offer and at an attach, on the door's tick clock.
+/// instead. Expiry is read at each tick, offer and attach, on the door's tick clock.
 #[derive(Default)]
 struct Brokered {
     owners: HashMap<String, BrokeredRow>,
@@ -695,9 +700,10 @@ struct BrokeredRow {
     owner: String,
     /// The tick clock's reading (milliseconds) when the call was recorded: the last tick before it.
     recorded: u64,
-    /// The first tick clock reading after `recorded`: a tick that ran after the call was created,
-    /// so the call's age, counted from it, is never more than its true age. `None` until the clock
-    /// moves.
+    /// The first tick clock reading greater than `recorded`, stamped by the first `tick` (or offer,
+    /// or attach) that reads the clock after the call was recorded: that tick ran after the call
+    /// was created, so the call's age, counted from it, is never more than its true age. `None`
+    /// until the clock moves past `recorded`.
     since: Option<u64>,
 }
 
@@ -720,6 +726,19 @@ impl Brokered {
         for call in expired {
             self.end(&call);
         }
+    }
+
+    /// When the door next needs its clock read (milliseconds on the tick clock), while it holds a
+    /// row: the earliest moment a row whose age has started expires, or, for a row whose age has
+    /// not started, [`BROKERED_TICK_MS`] from `now_ms`. `None` while it holds none.
+    fn next_tick_ms(&self, now_ms: u64) -> Option<u64> {
+        self.owners
+            .values()
+            .map(|row| match row.since {
+                Some(since) => since.saturating_add(REALTIME_CALL_MAX_MS),
+                None => now_ms.saturating_add(BROKERED_TICK_MS),
+            })
+            .min()
     }
 
     /// Whether a new call may be brokered at `now_ms`: the instance holds fewer than
@@ -841,13 +860,15 @@ impl Plane {
         lock(&self.driver).1
     }
 
-    /// A far-end piece with `flags` reached a session on `door` attached to `call`: a sideband
-    /// whose far end ended its answer whole ([`PIECE_LAST`] without [`PIECE_CUT`]) has seen the
-    /// provider end the call, and the call's row is freed. A sideband the caller closes, or one
-    /// whose connection was cut, frees nothing: the call lives on, and a sideband may attach to it
-    /// again.
-    fn far_end_ended(&self, door: Door, flags: u32, call: Option<&str>) {
-        let ended = door == Door::Sideband && flags & PIECE_LAST != 0 && flags & PIECE_CUT == 0;
+    /// A far-end piece with `flags` reached a session on `door` attached to `call`, whose far end
+    /// has (`accepted`) or has not accepted the sideband's upgrade: a sideband whose accepted far
+    /// end ended its answer whole ([`PIECE_LAST`] without [`PIECE_CUT`]) has seen the provider end
+    /// the call, and the call's row is freed. A refused upgrade, a sideband the caller closes, or
+    /// one whose connection was cut frees nothing: the call lives on, and a sideband may attach to
+    /// it again.
+    fn far_end_ended(&self, door: Door, flags: u32, call: Option<&str>, accepted: bool) {
+        let ended =
+            door == Door::Sideband && accepted && flags & PIECE_LAST != 0 && flags & PIECE_CUT == 0;
         if let (true, Some(call)) = (ended, call) {
             lock(&self.brokered).end(call);
         }
@@ -970,7 +991,10 @@ slot!(Retire, GenIn, OutHead, |instance, input, _out| {
 
 // The tick: the instance's driver ticket is noted, every live session's clock and ceiling read on
 // the tick clock, and a session that now owes its end names the driver ticket. While a live
-// generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`.
+// generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`. The brokered
+// rows' clock is read here too: a row's age starts at the first tick after it was recorded, an
+// expired row is freed, and while any row is held the door asks to be ticked when the next one
+// expires (or within `BROKERED_TICK_MS` for a row whose age has not started); the earliest ask wins.
 slot!(Tick, TickIn, TickOut, |instance, input, out| {
     let given = input;
     let next = match instance.get() {
@@ -979,10 +1003,22 @@ slot!(Tick, TickIn, TickOut, |instance, input, out| {
             if lock(&p.sessions).tick(given.now_ns()) {
                 p.wake_driver();
             }
-            if p.any_ceiling() {
-                given.now_ns().saturating_add(CEILING_TICK_NS)
+            let ceiling = if p.any_ceiling() {
+                Some(given.now_ns().saturating_add(CEILING_TICK_NS))
             } else {
-                0
+                None
+            };
+            let now_ms = given.now_ns() / 1_000_000;
+            let brokered = {
+                let mut brokered = lock(&p.brokered);
+                brokered.expire(now_ms);
+                brokered
+                    .next_tick_ms(now_ms)
+                    .map(|ms| ms.saturating_mul(1_000_000))
+            };
+            match (ceiling, brokered) {
+                (Some(a), Some(b)) => a.min(b),
+                (a, b) => a.or(b).unwrap_or(0),
             }
         }
         None => 0,
@@ -1272,8 +1308,15 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
             match given.from() {
                 FROM_CALLER => live.from_caller(bytes, caller_last),
                 FROM_FAR_END => {
+                    // The far end's status (its first piece) says whether it accepted the
+                    // upgrade: a switch, or a success.
+                    if given.flags() & PIECE_HAS_STATUS != 0
+                        && (101..300).contains(&given.status_code())
+                    {
+                        live.accept();
+                    }
                     live.from_far_end(bytes, now_ms);
-                    p.far_end_ended(door, given.flags(), live.call_id());
+                    p.far_end_ended(door, given.flags(), live.call_id(), live.accepted());
                 }
                 FROM_KERNEL => {}
                 _ => return Outcome::Refused,

@@ -113,6 +113,8 @@ pub struct Live {
     started_ns: Option<u64>,
     /// The far end has answered the session: its fee unit was incurred.
     answered: bool,
+    /// The far end accepted the session's upgrade (its status a switch or a success).
+    accepted: bool,
     /// The provider's call a sideband session attaches to, as its arrival named it. The call's
     /// fee unit was reported by the SDP offer that brokered it, so an attached session reports
     /// none of its own: one fee per call.
@@ -186,6 +188,7 @@ impl Live {
             ceiling_secs: ceiling,
             started_ns: None,
             answered: false,
+            accepted: false,
             call_id: None,
             near: crate::piece::Owed::default(),
             far: crate::piece::Owed::default(),
@@ -197,6 +200,17 @@ impl Live {
     /// The provider's call this session attaches to (the sideband door's `{call_id}`).
     pub fn attach(&mut self, call_id: String) {
         self.call_id = Some(call_id);
+    }
+
+    /// The far end accepted the session's upgrade.
+    pub fn accept(&mut self) {
+        self.accepted = true;
+    }
+
+    /// Whether the far end accepted the session's upgrade.
+    #[must_use]
+    pub fn accepted(&self) -> bool {
+        self.accepted
     }
 
     /// The provider's call this session is attached to, if any.

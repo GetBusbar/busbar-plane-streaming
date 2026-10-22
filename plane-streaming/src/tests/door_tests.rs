@@ -498,62 +498,28 @@ fn an_expired_row_frees_room_for_another_caller() {
     assert_eq!(brokered.owners.len(), 2);
 }
 
-/// RED-BEFORE-GREEN (lead ruling: a sideband may reconnect to a live call): a sideband that closes
-/// (its caller's last piece, a cancel) leaves its call's row, so the caller's next sideband to the
-/// same call is admitted. RED: the row was freed when the sideband closed, and the reconnect was
-/// refused.
-#[test]
-fn a_sideband_reconnect_after_a_sideband_close_is_admitted() {
-    let p = plane();
-    let cfg = StreamsCfg::default();
-    lock(&p.brokered).record("rtc_0".to_string(), "tenant-a".to_string(), 0);
-    let mut sessions = lock(&p.sessions);
-    sessions
-        .get_or_open(10, Door::Sideband, &cfg)
-        .expect("a session door")
-        .attach("rtc_0".to_string());
-    sessions.close(10);
-    let ticket = Ticket {
-        slot: 3,
-        generation: 1,
-    };
-    sessions
-        .get_or_open(11, Door::Sideband, &cfg)
-        .expect("a session door")
-        .attach("rtc_0".to_string());
-    sessions.crossed(11, ticket);
-    assert!(sessions.cancel(ticket));
-    drop(sessions);
-    assert!(
-        lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
-        "the reconnect is admitted"
-    );
-}
-
-/// RED-BEFORE-GREEN: a brokered call the far end ends, as its sideband sees it (the far end's
-/// answer ends whole: its last piece, not cut), has ended, and its row is freed. A far end whose
-/// connection was cut, or a piece that is not its last, frees nothing. RED: the row was freed only
-/// when the sideband itself closed, never on the far end's end.
+/// RED-BEFORE-GREEN: a brokered call the far end ends, as its sideband sees it (an accepted
+/// upgrade whose answer ends whole: its last piece, not cut), has ended, and its row is freed. A
+/// far end whose connection was cut, or a piece that is not its last, frees nothing. RED: the row
+/// was freed only when the sideband itself closed, never on the far end's end.
 #[test]
 fn an_ended_call_frees_its_row() {
     let p = plane();
-    let cfg = StreamsCfg::default();
     for i in 0..2 {
         lock(&p.brokered).record(format!("rtc_{i}"), "tenant-a".to_string(), 0);
     }
-    let mut live = Live::open(Door::Sideband, &cfg).expect("a session door");
-    live.attach("rtc_0".to_string());
-    p.far_end_ended(Door::Sideband, 0, live.call_id());
+    let call = Some("rtc_0");
+    p.far_end_ended(Door::Sideband, 0, call, true);
     assert!(
         lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
         "not its last piece"
     );
-    p.far_end_ended(Door::Sideband, PIECE_LAST | PIECE_CUT, live.call_id());
+    p.far_end_ended(Door::Sideband, PIECE_LAST | PIECE_CUT, call, true);
     assert!(
         lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
         "a cut is no end"
     );
-    p.far_end_ended(Door::Sideband, PIECE_LAST, live.call_id());
+    p.far_end_ended(Door::Sideband, PIECE_LAST, call, true);
     assert!(
         !lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
         "the ended call's row is freed"
@@ -563,4 +529,19 @@ fn an_ended_call_frees_its_row() {
         "no other call is touched"
     );
     assert_eq!(lock(&p.brokered).per_caller["tenant-a"].len(), 1);
+}
+
+/// RED-BEFORE-GREEN (review round 4): a sideband whose upgrade the far end refused (a status that
+/// is no switch and no success, on its last piece, not cut) never reached the call, so it says
+/// nothing of the call's end: the live call's row stays. RED: any whole last far-end piece freed
+/// the row, so one refused upgrade dropped a live call, and its caller's next sideband was refused.
+#[test]
+fn a_refused_sideband_upgrade_frees_no_live_call() {
+    let p = plane();
+    lock(&p.brokered).record("rtc_0".to_string(), "tenant-a".to_string(), 0);
+    p.far_end_ended(Door::Sideband, PIECE_LAST, Some("rtc_0"), false);
+    assert!(
+        lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
+        "the refused upgrade frees nothing"
+    );
 }
