@@ -486,8 +486,9 @@ fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
 
 /// The object at `b[open]`, rebuilt: the caller's members not cut, not set and not capped, in order
 /// and byte for byte; then each `set` member (merged into the caller's when both are objects); then
-/// each object a cap reaches into that no `set` member names (the caller's, rebuilt under its caps,
-/// or a new one where a cap is written in the caller's absence); then each cap on this object's own
+/// each object a cap reaches into that no `set` member names (the caller's object, rebuilt under
+/// its caps, or a new one in place of whatever else the caller wrote there, `null` included, or
+/// where a cap is written in the caller's absence); then each cap on this object's own
 /// members ([`Cap`]). Keys are compared under [`field_name`].
 fn object(
     b: &[u8],
@@ -529,11 +530,7 @@ fn object(
     };
     for m in &members {
         let name = field_name(&m.key, proto);
-        if cut.contains(&&*name)
-            || set.contains_key(&*name)
-            || capped(&name)
-            || (reaches(&name) && is_object(m))
-        {
+        if cut.contains(&&*name) || set.contains_key(&*name) || capped(&name) || reaches(&name) {
             continue;
         }
         sep(&mut out);
@@ -565,8 +562,10 @@ fn object(
         let sub = below(parent);
         let rebuilt = match theirs(parent) {
             Some(m) => object(b, m.value.0, &[], &Map::new(), proto, &sub)?,
+            // The caller wrote no object here: none at all, or a value that is not one (`null`, which
+            // a protobuf JSON reader takes as the field unset). Either way the caps are written.
             None if sub.iter().any(|c| c.when_absent)
-                && !members.iter().any(|m| field_name(&m.key, proto) == parent) =>
+                || members.iter().any(|m| field_name(&m.key, proto) == parent) =>
             {
                 serde_json::to_vec(&fresh(&Map::new(), &sub)).ok()?
             }

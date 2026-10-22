@@ -208,7 +208,8 @@ fn a_callers_ga_session_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
 /// naming none, or no `generationConfig` at all, gets the cap; the caller's other
 /// `generationConfig` members keep their values. RED (the lower value): the lock merged its
 /// `maxOutputTokens` over the caller's, so a caller's 200 went out as the cap's 1000. The higher and
-/// absent cases held before as well.
+/// absent cases held before as well. RED (round 4): a `null` generationConfig passed through, and
+/// the cap was never written.
 #[test]
 fn a_gemini_callers_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
     let rule =
@@ -234,4 +235,24 @@ fn a_gemini_callers_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
     assert_eq!(absent["maxOutputTokens"], 1000, "{absent}");
     let none = config(br#"{"setup":{"model":"models/gemini-live"}}"#);
     assert_eq!(none["maxOutputTokens"], 1000, "{none}");
+    // A `null` generationConfig (either spelling) reads under protobuf JSON as the field unset:
+    // left as written, the far end would run at its own default, past the cap.
+    for frame in [
+        &br#"{"setup":{"generationConfig":null}}"#[..],
+        br#"{"setup":{"generation_config":null}}"#,
+    ] {
+        let out = splice(frame, &rule).expect("spliced");
+        let v: Value = serde_json::from_slice(&out).expect("json");
+        assert_eq!(
+            v["setup"]["generationConfig"]["maxOutputTokens"],
+            1000,
+            "{}",
+            text(&out)
+        );
+        assert!(
+            v["setup"].get("generation_config").is_none(),
+            "one spelling: {}",
+            text(&out)
+        );
+    }
 }
