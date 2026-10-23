@@ -885,8 +885,8 @@ impl Plane {
         let generations = lock(&self.generations);
         let (cfg, _) = generations.last()?;
         // The mint binds the browser's session to the section's session under its two token
-        // ceilings, as a socket session is locked.
-        let locked = crate::session_door::with_ceilings(cfg.session.clone(), cfg);
+        // ceilings, as a socket session is locked, and names the session model by its wire name.
+        let locked = crate::session_door::with_ceilings(cfg.wire_session(cfg.session.clone()), cfg);
         let unit = RequestUnit::open(door, locked, caller_ref)?;
         Some(Held {
             unit,

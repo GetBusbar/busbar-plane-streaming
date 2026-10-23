@@ -1697,3 +1697,68 @@ fn a_plain_session_dials_the_session_models_upstream_name() {
         );
     }
 }
+
+/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on Part 2 #51): EVERY
+/// upstream-facing model field carries the resolved upstream model, never the catalog alias: the
+/// mint request's locked `session.model`, the locked `model` a caller's `session.update` is spliced
+/// with on its way to the provider, and the `model` of a Gemini Live caller's `setup`. RED: each
+/// named the catalog name (`m-cap`), which reaches the provider as an unknown model. Both ways.
+#[test]
+fn every_upstream_facing_model_field_names_the_upstream_model() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    let mut transcripts = Vec::new();
+    for p in &doors {
+        assert_eq!(open(p, 1, KEYED_UPSTREAM, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::with_units(1 << 18, 8);
+        let mint = b.call(p, &attempt(70, 0));
+        assert!(
+            mint.contains(r#""model":"gpt-realtime-wire""#) && !mint.contains("m-cap"),
+            "the mint request names the upstream model: {mint}"
+        );
+
+        assert_eq!(
+            arrive_at(p, PLAIN_CLAIM, 71, "/v1/realtime?model=m-cap"),
+            Outcome::Ready
+        );
+        let update = br#"{"type":"session.update","session":{"type":"realtime"}}"#;
+        let spliced = b.call(
+            p,
+            &Push {
+                stream: 71,
+                ..push(71, PLAIN_CLAIM, FROM_CALLER, 0, update)
+            },
+        );
+        assert!(
+            spliced.contains("far=true")
+                && spliced.contains(r#""model":"gpt-realtime-wire""#)
+                && !spliced.contains(r#""model":"m-cap""#),
+            "the caller's session.update reaches the provider with the upstream model: {spliced}"
+        );
+
+        assert_eq!(
+            arrive_at(p, 3, 72, "/v1/realtime/gemini/call-72"),
+            Outcome::Ready
+        );
+        let setup = br#"{"setup":{"model":"models/whatever"}}"#;
+        let gemini = b.call(
+            p,
+            &Push {
+                stream: 72,
+                claim: 3,
+                ..push(72, 3, FROM_CALLER, 0, setup)
+            },
+        );
+        assert!(
+            gemini.contains("far=true")
+                && gemini.contains("gpt-realtime-wire")
+                && !gemini.contains("m-cap"),
+            "the Gemini Live setup reaches the provider with the upstream model: {gemini}"
+        );
+        transcripts.push([mint, spliced, gemini]);
+    }
+    assert_eq!(
+        transcripts[0], transcripts[1],
+        "the two doors must answer identically"
+    );
+}
