@@ -1257,3 +1257,60 @@ fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
         "the two doors must answer identically"
     );
 }
+
+/// The plain OpenAI Realtime socket's claim (`GET /v1/realtime`), after the five call-scoped doors.
+const PLAIN_CLAIM: u32 = 5;
+
+/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on Part 2 #45, "OpenAI Realtime
+/// over WS and WebRTC"): plain server-to-server OpenAI Realtime over WS is its own door, a WS
+/// upgrade on `GET /v1/realtime` as the provider serves it (the caller's `?model=` on its query),
+/// and the sideband is call-attached only. A session on the plain door opens with no call brokered
+/// and dials the provider's realtime socket bare; the same caller's sideband naming a call no
+/// offer here placed is still refused. RED: no `GET /v1/realtime` claim was published, so its
+/// arrival was refused and its session never opened. Both ways.
+#[test]
+fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    let mut transcripts = Vec::new();
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::with_units(1 << 18, 8);
+        let audio = uplink(100);
+
+        assert_eq!(
+            arrive_at(p, PLAIN_CLAIM, 50, "/v1/realtime?model=gpt-realtime"),
+            Outcome::Ready,
+            "the plain socket is a published door"
+        );
+        let plain = b.call(
+            p,
+            &Push {
+                stream: 50,
+                ..push(50, PLAIN_CLAIM, FROM_CALLER, 0, &audio)
+            },
+        );
+        assert!(
+            plain.starts_with("Ready")
+                && plain.contains("far=true")
+                && plain.contains("verb=GET target=/v1/realtime ")
+                && plain.contains("input_audio_buffer.append"),
+            "a plain session opens with no call and dials the realtime socket bare: {plain}"
+        );
+
+        assert_eq!(
+            arrive_at(p, 2, 51, "/v1/realtime/sideband/rtc_plain0051"),
+            Outcome::Ready
+        );
+        let sideband = b.call(p, &session(51, FROM_CALLER, 0, &audio));
+        assert!(
+            sideband.starts_with("Refused"),
+            "the sideband stays call-attached: a call no offer placed is refused: {sideband}"
+        );
+        transcripts.push([plain, sideband]);
+    }
+    assert_eq!(
+        transcripts[0], transcripts[1],
+        "the two doors must answer identically"
+    );
+}
