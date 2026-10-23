@@ -357,10 +357,12 @@ pub struct Sessions {
 
 impl Sessions {
     /// Stream `stream`'s session, opened on `door` under `cfg` at its first piece. `None` for a
-    /// door that answers one request, or a stream past [`MAX_SESSIONS`].
+    /// door that answers one request, a stream past [`MAX_SESSIONS`], or a stream whose session
+    /// ended: a caller's piece after its call ended (a second Twilio `stop`) is refused, as 1.5.5
+    /// refused it, never opened as a fresh session that ends and settles a second time.
     pub fn get_or_open(&mut self, stream: u64, door: Door, cfg: &StreamsCfg) -> Option<&mut Live> {
         if !self.live.contains_key(&stream) {
-            if self.live.len() >= MAX_SESSIONS {
+            if self.live.len() >= MAX_SESSIONS || self.ended.contains(&stream) {
                 return None;
             }
             let rewritten = self.rewritten.remove(&stream);
