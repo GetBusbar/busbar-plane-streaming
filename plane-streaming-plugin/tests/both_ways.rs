@@ -842,7 +842,7 @@ fn arrive_route(p: &Plugin<Plane>, claim: u32) -> (Outcome, u8, String) {
 }
 
 /// Every door that reaches the far end names the DIRECT route `streams.session.model` (the entry the
-/// composition folds from the top-level models catalog); claim 5 (the metadata path) is no claim
+/// composition folds from the top-level models catalog); claim 6 (the metadata path) is no claim
 /// and arrives nowhere; with no model configured nothing is named (the door steps refuse an unnamed keyed route).
 /// Both ways.
 #[test]
@@ -852,7 +852,7 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        for claim in [0, 1, 2, 3, 4] {
+        for claim in [0, 1, 2, 3, 4, PLAIN_CLAIM] {
             assert_eq!(
                 arrive_route(p, claim),
                 (Outcome::Ready, ROUTE_DIRECT, "m-cap".to_string()),
@@ -860,7 +860,7 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
             );
         }
         assert_ne!(
-            arrive_route(p, 5).0,
+            arrive_route(p, 6).0,
             Outcome::Ready,
             "the metadata path is no claim of the plane (1.5.5 parity)"
         );
