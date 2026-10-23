@@ -47,6 +47,12 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
             REALTIME_SOCKET_PATH,
             TWILIO_MEDIA_STREAMS,
         ),
+        (
+            Door::Realtime,
+            RIDES_REALTIME_SOCKET,
+            REALTIME_SOCKET_PATH,
+            OPENAI_REALTIME,
+        ),
     ];
     for (door, need, path, dialect) in served {
         assert_eq!(door.rides(), need, "{door:?} rides its own provider's need");

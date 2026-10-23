@@ -102,6 +102,11 @@ pub const SESSION_POOL: &str = "streaming-server";
 /// The section the plane reads but does not own: the upstream destinations (core's grammar, as the
 /// llm door consumes it).
 pub const PROVIDERS_SECTION: &str = "providers";
+/// The section the plane reads but does not own: the model catalog, whose entry for the session
+/// model names the provider's wire model (`upstream_model`, Part 2 #51).
+pub const MODELS_SECTION: &str = "models";
+/// A model entry's provider wire-model override, inside [`MODELS_SECTION`].
+pub const UPSTREAM_MODEL_KEY: &str = "upstream_model";
 /// Where, inside `streams:`, the upstream a session dials is named.
 pub const EGRESS_TARGET: &str = "session.model";
 /// The inbound auth style of a keyed door.
@@ -126,6 +131,12 @@ const SECTIONS: &[Section] = &[
     },
     Section {
         name: abi_str(PROVIDERS_SECTION),
+        flags: SECTION_CONSUMED,
+        _reserved: 0,
+        ..Section::ZERO
+    },
+    Section {
+        name: abi_str(MODELS_SECTION),
         flags: SECTION_CONSUMED,
         _reserved: 0,
         ..Section::ZERO
@@ -371,9 +382,9 @@ impl Route {
 }
 
 /// The doors, in the order a snapshot claims them: the ephemeral-secret mint and the SDP offer (one
-/// request each), the browser's sideband socket, the Gemini Live socket and the telephony socket.
-/// The three sockets are upgrade lines. The protected-resource metadata path a refused caller is
-/// pointed at is NOT claimed (1.5.5 parity, ARCHITECT 2026-10-04: no accepted difference): the
+/// request each), the browser's sideband socket, the Gemini Live socket, the telephony socket and
+/// the plain OpenAI Realtime socket. The four sockets are upgrade lines. The protected-resource
+/// metadata path a refused caller is pointed at is NOT claimed (1.5.5 parity, ARCHITECT 2026-10-04: no accepted difference): the
 /// data listener's fallback answers it as it did.
 pub const ROUTES: &[Route] = &[
     Route {
@@ -421,6 +432,18 @@ pub const ROUTES: &[Route] = &[
         dialect: 2,
         refusal_dialect: 2,
     },
+    // Plain server-to-server OpenAI Realtime over WS, as the provider serves it: a WS upgrade on
+    // `GET /v1/realtime` (the caller's `?model=` rides its query), a session attached to no call.
+    // The sideband above is call-attached only (ARCHITECT ruling 2026-10-23 on Part 2 #45).
+    Route {
+        verb: "GET",
+        target: "/v1/realtime",
+        carrier: WS_TRANSPORT,
+        upgrade: true,
+        auth: KEY_AUTH,
+        dialect: 0,
+        refusal_dialect: 0,
+    },
 ];
 
 impl Route {
@@ -459,22 +482,44 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
     }
 }
 
-/// THE SECTION A DEALT `validate` BLOB CARRIES. The boot's stage-3g deal hands a declared-verb
-/// plugin `{<verb>: <section>}` (`config_validate::deal`), where `open` and `refresh` are handed the
-/// section itself; the one verb this plane declares is [`SECTION`], so a blob that is exactly
-/// `{streams: …}` is unwrapped to its section and any other blob is the section already.
-#[must_use]
-pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    match serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(settings) {
-        Ok(map) if map.len() == 1 => match map.get(SECTION) {
-            Some(section) => serde_json::to_vec(section).map_or(
-                std::borrow::Cow::Borrowed(settings),
-                std::borrow::Cow::Owned,
-            ),
-            None => std::borrow::Cow::Borrowed(settings),
-        },
-        _ => std::borrow::Cow::Borrowed(settings),
-    }
+/// THE SETTINGS THE HOST HANDS, read: the plane's grammar over its own `streams:` section, with the
+/// session model's provider wire model resolved from the `models` section beside it. A host hands a
+/// plane that consumes sections ONE object keyed by section (spec Part 1, "a plane's settings
+/// reach it as ONE validated JSON object"; architect ruling R-6, 2026-10-23): `{streams: …}` plus
+/// each consumed section the deployment writes. A blob without a `streams` key is the section itself (a host that hands the bare section, or a test), read as
+/// [`read_settings`] reads it. The section's grammar refuses a `streams` key of its own, so the two
+/// forms never read alike.
+///
+/// # Errors
+/// The grammar's reason when the section is not a `streams:` section.
+pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
+    let Ok(serde_json::Value::Object(mut keyed)) =
+        serde_json::from_slice::<serde_json::Value>(settings)
+    else {
+        return read_settings(settings);
+    };
+    let Some(section) = keyed.remove(SECTION) else {
+        return read_settings(settings);
+    };
+    let mut cfg = if section.is_null() {
+        read_settings(&[])?
+    } else {
+        serde_json::from_value::<StreamsCfg>(section).map_err(|e| e.to_string())?
+    };
+    cfg.upstream_model = cfg
+        .session
+        .model
+        .as_deref()
+        .and_then(|model| {
+            keyed
+                .get(MODELS_SECTION)?
+                .get(model)?
+                .get(UPSTREAM_MODEL_KEY)
+        })
+        .and_then(serde_json::Value::as_str)
+        .filter(|wire| !wire.is_empty())
+        .map(str::to_owned);
+    Ok(cfg)
 }
 
 /// ONE READING of the public base URL: parse it and REPLACE the path wholesale, dropping query and
@@ -936,14 +981,14 @@ macro_rules! slot {
 }
 
 slot!(Validate, ValidateIn, OutHead, |_, input, out| {
-    match read_settings(&dealt_section(input.settings().bytes())) {
+    match read_dealt(input.settings().bytes()) {
         Ok(_) => Outcome::Ready,
         Err(words) => out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words)),
     }
 });
 
 slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
-    let Ok(cfg) = read_settings(input.open().settings().bytes()) else {
+    let Ok(cfg) = read_dealt(input.open().settings().bytes()) else {
         return Outcome::Refused;
     };
     let public_url = input
@@ -977,7 +1022,7 @@ slot!(
         let Some(p) = instance.get() else {
             return Outcome::Failed;
         };
-        let Ok(cfg) = read_settings(input.settings().bytes()) else {
+        let Ok(cfg) = read_dealt(input.settings().bytes()) else {
             return Outcome::Refused;
         };
         p.publish(&mut out, |o| &o.snapshot, input.generation(), cfg);

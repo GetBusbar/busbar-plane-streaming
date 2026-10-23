@@ -75,7 +75,7 @@ pub enum Side {
 /// The session over its door's codec.
 #[derive(Debug)]
 enum Unit {
-    /// The OpenAI Realtime far end (the sideband socket and the telephony socket).
+    /// The OpenAI Realtime far end (the sideband, telephony and plain realtime sockets).
     Realtime(SessionUnit<OpenAiRealtimeCodec>),
     /// The Gemini Live far end.
     Gemini(SessionUnit<GeminiLiveCodec>),
@@ -119,6 +119,11 @@ pub struct Live {
     /// fee unit was reported by the SDP offer that brokered it, so an attached session reports
     /// none of its own: one fee per call.
     call_id: Option<String>,
+    /// The model a session attached to no call names on its dial (`?model=`): the provider's wire
+    /// name for the session model its route was named for (the catalog entry's `upstream_model`,
+    /// else its name; Part 2 #51), on the plain realtime and telephony doors; `None` on the sideband
+    /// (it names its call) and on the Gemini Live socket (its model rides the setup frame).
+    dial_model: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
     pub(crate) near: crate::piece::Owed,
     /// What the frame a far-side answer is writing still owes the reply buffer.
@@ -162,7 +167,7 @@ impl Live {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
         let locked = with_ceilings(rewritten.unwrap_or_else(|| Self::locked(door, cfg)), cfg);
         let unit = match door {
-            Door::Sideband => Unit::Realtime(SessionUnit::open(
+            Door::Sideband | Door::Realtime => Unit::Realtime(SessionUnit::open(
                 OpenAiRealtimeCodec,
                 locked,
                 false,
@@ -190,6 +195,13 @@ impl Live {
             answered: false,
             accepted: false,
             call_id: None,
+            dial_model: match door {
+                Door::Realtime | Door::Twilio => cfg
+                    .upstream_model
+                    .clone()
+                    .or_else(|| cfg.session.model.clone()),
+                _ => None,
+            },
             near: crate::piece::Owed::default(),
             far: crate::piece::Owed::default(),
             short_near: None,
@@ -219,14 +231,20 @@ impl Live {
         self.call_id.as_deref()
     }
 
-    /// The target the session dials under the member's base URL: the dialect's socket `path`, and
-    /// for a session attached to a provider's call, that call (`?call_id=`, the provider's sideband
-    /// connection to the call's own session).
+    /// The target the session dials under the member's base URL: the dialect's socket `path`; for
+    /// a session attached to a provider's call, that call only (`?call_id=`, the provider's
+    /// sideband connection to the call's own session); for a plain or telephony session, the
+    /// session's model (`?model=`, form-escaped, as OpenAI's own WS surface takes it; ARCHITECT
+    /// ruling 2026-10-23 on Part 2 #45).
     #[must_use]
     pub fn dial_target(&self, path: &str) -> String {
-        match &self.call_id {
-            Some(id) => format!("{path}?call_id={id}"),
-            None => path.to_string(),
+        match (&self.call_id, &self.dial_model) {
+            (Some(id), _) => format!("{path}?call_id={id}"),
+            (None, Some(model)) => format!(
+                "{path}?model={}",
+                url::form_urlencoded::byte_serialize(model.as_bytes()).collect::<String>()
+            ),
+            (None, None) => path.to_string(),
         }
     }
 
@@ -392,10 +410,12 @@ pub struct Sessions {
 
 impl Sessions {
     /// Stream `stream`'s session, opened on `door` under `cfg` at its first piece. `None` for a
-    /// door that answers one request, or a stream past [`MAX_SESSIONS`].
+    /// door that answers one request, a stream past [`MAX_SESSIONS`], or a stream whose session
+    /// ended: a caller's piece after its call ended (a second Twilio `stop`) is refused, as 1.5.5
+    /// refused it, never opened as a fresh session that ends and settles a second time.
     pub fn get_or_open(&mut self, stream: u64, door: Door, cfg: &StreamsCfg) -> Option<&mut Live> {
         if !self.live.contains_key(&stream) {
-            if self.live.len() >= MAX_SESSIONS {
+            if self.live.len() >= MAX_SESSIONS || self.ended.contains(&stream) {
                 return None;
             }
             let rewritten = self.rewritten.remove(&stream);
