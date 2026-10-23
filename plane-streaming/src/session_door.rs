@@ -159,7 +159,8 @@ impl Live {
         rewritten: Option<SessionConfig>,
     ) -> Option<Live> {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
-        let locked = rewritten.unwrap_or_else(|| Self::locked(door, cfg));
+        // The locked session as the provider is told it: the session model by its wire name.
+        let locked = cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg)));
         let unit = match door {
             Door::Sideband | Door::Realtime => Unit::Realtime(SessionUnit::open(
                 OpenAiRealtimeCodec,

@@ -170,6 +170,21 @@ impl Default for StreamsCfg {
     }
 }
 
+impl StreamsCfg {
+    /// `session` as a provider is told it: a `model` that is the session model this section names
+    /// carries that model's provider wire name (`upstream_model`; Part 2 #51, ARCHITECT ruling
+    /// 2026-10-23: a catalog alias never reaches a provider). Any other session is unchanged.
+    #[must_use]
+    pub fn wire_session(&self, mut session: SessionConfig) -> SessionConfig {
+        if let (Some(wire), Some(model)) = (&self.upstream_model, &self.session.model) {
+            if session.model.as_ref() == Some(model) {
+                session.model = Some(wire.clone());
+            }
+        }
+        session
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/config_tests.rs"]
 mod tests;
