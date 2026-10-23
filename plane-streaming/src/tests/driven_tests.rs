@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn every_published_claim_arrives_at_its_door_in_its_dialect() {
-    let doors: Vec<_> = (0..5)
+    let doors: Vec<_> = (0..6)
         .map(|c| arrive(c).map(|a| (a.door, a.dialect, a.op_class)))
         .collect();
     assert_eq!(
@@ -18,14 +18,15 @@ fn every_published_claim_arrives_at_its_door_in_its_dialect() {
             Some((Door::Sideband, 0, 0)),
             Some((Door::Gemini, 1, 0)),
             Some((Door::Twilio, 2, 0)),
+            Some((Door::Realtime, 0, 0)),
         ]
     );
     assert_eq!(
-        arrive(5),
+        arrive(6),
         None,
         "a claim the plane never published arrives nowhere (the metadata path is no claim)"
     );
-    assert_eq!(crate::door::ROUTES.len(), 5, "one door per published claim");
+    assert_eq!(crate::door::ROUTES.len(), 6, "one door per published claim");
 }
 
 #[test]

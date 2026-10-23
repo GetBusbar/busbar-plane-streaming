@@ -235,7 +235,7 @@ fn script(p: &Plugin<Plane>, public_url: Option<&'static str>) -> Vec<String> {
         p.call(life::RETIRE, &mut g).outcome
     ));
 
-    for claim in [3, 5, 9] {
+    for claim in [3, 6, 9] {
         let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
         a.input.head = in_head();
         a.input.claim = claim;
@@ -274,7 +274,7 @@ const PUBLIC: &str = "https://gw.example.com/ignored?q=1#f";
 fn expected(public: bool) -> Vec<String> {
     let doors = "POST /v1/realtime/client_secrets http exact, POST /v1/realtime/calls http exact, \
                  GET /v1/realtime/sideband/{call_id} ws, GET /v1/realtime/gemini/{call_id} ws, \
-                 GET /twilio/{call_id} ws";
+                 GET /twilio/{call_id} ws, GET /v1/realtime ws exact";
     let (claims, audience, metadata) = if public {
         (
             doors,
@@ -298,7 +298,7 @@ fn expected(public: bool) -> Vec<String> {
         format!("refresh Ready {}", snap(2)),
         "retire 1 Ready".into(),
         "arrive 3 Ready dialect=1 op=0 principal=1".into(),
-        "arrive 5 Refused dialect=0 op=0 principal=0".into(),
+        "arrive 6 Refused dialect=0 op=0 principal=0".into(),
         "arrive 9 Refused dialect=0 op=0 principal=0".into(),
         "tick Ready next=0".into(),
         "cancel Ready failed=true".into(),
@@ -556,7 +556,7 @@ fn unit_script(p: &Plugin<Plane>) -> Vec<String> {
 
     t.push(format!("sideband {}", b.call(p, &attempt(10, 2))));
     t.push(format!("unpublished {}", b.call(p, &attempt(11, 9))));
-    t.push(format!("metadata path {}", b.call(p, &attempt(12, 5))));
+    t.push(format!("metadata path {}", b.call(p, &attempt(12, 6))));
     t
 }
 

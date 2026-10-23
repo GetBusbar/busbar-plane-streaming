@@ -75,7 +75,7 @@ pub enum Side {
 /// The session over its door's codec.
 #[derive(Debug)]
 enum Unit {
-    /// The OpenAI Realtime far end (the sideband socket and the telephony socket).
+    /// The OpenAI Realtime far end (the sideband, telephony and plain realtime sockets).
     Realtime(SessionUnit<OpenAiRealtimeCodec>),
     /// The Gemini Live far end.
     Gemini(SessionUnit<GeminiLiveCodec>),
@@ -156,7 +156,7 @@ impl Live {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
         let locked = rewritten.unwrap_or_else(|| Self::locked(door, cfg));
         let unit = match door {
-            Door::Sideband => Unit::Realtime(SessionUnit::open(
+            Door::Sideband | Door::Realtime => Unit::Realtime(SessionUnit::open(
                 OpenAiRealtimeCodec,
                 locked,
                 false,
