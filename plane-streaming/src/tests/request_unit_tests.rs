@@ -50,7 +50,7 @@ fn reply(a: Answer) -> Reply {
 
 #[test]
 fn a_session_door_is_no_request_unit() {
-    for door in [Door::Sideband, Door::Gemini, Door::Twilio] {
+    for door in [Door::Sideband, Door::Gemini, Door::Twilio, Door::Realtime] {
         assert!(RequestUnit::open(door, SessionConfig::default(), None).is_none());
     }
 }

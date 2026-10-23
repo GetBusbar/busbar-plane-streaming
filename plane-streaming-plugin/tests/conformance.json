@@ -40,6 +40,10 @@
       [
         "GET",
         "/twilio/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime"
       ]
     ],
     "refresh_claims": [
@@ -62,6 +66,10 @@
       [
         "GET",
         "/twilio/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime"
       ]
     ],
     "member": "m-cap",
@@ -140,7 +148,9 @@
             },
             "want": {
               "outcome": "Ready",
-              "to_far_end": true
+              "to_far_end": true,
+              "verb": "GET",
+              "target": "/v1/realtime?call_id=rtc_oracle0001"
             }
           },
           {

@@ -7,7 +7,7 @@ use super::*;
 
 #[test]
 fn every_published_claim_arrives_at_its_door_in_its_dialect() {
-    let doors: Vec<_> = (0..5)
+    let doors: Vec<_> = (0..6)
         .map(|c| arrive(c).map(|a| (a.door, a.dialect, a.op_class)))
         .collect();
     assert_eq!(
@@ -18,14 +18,15 @@ fn every_published_claim_arrives_at_its_door_in_its_dialect() {
             Some((Door::Sideband, 0, 0)),
             Some((Door::Gemini, 1, 0)),
             Some((Door::Twilio, 2, 0)),
+            Some((Door::Realtime, 0, 0)),
         ]
     );
     assert_eq!(
-        arrive(5),
+        arrive(6),
         None,
         "a claim the plane never published arrives nowhere (the metadata path is no claim)"
     );
-    assert_eq!(crate::door::ROUTES.len(), 5, "one door per published claim");
+    assert_eq!(crate::door::ROUTES.len(), 6, "one door per published claim");
 }
 
 #[test]
@@ -194,4 +195,36 @@ fn each_loop_step_has_the_planes_answer() {
     units.0[4] = 2;
     assert_eq!(Door::Sideband.meter(&units), vec![(1, 20), (4, 2)]);
     assert_eq!(Door::Mint.audit(), "streaming.session.open");
+}
+
+/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on `BUSBAR-1.6.0.md` Part 2 #45,
+/// "OpenAI Realtime over WS and WebRTC"): plain server-to-server OpenAI Realtime over WS is its own
+/// door, mirroring the provider's surface, a WS upgrade on `GET /v1/realtime` (the caller's
+/// `?model=` rides its query); the sideband is call-attached only. The plain door is a keyed
+/// session door in the OpenAI Realtime dialect that dials the provider's realtime socket bare,
+/// attached to no call. RED: no `GET /v1/realtime` line was published.
+#[test]
+fn plain_openai_realtime_over_ws_is_its_own_session_door() {
+    let i = crate::door::ROUTES
+        .iter()
+        .position(|r| r.verb == "GET" && r.target == "/v1/realtime")
+        .expect("GET /v1/realtime is a published door");
+    let line = crate::door::ROUTES[i];
+    assert!(line.upgrade, "the plain socket is an upgrade line");
+    assert_eq!(line.carrier, crate::claims::WS_TRANSPORT);
+    assert_eq!(line.auth, crate::door::KEY_AUTH, "a keyed door");
+    let a = arrive(i as u32).expect("the plain socket arrives at a door");
+    assert!(a.door.is_session(), "it opens a live session");
+    assert_eq!(a.dialect, 0, "in the OpenAI Realtime dialect");
+    assert_eq!(a.door.rides(), crate::door::RIDES_REALTIME_SOCKET);
+    let dial = a
+        .door
+        .route(&SessionConfig::default(), None, b"")
+        .expect("routes")
+        .expect("a session door dials");
+    assert_eq!(
+        (dial.verb, dial.target),
+        ("GET", REALTIME_SOCKET_PATH),
+        "the plain session dials the provider's realtime socket, attached to no call"
+    );
 }
