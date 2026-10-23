@@ -1641,11 +1641,6 @@ fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
 /// by section; architect ruling 2026-10-23 R-6): the plane's own `streams:` beside the `models`
 /// map, whose entry for the session model names the provider's wire model.
 const KEYED_UPSTREAM: &[u8] = br#"{"streams":{"session":{"model":"m-cap"}},"models":{"m-cap":{"provider":"p","upstream_model":"gpt-realtime-wire"}}}"#;
-
-/// The settings the host hands a plane that consumes sections (spec Part 1: one object keyed
-/// by section; architect ruling 2026-10-23 R-6): the plane's own `streams:` beside the `models`
-/// map, whose entry for the session model names the provider's wire model.
-const KEYED_UPSTREAM: &[u8] = br#"{"streams":{"session":{"model":"m-cap"}},"models":{"m-cap":{"provider":"p","upstream_model":"gpt-realtime-wire"}}}"#;
 /// The same, the model entry naming no override.
 const KEYED_PLAIN: &[u8] =
     br#"{"streams":{"session":{"model":"m-cap"}},"models":{"m-cap":{"provider":"p"}}}"#;
