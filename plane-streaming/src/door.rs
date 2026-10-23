@@ -502,8 +502,9 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
 
 /// THE SETTINGS THE HOST HANDS, read: the plane's grammar over its own `streams:` section, with the
 /// session model's provider wire model resolved from the `models` section beside it. A host hands a
-/// plane that consumes sections ONE object keyed by section (spec Part 1 §4; architect ruling R-6,
-/// 2026-10-23): `{streams: …}` plus each consumed section the deployment writes. A blob without a
+/// plane that consumes sections ONE object keyed by section (spec Part 1, "a plane's settings
+/// reach it as ONE validated JSON object"; architect ruling R-6, 2026-10-23): `{streams: …}` plus
+/// each consumed section the deployment writes. A blob without a
 /// `streams` key is the section itself (a host that hands the bare section, or a test), read as
 /// [`read_settings`] reads it. The section's grammar refuses a `streams` key of its own, so the two
 /// forms never read alike.
