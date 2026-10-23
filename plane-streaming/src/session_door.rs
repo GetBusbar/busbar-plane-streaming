@@ -115,8 +115,9 @@ pub struct Live {
     answered: bool,
     /// The provider's call a sideband session attaches to, as its arrival named it.
     call_id: Option<String>,
-    /// The model a session attached to no call names on its dial (`?model=`): the session model
-    /// its route was named for, on the plain realtime and telephony doors; `None` on the sideband
+    /// The model a session attached to no call names on its dial (`?model=`): the provider's wire
+    /// name for the session model its route was named for (the catalog entry's `upstream_model`,
+    /// else its name; Part 2 #51), on the plain realtime and telephony doors; `None` on the sideband
     /// (it names its call) and on the Gemini Live socket (its model rides the setup frame).
     dial_model: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
@@ -188,7 +189,10 @@ impl Live {
             answered: false,
             call_id: None,
             dial_model: match door {
-                Door::Realtime | Door::Twilio => cfg.session.model.clone(),
+                Door::Realtime | Door::Twilio => cfg
+                    .upstream_model
+                    .clone()
+                    .or_else(|| cfg.session.model.clone()),
                 _ => None,
             },
             near: crate::piece::Owed::default(),
