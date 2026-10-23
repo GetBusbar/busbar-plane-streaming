@@ -394,8 +394,8 @@ impl Route {
 }
 
 /// The doors, in the order a snapshot claims them: the ephemeral-secret mint and the SDP offer (one
-/// request each), the browser's sideband socket, the Gemini Live socket and the telephony socket.
-/// The three sockets are upgrade lines. The protected-resource metadata path a refused caller is
+/// request each), the browser's sideband socket, the Gemini Live socket, the telephony socket and
+/// the plain OpenAI Realtime socket. The four sockets are upgrade lines. The protected-resource metadata path a refused caller is
 /// pointed at is NOT claimed (1.5.5 parity, ARCHITECT 2026-10-04: no accepted difference): the
 /// data listener's fallback answers it as it did.
 pub const ROUTES: &[Route] = &[
@@ -443,6 +443,18 @@ pub const ROUTES: &[Route] = &[
         auth: SIGNATURE_AUTH,
         dialect: 2,
         refusal_dialect: 2,
+    },
+    // Plain server-to-server OpenAI Realtime over WS, as the provider serves it: a WS upgrade on
+    // `GET /v1/realtime` (the caller's `?model=` rides its query), a session attached to no call.
+    // The sideband above is call-attached only (ARCHITECT ruling 2026-10-23 on Part 2 #45).
+    Route {
+        verb: "GET",
+        target: "/v1/realtime",
+        carrier: WS_TRANSPORT,
+        upgrade: true,
+        auth: KEY_AUTH,
+        dialect: 0,
+        refusal_dialect: 0,
     },
 ];
 
