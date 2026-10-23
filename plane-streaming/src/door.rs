@@ -666,7 +666,7 @@ impl Plane {
         let door = Door::of(claim)?;
         let generations = lock(&self.generations);
         let (cfg, _) = generations.last()?;
-        let unit = RequestUnit::open(door, cfg.session.clone(), caller_ref)?;
+        let unit = RequestUnit::open(door, cfg.wire_session(cfg.session.clone()), caller_ref)?;
         Some(Held {
             unit,
             owed: Owed::default(),
