@@ -579,7 +579,7 @@ fn an_ended_stream_is_never_opened_again() {
         all.get_or_open(8, Door::Sideband, &cfg).is_none(),
         "a cancelled call"
     );
-    assert!(all.is_empty());
+    assert_eq!(all.len(), 0);
 }
 
 /// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on `BUSBAR-1.6.0.md` Part 2 #45:
