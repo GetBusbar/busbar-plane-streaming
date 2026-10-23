@@ -113,6 +113,8 @@ pub struct Live {
     started_ns: Option<u64>,
     /// The far end has answered the session: its fee unit was incurred.
     answered: bool,
+    /// The provider's call a sideband session attaches to, as its arrival named it.
+    call_id: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
     pub(crate) near: crate::piece::Owed,
     /// What the frame a far-side answer is writing still owes the reply buffer.
@@ -180,11 +182,28 @@ impl Live {
             ceiling_secs: ceiling,
             started_ns: None,
             answered: false,
+            call_id: None,
             near: crate::piece::Owed::default(),
             far: crate::piece::Owed::default(),
             short_near: None,
             short_far: None,
         })
+    }
+
+    /// The provider's call this session attaches to (the sideband door's `{call_id}`).
+    pub fn attach(&mut self, call_id: String) {
+        self.call_id = Some(call_id);
+    }
+
+    /// The target the session dials under the member's base URL: the dialect's socket `path`, and
+    /// for a session attached to a provider's call, that call (`?call_id=`, the provider's sideband
+    /// connection to the call's own session).
+    #[must_use]
+    pub fn dial_target(&self, path: &str) -> String {
+        match &self.call_id {
+            Some(id) => format!("{path}?call_id={id}"),
+            None => path.to_string(),
+        }
     }
 
     /// Queue what `plan` owes either side, the far end's frames first.

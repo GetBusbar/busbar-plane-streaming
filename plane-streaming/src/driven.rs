@@ -226,8 +226,27 @@ impl Steps for Door {
 /// The action a session open is audited under.
 pub const SESSION_OPEN_ACTION: &str = "streaming.session.open";
 
-/// The realtime socket an OpenAI Realtime session dials, under the member's base URL.
+/// The realtime socket an OpenAI Realtime session dials, under the member's base URL. A sideband
+/// session attaches to its provider call there (`?call_id=`, `crate::session_door::Live::dial_target`).
 pub const REALTIME_SOCKET_PATH: &str = "/v1/realtime";
+
+/// The sideband door's path, before its `{call_id}` segment.
+pub const SIDEBAND_PREFIX: &str = "/v1/realtime/sideband/";
+
+/// The provider call a sideband arrival's `target` names: its `{call_id}` segment, less any query
+/// or fragment. `None` for a segment that is empty or holds anything but ASCII letters, digits, `_`
+/// and `-` (the provider's call ids, `rtc_…`): the id is dialled as a query value, so nothing that
+/// could carry another parameter into it is taken.
+#[must_use]
+pub fn sideband_call_id(target: &str) -> Option<&str> {
+    let id = target.strip_prefix(SIDEBAND_PREFIX)?;
+    let id = id.split(['?', '#']).next().unwrap_or(id);
+    let well_formed = !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    well_formed.then_some(id)
+}
 
 /// The socket a Gemini Live session dials, under the member's base URL.
 pub const GEMINI_SOCKET_PATH: &str =
@@ -289,7 +308,8 @@ pub struct Reply {
     pub fields: Vec<(&'static str, String)>,
     /// The body.
     pub body: Vec<u8>,
-    /// For an SDP answer that names its call: the provider's `rtc_` call id, for the session record.
+    /// For an SDP answer that names its call: the provider's `rtc_` call id, read off its
+    /// `Location`: the call the caller's own sideband may attach to.
     pub rtc_call_id: Option<String>,
 }
 
@@ -332,7 +352,8 @@ pub fn mint_reply(status: u16, body: &[u8]) -> Reply {
 }
 
 /// The caller's answer to the far end's SDP answer: its status, its body as an SDP answer, and its
-/// `Location` when it named one; the call id in that `Location` goes to the session record.
+/// `Location` when it named one; the call id in that `Location` is the call the caller's sideband
+/// may attach to.
 #[must_use]
 pub fn sdp_reply(status: u16, location: Option<&str>, body: &[u8]) -> Reply {
     let mut fields = vec![(FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string())];

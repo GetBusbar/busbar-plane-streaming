@@ -432,6 +432,8 @@ struct Push<'a> {
     bytes: &'a [u8],
     status: u32,
     head: &'a [Field],
+    /// The kernel's reference for the piece's caller.
+    caller: &'static str,
 }
 
 impl Bufs {
@@ -457,7 +459,7 @@ impl Bufs {
         (i.unit, i.claim, i.from, i.flags) = (push.unit, push.claim, push.from, push.flags);
         i.stream = push.stream;
         (i.attempt_no, i.bytes, i.status_code) = (push.attempt_no, octets(push.bytes), push.status);
-        i.caller_ref = text(CALLER_REF);
+        i.caller_ref = text(push.caller);
         if !push.head.is_empty() {
             (i.head_fields, i.head_fields_len) = (push.head.as_ptr(), push.head.len());
         }
@@ -510,6 +512,7 @@ const fn push(unit: u64, claim: u32, from: u32, flags: u32, bytes: &[u8]) -> Pus
         bytes,
         status: 0,
         head: &[],
+        caller: CALLER_REF,
     }
 }
 
@@ -629,6 +632,65 @@ const fn session(stream: u64, from: u32, flags: u32, bytes: &[u8]) -> Push<'_> {
     }
 }
 
+/// Where the call the live session attaches to lives, as the SDP offer's far end answered it.
+const LIVE_CALL_LOCATION: &str = "/v1/realtime/calls/rtc_both0020";
+/// The sideband path that names that call.
+const LIVE_SIDEBAND: &str = "/v1/realtime/sideband/rtc_both0020";
+
+/// `arrive` of `unit` on `claim` at `target`: its outcome.
+fn arrive_at(p: &Plugin<Plane>, claim: u32, unit: u64, target: &'static str) -> Outcome {
+    let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
+    a.input.head = in_head();
+    (a.input.unit, a.input.claim) = (unit, claim);
+    (a.input.method, a.input.target) = (text("GET"), text(target));
+    a.out.head = out_head();
+    p.call(slot::ARRIVE, &mut a).outcome
+}
+
+/// The SDP door brokers `unit`'s offer for `caller`, its far end answering that the call lives at
+/// `location`: the far end's answer to the caller, as text.
+fn broker(
+    p: &Plugin<Plane>,
+    b: &mut Bufs,
+    unit: u64,
+    caller: &'static str,
+    location: &'static str,
+) -> String {
+    let _ = b.call(
+        p,
+        &Push {
+            caller,
+            ..attempt(unit, 1)
+        },
+    );
+    let _ = b.call(
+        p,
+        &Push {
+            caller,
+            ..push(unit, 1, FROM_CALLER, PIECE_LAST, OFFER)
+        },
+    );
+    let head = [Field {
+        name: text("location"),
+        value: text(location),
+    }];
+    b.call(
+        p,
+        &Push {
+            status: 201,
+            head: &head,
+            caller,
+            ..push(
+                unit,
+                1,
+                FROM_FAR_END,
+                PIECE_HAS_STATUS | PIECE_LAST,
+                SDP_ANSWER,
+            )
+        },
+    )
+}
+
 /// `ms` milliseconds of 24 kHz PCM16 uplink audio, as the caller's realtime frame.
 fn uplink(ms: usize) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({"type":"input_audio_buffer.append",
@@ -638,8 +700,9 @@ fn uplink(ms: usize) -> Vec<u8> {
 
 const USAGE_DONE: &[u8] = br#"{"type":"response.done","response":{"usage":{"input_token_details":{"audio_tokens":10,"text_tokens":3},"output_token_details":{"audio_tokens":20,"text_tokens":4}}}}"#;
 
-/// THE SESSION SCRIPT, in the order the driver pushes a session's pieces: the caller's audio (a
-/// turn toward the far end), the turn's ATTEMPT, the far end's usage, a collection with nothing
+/// THE SESSION SCRIPT, in the order the driver pushes a session's pieces: the SDP offer that
+/// brokers the call and the sideband arrival that names it, the caller's audio (a turn toward the
+/// far end), the turn's ATTEMPT, the far end's usage, a collection with nothing
 /// owed, an answer short of unit room and its re-call, and the caller's end.
 fn session_script(p: &Plugin<Plane>) -> Vec<String> {
     let mut t = vec![format!("open {:?}", open(p, 1, SESSION, Some(PUBLIC)).0)];
@@ -648,6 +711,11 @@ fn session_script(p: &Plugin<Plane>) -> Vec<String> {
         let answer = b.call(p, push);
         t.push(format!("{what} {answer} units=[{}]", b.last_units));
     };
+    t.push(format!(
+        "broker {}",
+        broker(p, &mut b, 19, CALLER_REF, LIVE_CALL_LOCATION)
+    ));
+    t.push(format!("arrive {:?}", arrive_at(p, 2, 20, LIVE_SIDEBAND)));
     let audio = uplink(2000);
     line(
         &mut t,
@@ -698,10 +766,16 @@ fn a_live_session_is_answered_through_the_door() {
             .clone()
     };
     assert_eq!(t[0], "open Ready");
+    assert!(
+        line("broker").contains("done=true status=201"),
+        "{}",
+        line("broker")
+    );
+    assert_eq!(line("arrive"), "arrive Ready");
     let caller = line("caller audio");
     assert!(
         caller.contains("far=true")
-            && caller.contains("verb=GET target=/v1/realtime ")
+            && caller.contains("verb=GET target=/v1/realtime?call_id=rtc_both0020 ")
             && caller.contains("input_audio_buffer.append")
             && caller.contains(&payload)
             && caller.contains("more=0")
@@ -873,6 +947,9 @@ fn every_far_request_names_the_need_it_rides() {
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::with_units(1 << 18, 8);
+        // The sideband session attaches to a call the SDP door brokered for its caller.
+        let _ = broker(p, &mut b, 39, CALLER_REF, LIVE_CALL_LOCATION);
+        assert_eq!(arrive_at(p, 2, 40, LIVE_SIDEBAND), Outcome::Ready);
         let answer = b.call(p, &session(40, FROM_CALLER, 0, &uplink(100)));
         assert!(answer.contains("far=true"), "{answer}");
         assert_eq!(b.last_need, door::RIDES_REALTIME_SOCKET, "{answer}");
@@ -1039,6 +1116,10 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(1 << 16);
+        let _ = broker(p, &mut b, 129, CALLER_REF, LIVE_CALL_LOCATION);
+        for unit in [130, 132] {
+            assert_eq!(arrive_at(p, 2, unit, LIVE_SIDEBAND), Outcome::Ready);
+        }
         let audio = uplink(100);
         let _ = b.call(p, &session(130, FROM_CALLER, 0, &audio));
         let _ = b.call(p, &session(132, FROM_CALLER, 0, &audio));
@@ -1083,4 +1164,96 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
             "a refusal before the upgrade keeps the REST envelope"
         );
     }
+}
+
+/// RED-BEFORE-GREEN (busbar row 159, `crates/busbar-plane-streaming/src` round 2: "The sideband
+/// door attaches to no call"; Part 2 #45: OpenAI Realtime over WebRTC, the browser never holding
+/// the real key; OpenAI's sideband connection is `wss://api.openai.com/v1/realtime?call_id=rtc_…`,
+/// the call id read off the SDP answer's `Location`). A sideband session dials the provider call
+/// its arrival's `{call_id}` names (any query on the arrival dropped), and only a call the SDP door
+/// brokered for the same caller: a sideband with no arrival, one naming a call no offer here
+/// created, one naming another caller's call, and one whose call id could carry another query
+/// parameter are each refused, never dialled as a fresh session. RED: every sideband dialled bare
+/// `/v1/realtime`, a new session unrelated to the browser's call. Both ways.
+#[test]
+fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    let mut transcripts = Vec::new();
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::with_units(1 << 18, 8);
+        let audio = uplink(100);
+        let brokered = broker(p, &mut b, 40, CALLER_REF, "/v1/realtime/calls/rtc_both0040");
+        assert!(brokered.contains("done=true status=201"), "{brokered}");
+
+        assert_eq!(
+            arrive_at(p, 2, 41, "/v1/realtime/sideband/rtc_both0040"),
+            Outcome::Ready
+        );
+        let attached = b.call(p, &session(41, FROM_CALLER, 0, &audio));
+        assert!(
+            attached.starts_with("Ready")
+                && attached.contains("far=true")
+                && attached.contains("verb=GET target=/v1/realtime?call_id=rtc_both0040 "),
+            "the sideband dials the call its arrival names: {attached}"
+        );
+
+        assert_eq!(
+            arrive_at(p, 2, 42, "/v1/realtime/sideband/rtc_both0040?model=other#f"),
+            Outcome::Ready
+        );
+        let queried = b.call(p, &session(42, FROM_CALLER, 0, &audio));
+        assert!(
+            queried.contains("verb=GET target=/v1/realtime?call_id=rtc_both0040 "),
+            "the arrival's own query never reaches the dial: {queried}"
+        );
+
+        let bare = b.call(p, &session(43, FROM_CALLER, 0, &audio));
+        assert!(
+            bare.starts_with("Refused"),
+            "a sideband whose arrival named no call is refused: {bare}"
+        );
+
+        assert_eq!(
+            arrive_at(p, 2, 44, "/v1/realtime/sideband/rtc_nobody0044"),
+            Outcome::Ready
+        );
+        let unknown = b.call(p, &session(44, FROM_CALLER, 0, &audio));
+        assert!(
+            unknown.starts_with("Refused"),
+            "a call no offer here brokered is refused: {unknown}"
+        );
+
+        assert_eq!(
+            arrive_at(p, 2, 45, "/v1/realtime/sideband/rtc_both0040"),
+            Outcome::Ready
+        );
+        let other = b.call(
+            p,
+            &Push {
+                caller: "0ther",
+                ..session(45, FROM_CALLER, 0, &audio)
+            },
+        );
+        assert!(
+            other.starts_with("Refused"),
+            "another caller's call is refused: {other}"
+        );
+
+        assert_eq!(
+            arrive_at(p, 2, 46, "/v1/realtime/sideband/rtc_both0040%26model%3Dx"),
+            Outcome::Ready
+        );
+        let smuggled = b.call(p, &session(46, FROM_CALLER, 0, &audio));
+        assert!(
+            smuggled.starts_with("Refused"),
+            "a call id that could carry another parameter is refused: {smuggled}"
+        );
+        transcripts.push([attached, queried, bare, unknown, other, smuggled]);
+    }
+    assert_eq!(
+        transcripts[0], transcripts[1],
+        "the two doors must answer identically"
+    );
 }
