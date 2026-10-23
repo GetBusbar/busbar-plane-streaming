@@ -40,6 +40,10 @@
       [
         "GET",
         "/twilio/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime"
       ]
     ],
     "refresh_claims": [
@@ -62,6 +66,10 @@
       [
         "GET",
         "/twilio/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime"
       ]
     ],
     "member": "m-cap",

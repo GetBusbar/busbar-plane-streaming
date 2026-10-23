@@ -15,8 +15,8 @@ use crate::session_unit::{CumulativeUnits, Plan, SessionUnit};
 /// One live session, over the codec its door speaks.
 #[derive(Debug)]
 pub enum Session {
-    /// The OpenAI Realtime dialect: the browser sideband, or the telephony door behind the Twilio
-    /// envelope.
+    /// The OpenAI Realtime dialect: the browser sideband, the plain realtime socket, or the
+    /// telephony door behind the Twilio envelope.
     Realtime(SessionUnit<OpenAiRealtimeCodec>),
     /// The Gemini Live dialect.
     Gemini(SessionUnit<GeminiLiveCodec>),
@@ -36,7 +36,7 @@ pub fn open(
     owner: &str,
 ) -> Option<Session> {
     Some(match door {
-        Door::Sideband => Session::Realtime(SessionUnit::open_as(
+        Door::Sideband | Door::Realtime => Session::Realtime(SessionUnit::open_as(
             OpenAiRealtimeCodec,
             locked.clone(),
             false,

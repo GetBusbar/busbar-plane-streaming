@@ -235,7 +235,7 @@ fn script(p: &Plugin<Plane>, public_url: Option<&'static str>) -> Vec<String> {
         p.call(life::RETIRE, &mut g).outcome
     ));
 
-    for claim in [3, 5, 9] {
+    for claim in [3, 6, 9] {
         let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
         a.input.head = in_head();
         a.input.claim = claim;
@@ -274,7 +274,7 @@ const PUBLIC: &str = "https://gw.example.com/ignored?q=1#f";
 fn expected(public: bool) -> Vec<String> {
     let doors = "POST /v1/realtime/client_secrets http exact, POST /v1/realtime/calls http exact, \
                  GET /v1/realtime/sideband/{call_id} ws, GET /v1/realtime/gemini/{call_id} ws, \
-                 GET /twilio/{call_id} ws";
+                 GET /twilio/{call_id} ws, GET /v1/realtime ws exact";
     let (claims, audience, metadata) = if public {
         (
             doors,
@@ -298,7 +298,7 @@ fn expected(public: bool) -> Vec<String> {
         format!("refresh Ready {}", snap(2)),
         "retire 1 Ready".into(),
         "arrive 3 Ready dialect=1 op=0 principal=1".into(),
-        "arrive 5 Refused dialect=0 op=0 principal=0".into(),
+        "arrive 6 Refused dialect=0 op=0 principal=0".into(),
         "arrive 9 Refused dialect=0 op=0 principal=0".into(),
         "tick Ready next=0".into(),
         "cancel Ready failed=true".into(),
@@ -556,7 +556,7 @@ fn unit_script(p: &Plugin<Plane>) -> Vec<String> {
 
     t.push(format!("sideband {}", b.call(p, &attempt(10, 2))));
     t.push(format!("unpublished {}", b.call(p, &attempt(11, 9))));
-    t.push(format!("metadata path {}", b.call(p, &attempt(12, 5))));
+    t.push(format!("metadata path {}", b.call(p, &attempt(12, 6))));
     t
 }
 
@@ -842,7 +842,7 @@ fn arrive_route(p: &Plugin<Plane>, claim: u32) -> (Outcome, u8, String) {
 }
 
 /// Every door that reaches the far end names the DIRECT route `streams.session.model` (the entry the
-/// composition folds from the top-level models catalog); claim 5 (the metadata path) is no claim
+/// composition folds from the top-level models catalog); claim 6 (the metadata path) is no claim
 /// and arrives nowhere; with no model configured nothing is named (the door steps refuse an unnamed keyed route).
 /// Both ways.
 #[test]
@@ -852,7 +852,7 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        for claim in [0, 1, 2, 3, 4] {
+        for claim in [0, 1, 2, 3, 4, PLAIN_CLAIM] {
             assert_eq!(
                 arrive_route(p, claim),
                 (Outcome::Ready, ROUTE_DIRECT, "m-cap".to_string()),
@@ -860,7 +860,7 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
             );
         }
         assert_ne!(
-            arrive_route(p, 5).0,
+            arrive_route(p, 6).0,
             Outcome::Ready,
             "the metadata path is no claim of the plane (1.5.5 parity)"
         );
@@ -1251,6 +1251,63 @@ fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
             "a call id that could carry another parameter is refused: {smuggled}"
         );
         transcripts.push([attached, queried, bare, unknown, other, smuggled]);
+    }
+    assert_eq!(
+        transcripts[0], transcripts[1],
+        "the two doors must answer identically"
+    );
+}
+
+/// The plain OpenAI Realtime socket's claim (`GET /v1/realtime`), after the five call-scoped doors.
+const PLAIN_CLAIM: u32 = 5;
+
+/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on Part 2 #45, "OpenAI Realtime
+/// over WS and WebRTC"): plain server-to-server OpenAI Realtime over WS is its own door, a WS
+/// upgrade on `GET /v1/realtime` as the provider serves it (the caller's `?model=` on its query),
+/// and the sideband is call-attached only. A session on the plain door opens with no call brokered
+/// and dials the provider's realtime socket bare; the same caller's sideband naming a call no
+/// offer here placed is still refused. RED: no `GET /v1/realtime` claim was published, so its
+/// arrival was refused and its session never opened. Both ways.
+#[test]
+fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let doors = vec![linked(&d), dropped(&d)];
+    let mut transcripts = Vec::new();
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::with_units(1 << 18, 8);
+        let audio = uplink(100);
+
+        assert_eq!(
+            arrive_at(p, PLAIN_CLAIM, 50, "/v1/realtime?model=gpt-realtime"),
+            Outcome::Ready,
+            "the plain socket is a published door"
+        );
+        let plain = b.call(
+            p,
+            &Push {
+                stream: 50,
+                ..push(50, PLAIN_CLAIM, FROM_CALLER, 0, &audio)
+            },
+        );
+        assert!(
+            plain.starts_with("Ready")
+                && plain.contains("far=true")
+                && plain.contains("verb=GET target=/v1/realtime ")
+                && plain.contains("input_audio_buffer.append"),
+            "a plain session opens with no call and dials the realtime socket bare: {plain}"
+        );
+
+        assert_eq!(
+            arrive_at(p, 2, 51, "/v1/realtime/sideband/rtc_plain0051"),
+            Outcome::Ready
+        );
+        let sideband = b.call(p, &session(51, FROM_CALLER, 0, &audio));
+        assert!(
+            sideband.starts_with("Refused"),
+            "the sideband stays call-attached: a call no offer placed is refused: {sideband}"
+        );
+        transcripts.push([plain, sideband]);
     }
     assert_eq!(
         transcripts[0], transcripts[1],

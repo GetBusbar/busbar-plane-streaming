@@ -100,6 +100,7 @@ const SERVED: &[(&str, &str, Door, u32, &str)] = &[
         KEY_AUTH,
     ),
     ("GET", "/twilio/CA123", Door::Twilio, 2, SIGNATURE_AUTH),
+    ("GET", "/v1/realtime", Door::Realtime, 0, KEY_AUTH),
 ];
 
 #[test]
@@ -120,8 +121,7 @@ fn every_served_route_resolves_to_the_same_dialect_and_door() {
 #[test]
 fn a_request_no_served_route_took_resolves_to_no_line() {
     for (method, path) in [
-        ("POST", "/v1/realtime"),
-        ("GET", "/v1/realtime"),
+        ("GET", "/v1/realtime/"),
         ("GET", "/v1/realtime/sideband"),
         ("GET", "/v1/realtime/sideband/"),
         ("GET", "/v1/realtime/sideband/a/b"),
@@ -148,6 +148,7 @@ fn a_served_path_under_another_method_is_405_with_the_lines_allow() {
         ("POST", "/v1/realtime/sideband/rtc_abc", "GET"),
         ("POST", "/v1/realtime/gemini/call-1", "GET"),
         ("POST", "/twilio/CA123", "GET"),
+        ("POST", "/v1/realtime", "GET"),
     ] {
         assert_eq!(
             resolve(method, path),
