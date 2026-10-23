@@ -146,6 +146,12 @@ pub struct StreamsCfg {
     /// Output-token ceiling per response. Default 4096.
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
+    /// The wire model a session's provider dial names, when the catalog entry `session.model`
+    /// names sets an `upstream_model` (Part 2 #51: a model entry's override, else its name). Read
+    /// from the `models` section the host hands beside this one ([`crate::door::read_dealt`]), never
+    /// a key of `streams:`.
+    #[serde(skip)]
+    pub upstream_model: Option<String>,
 }
 
 // MANUAL `Default`, not derived: the serde field defaults above are non-trivial (the three ceilings
@@ -159,6 +165,7 @@ impl Default for StreamsCfg {
             session_max_secs: None,
             context_window_tokens: default_context_window_tokens(),
             max_output_tokens: default_max_output_tokens(),
+            upstream_model: None,
         }
     }
 }
