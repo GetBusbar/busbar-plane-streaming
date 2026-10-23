@@ -1293,9 +1293,10 @@ fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
         assert!(
             plain.starts_with("Ready")
                 && plain.contains("far=true")
-                && plain.contains("verb=GET target=/v1/realtime ")
+                && plain.contains("verb=GET target=/v1/realtime?model=m-cap ")
                 && plain.contains("input_audio_buffer.append"),
-            "a plain session opens with no call and dials the realtime socket bare: {plain}"
+            "a plain session opens with no call and dials the realtime socket naming the \
+             session's model (never the caller's own `?model=`): {plain}"
         );
 
         assert_eq!(
