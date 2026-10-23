@@ -422,3 +422,48 @@ fn a_turns_close_moves_its_running_counts_and_the_total_never_falls() {
     s.from_caller(&uplink(200), false);
     assert!(s.units().contains(&(seconds(), 3)), "{:?}", s.units());
 }
+
+/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on `BUSBAR-1.6.0.md` Part 2 #45:
+/// OpenAI's own WS surface takes the model on the socket's query): a plain session (`GET
+/// /v1/realtime`) and a telephony session dial the provider's realtime socket naming the session's
+/// model (`?model=`), escaped so it carries no other parameter; a sideband names only its call
+/// (`?call_id=`), and the Gemini Live socket names none. RED: every OpenAI Realtime session that was
+/// attached to no call dialled the bare socket, which the provider refuses without a model.
+#[test]
+fn a_plain_or_telephony_session_dials_the_socket_naming_the_sessions_model() {
+    let named = |model: &str| StreamsCfg {
+        session: SessionConfig {
+            model: Some(model.to_string()),
+            ..SessionConfig::default()
+        },
+        ..StreamsCfg::default()
+    };
+    let cfg = named("gpt-realtime");
+    for door in [Door::Realtime, Door::Twilio] {
+        let live = Live::open(door, &cfg).expect("a session door");
+        assert_eq!(
+            live.dial_target("/v1/realtime"),
+            "/v1/realtime?model=gpt-realtime",
+            "{door:?} dials the socket naming the session's model"
+        );
+    }
+    let mut attached = Live::open(Door::Sideband, &cfg).expect("a session door");
+    attached.attach("rtc_abc".to_string());
+    assert_eq!(
+        attached.dial_target("/v1/realtime"),
+        "/v1/realtime?call_id=rtc_abc",
+        "a sideband names only the call it attaches to"
+    );
+    let gemini = Live::open(Door::Gemini, &cfg).expect("a session door");
+    assert_eq!(
+        gemini.dial_target(crate::driven::GEMINI_SOCKET_PATH),
+        crate::driven::GEMINI_SOCKET_PATH,
+        "the Gemini Live socket names no model on its path"
+    );
+    let odd = Live::open(Door::Realtime, &named("a b&call_id=x")).expect("a session door");
+    assert_eq!(
+        odd.dial_target("/v1/realtime"),
+        "/v1/realtime?model=a+b%26call_id%3Dx",
+        "the model is escaped: it carries no second parameter"
+    );
+}
