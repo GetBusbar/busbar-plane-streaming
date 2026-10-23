@@ -42,6 +42,9 @@ pub enum Door {
     Gemini,
     /// The telephony socket.
     Twilio,
+    /// `GET /v1/realtime`: plain server-to-server OpenAI Realtime over WS, attached to no call
+    /// (ARCHITECT ruling 2026-10-23 on Part 2 #45; the sideband is call-attached only).
+    Realtime,
 }
 
 impl Door {
@@ -54,6 +57,7 @@ impl Door {
             2 => Some(Door::Sideband),
             3 => Some(Door::Gemini),
             4 => Some(Door::Twilio),
+            5 => Some(Door::Realtime),
             _ => None,
         }
     }
@@ -79,18 +83,21 @@ impl Door {
     /// `true` for a door that opens a live session rather than answering one request.
     #[must_use]
     pub const fn is_session(self) -> bool {
-        matches!(self, Door::Sideband | Door::Gemini | Door::Twilio)
+        matches!(
+            self,
+            Door::Sideband | Door::Gemini | Door::Twilio | Door::Realtime
+        )
     }
 
     /// The outbound need a far request on this door rides (`OnPieceOut::need`): the socket of the
     /// provider the door's session dials (Gemini Live's for the Gemini door, OpenAI Realtime's for
-    /// the sideband and telephony doors), and OpenAI Realtime's one-shot pass for the mint and the
+    /// the sideband, telephony and plain realtime doors), and OpenAI Realtime's one-shot pass for the mint and the
     /// SDP offer.
     #[must_use]
     pub const fn rides(self) -> u32 {
         match self {
             Door::Gemini => crate::door::RIDES_LIVE_SOCKET,
-            Door::Sideband | Door::Twilio => crate::door::RIDES_REALTIME_SOCKET,
+            Door::Sideband | Door::Twilio | Door::Realtime => crate::door::RIDES_REALTIME_SOCKET,
             Door::Mint | Door::Sdp => crate::door::RIDES_REALTIME_PASS,
         }
     }
@@ -176,7 +183,12 @@ impl Steps for Door {
     /// per-session fee, which the kernel counts); the one-request doors report nothing.
     fn admit(&self) -> Vec<(u32, u64)> {
         match self {
-            Door::Mint | Door::Sdp | Door::Sideband | Door::Gemini | Door::Twilio => Vec::new(),
+            Door::Mint
+            | Door::Sdp
+            | Door::Sideband
+            | Door::Gemini
+            | Door::Twilio
+            | Door::Realtime => Vec::new(),
         }
     }
 
@@ -191,7 +203,7 @@ impl Steps for Door {
         Ok(match self {
             Door::Mint => Some(mint_attempt(config, caller_ref, None)?),
             Door::Sdp => Some(sdp_attempt(body)),
-            Door::Sideband | Door::Twilio => Some(Attempt {
+            Door::Sideband | Door::Twilio | Door::Realtime => Some(Attempt {
                 verb: "GET",
                 target: REALTIME_SOCKET_PATH,
                 fields: Vec::new(),
