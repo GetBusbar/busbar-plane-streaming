@@ -1315,3 +1315,59 @@ fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
         "the two doors must answer identically"
     );
 }
+
+/// The settings the host hands a plane that consumes sections (spec Part 1 §4, one object keyed
+/// by section; architect ruling 2026-10-23 R-6): the plane's own `streams:` beside the `models`
+/// map, whose entry for the session model names the provider's wire model.
+const KEYED_UPSTREAM: &[u8] = br#"{"streams":{"session":{"model":"m-cap"}},"models":{"m-cap":{"provider":"p","upstream_model":"gpt-realtime-wire"}}}"#;
+/// The same, the model entry naming no override.
+const KEYED_PLAIN: &[u8] =
+    br#"{"streams":{"session":{"model":"m-cap"}},"models":{"m-cap":{"provider":"p"}}}"#;
+
+/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT rulings 2026-10-23 on Part 2 #51 and R-6): the
+/// provider dial names the session model's RESOLVED upstream model, the catalog entry's
+/// `upstream_model` when it sets one, else the catalog name. The plane reads it from the `models`
+/// section the host hands it keyed beside `streams:`. RED: the door refused the keyed settings
+/// (an unknown `streams` key at the section's top level), so no session opened. Both ways.
+#[test]
+fn a_plain_session_dials_the_session_models_upstream_name() {
+    for (settings, want) in [
+        (
+            KEYED_UPSTREAM,
+            "verb=GET target=/v1/realtime?model=gpt-realtime-wire ",
+        ),
+        (KEYED_PLAIN, "verb=GET target=/v1/realtime?model=m-cap "),
+    ] {
+        let d = Dispatcher::new(DispatchConfig::default());
+        let doors = vec![linked(&d), dropped(&d)];
+        let mut transcripts = Vec::new();
+        for p in &doors {
+            assert_eq!(
+                open(p, 1, settings, Some(PUBLIC)).0,
+                Outcome::Ready,
+                "the door opens on the keyed settings"
+            );
+            let mut b = Bufs::with_units(1 << 18, 8);
+            assert_eq!(
+                arrive_at(p, PLAIN_CLAIM, 60, "/v1/realtime?model=m-cap"),
+                Outcome::Ready
+            );
+            let plain = b.call(
+                p,
+                &Push {
+                    stream: 60,
+                    ..push(60, PLAIN_CLAIM, FROM_CALLER, 0, &uplink(100))
+                },
+            );
+            assert!(
+                plain.starts_with("Ready") && plain.contains(want),
+                "the dial names the resolved upstream model ({want}): {plain}"
+            );
+            transcripts.push(plain);
+        }
+        assert_eq!(
+            transcripts[0], transcripts[1],
+            "the two doors must answer identically"
+        );
+    }
+}
