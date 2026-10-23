@@ -225,6 +225,35 @@ fn a_cancel_on_either_sides_ticket_ends_the_session() {
     assert!(all.get_or_open(9, Door::Mint, &cfg).is_none());
 }
 
+/// RED on dev: a stream whose session ended (the caller's `stop`, a cancel) is never opened again.
+/// The caller's next piece on it (a second Twilio `stop`) is refused rather than answered by a
+/// fresh session that ends, reports `done` and settles a second time.
+#[test]
+fn an_ended_stream_is_never_opened_again() {
+    let t = Ticket {
+        slot: 1,
+        generation: 1,
+    };
+    let mut all = Sessions::default();
+    let cfg = StreamsCfg::default();
+    assert!(all.get_or_open(7, Door::Sideband, &cfg).is_some());
+    all.close(7);
+    assert!(all.get(7).is_none());
+    assert!(
+        all.get_or_open(7, Door::Sideband, &cfg).is_none(),
+        "an ended call"
+    );
+    assert!(all.served(7), "its refusal is still the session's");
+    assert!(all.get_or_open(8, Door::Sideband, &cfg).is_some());
+    all.crossed(8, t);
+    assert!(all.cancel(t));
+    assert!(
+        all.get_or_open(8, Door::Sideband, &cfg).is_none(),
+        "a cancelled call"
+    );
+    assert!(all.is_empty());
+}
+
 #[test]
 fn drive_names_the_sessions_that_owe_output() {
     let mut all = Sessions::default();
