@@ -703,11 +703,11 @@ impl Units {
 /// The provider call each sideband arrival names, by the kernel's unit key, kept until the unit's
 /// session opens, or the unit ends (refused, cancelled).
 #[derive(Default)]
-struct Calls {
+struct PendingCalls {
     pending: BTreeMap<u64, String>,
 }
 
-impl Calls {
+impl PendingCalls {
     /// Keep `call` for unit `unit`. Answers `false`, keeping nothing, when [`MAX_PENDING_CALLS`]
     /// calls wait: no pending call is dropped to make room; the arrival is refused instead.
     fn pend(&mut self, unit: u64, call: String) -> bool {
@@ -863,7 +863,7 @@ pub struct Plane {
     units: Mutex<Units>,
     /// The provider call each sideband arrival names, by the kernel's unit key, until the unit's
     /// session opens or the unit ends.
-    calls: Mutex<Calls>,
+    calls: Mutex<PendingCalls>,
     /// The live calls the SDP door brokered, by owner: a sideband attaches only to its own
     /// caller's call.
     brokered: Mutex<Brokered>,
@@ -1003,7 +1003,7 @@ slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
         generations: Mutex::new(Vec::new()),
         snapshots: Generations::new(),
         units: Mutex::new(Units::default()),
-        calls: Mutex::new(Calls::default()),
+        calls: Mutex::new(PendingCalls::default()),
         brokered: Mutex::new(Brokered::default()),
         sessions: Mutex::new(Sessions::default()),
         wake,
