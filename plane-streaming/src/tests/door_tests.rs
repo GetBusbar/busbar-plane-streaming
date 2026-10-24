@@ -245,7 +245,7 @@ fn plane() -> Plane {
         generations: Mutex::new(Vec::new()),
         snapshots: Generations::new(),
         units: Mutex::new(Units::default()),
-        calls: Mutex::new(Calls::default()),
+        calls: Mutex::new(PendingCalls::default()),
         brokered: Mutex::new(Brokered::default()),
         sessions: Mutex::new(Sessions::default()),
         wake: None,
@@ -333,7 +333,7 @@ fn a_full_table_of_live_units_still_refuses() {
 /// need open a session) dropped real callers' calls, and their sessions were refused.
 #[test]
 fn a_full_pending_call_table_refuses_the_next_arrival_and_keeps_every_call() {
-    let mut calls = Calls::default();
+    let mut calls = PendingCalls::default();
     for unit in 0..MAX_PENDING_CALLS as u64 {
         assert!(calls.pend(unit, format!("rtc_{unit}")), "unit {unit}");
     }
