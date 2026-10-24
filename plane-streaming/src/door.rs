@@ -938,6 +938,10 @@ impl Plane {
     /// Name the instance's driver ticket: a session owes output of its own.
     fn wake_driver(&self) {
         let (ticket, _) = *lock(&self.driver);
+        eprintln!(
+            "DIAG door wake_driver: wake={} ticket={ticket:?}",
+            if self.wake.is_some() { "Some" } else { "None" }
+        );
         if let (Some(wake), false) = (self.wake, ticket == Ticket::NONE) {
             wake.wake(ticket);
         }
@@ -997,7 +1001,16 @@ slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
         .ok()
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let wake = input.open().host().and_then(|h| Wake::of(&h));
+    let host = input.open().host();
+    eprintln!(
+        "DIAG door open: host={}",
+        if host.is_some() { "Some" } else { "None" }
+    );
+    let wake = host.and_then(|h| Wake::of(&h));
+    eprintln!(
+        "DIAG door open: wake={}",
+        if wake.is_some() { "Some" } else { "None" }
+    );
     let p = Plane {
         public_url,
         generations: Mutex::new(Vec::new()),
