@@ -21,24 +21,27 @@ use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
 use crate::meta;
 use crate::session::{class_counts, TurnCounters};
 use crate::session_pump::{SessionPump, TurnSink};
+#[cfg(test)]
 use crate::session_row::VoiceSessionRow;
 use crate::splice::LockedKeys;
 
 /// The billable classes a session reports, in the tail's order (their index is the class a unit
 /// count names).
-pub const CLASSES: [busbar_contract::ids::MeterClassId; 6] = [
+pub const CLASSES: [busbar_contract::ids::MeterClassId; 8] = [
     meta::CLASS_AUDIO_TOKENS_IN,
     meta::CLASS_AUDIO_TOKENS_OUT,
     meta::CLASS_TEXT_TOKENS_IN,
     meta::CLASS_TEXT_TOKENS_OUT,
     meta::CLASS_AUDIO_SECONDS_IN,
     meta::CLASS_TOOL_CALLS,
+    meta::CLASS_IMAGE_TOKENS_IN,
+    meta::CLASS_VIDEO_TOKENS_IN,
 ];
 
 /// The session's units so far, per class: every closed turn adds to them, and the session always
 /// continues (the kernel owns the cut).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CumulativeUnits(pub [u64; 6]);
+pub struct CumulativeUnits(pub [u64; CLASSES.len()]);
 
 impl TurnSink for CumulativeUnits {
     fn turn_closed(&mut self, usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> bool {
@@ -66,21 +69,33 @@ pub struct Plan {
 }
 
 /// Every frame a session emits is one text message: the door sets the text bit on each.
+#[cfg(test)]
 pub const FRAMES_ARE_TEXT: bool = true;
 
 /// ONE LIVE SESSION over the far end's codec `C`.
 #[derive(Debug)]
 pub struct SessionUnit<C> {
     pump: SessionPump<C>,
-    /// The session's record: opened, its turn cursor, its provider call id, its end.
+    /// The session's record as the crate's tests read it: opened, its turn cursor, its provider
+    /// call id, its end. The door writes no session record: the kernel writes the session's one
+    /// line at its end.
+    #[cfg(test)]
     row: VoiceSessionRow,
-    /// Record writes not yet handed to the kernel, oldest first.
+    /// The record writes the tests take, oldest first.
+    #[cfg(test)]
     writes: Vec<VoiceSessionRow>,
     units: CumulativeUnits,
     twilio: Option<TwilioBridge>,
     /// The far end has been sent the locked session the telephony carrier's start called for.
     locked_told: bool,
+    /// The far end reported usage the reader could not read, and the session ended on it; not yet
+    /// reported to the kernel.
+    unmetered: bool,
+    /// The open's clock and ceiling, read by [`Self::tick`] (the crate's tests' clock: the door's
+    /// sessions are bounded by the host's measure, `close_at_ceiling`).
+    #[cfg(test)]
     opened_ns: u64,
+    #[cfg(test)]
     ceiling_secs: Option<u64>,
     ended: bool,
 }
@@ -90,9 +105,7 @@ where
     C: DuplexReader + DuplexWriter + LockedKeys,
 {
     /// A session over `codec`, locked to `locked`, opened at `now_ns`, bounded by `ceiling_secs`.
-    /// `telephony` puts the telephony carrier's envelope on the caller's side. `id` names the
-    /// session and `owner` is the caller's reference (never the principal); the session's record is
-    /// written at open.
+    /// `telephony` puts the telephony carrier's envelope on the caller's side.
     pub fn open(
         codec: C,
         locked: SessionConfig,
@@ -103,7 +116,8 @@ where
         Self::open_as(codec, locked, telephony, now_ns, ceiling_secs, "", "")
     }
 
-    /// [`Self::open`], naming the session `id` for `owner`.
+    /// [`Self::open`], naming the session `id` for `owner` (the caller's reference, never the
+    /// principal) on the record the crate's tests read.
     pub fn open_as(
         codec: C,
         locked: SessionConfig,
@@ -113,6 +127,11 @@ where
         id: &str,
         owner: &str,
     ) -> Self {
+        // A shipped session's ceiling is the host's to measure (`close_at_ceiling`); only the
+        // tests' own clock (`tick`) reads it here.
+        #[cfg(not(test))]
+        let _ = (now_ns, ceiling_secs, id, owner);
+        #[cfg(test)]
         let row = VoiceSessionRow {
             id: id.to_string(),
             owner: owner.to_string(),
@@ -122,13 +141,18 @@ where
             rtc_call_id: None,
         };
         SessionUnit {
+            #[cfg(test)]
             writes: vec![row.clone()],
+            #[cfg(test)]
             row,
             pump: SessionPump::new(codec, Some(locked)),
             units: CumulativeUnits::default(),
             twilio: telephony.then(TwilioBridge::default),
             locked_told: false,
+            unmetered: false,
+            #[cfg(test)]
             opened_ns: now_ns,
+            #[cfg(test)]
             ceiling_secs,
             ended: false,
         }
@@ -150,11 +174,13 @@ where
     }
 
     /// The record writes not yet handed to the kernel, oldest first; taking them clears them.
+    #[cfg(test)]
     pub fn take_writes(&mut self) -> Vec<VoiceSessionRow> {
         std::mem::take(&mut self.writes)
     }
 
     /// The provider named the session's call: it goes on the session's record.
+    #[cfg(test)]
     pub fn set_rtc_call_id(&mut self, rtc_call_id: &str, now_s: u64) {
         self.row.rtc_call_id = Some(rtc_call_id.to_string());
         self.row.updated_at = now_s;
@@ -162,6 +188,7 @@ where
     }
 
     /// `true` once the session has ended.
+    #[cfg(test)]
     #[must_use]
     pub fn ended(&self) -> bool {
         self.ended
@@ -180,6 +207,7 @@ where
     /// A piece from the caller. Behind the telephony carrier's envelope, the carrier's start is
     /// translated into the locked session the far end is told before any audio (the carrier
     /// configures nothing itself: µ-law both ways over the operator's session).
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8]) -> Plan {
         if self.ended {
             return Plan::default();
@@ -215,6 +243,12 @@ where
 
     /// A piece from the far end, at `now_ms`. A tool call in it is relayed to the caller as-is: the
     /// caller runs the tool (Law 11).
+    ///
+    /// A usage report the reader cannot read (a billed count present but not a count) is REFUSED:
+    /// the turn's tokens cannot be metered, so the session is not served on unmetered. The far end's
+    /// frame still reaches the caller, the caller is told why in its dialect, and the session ends;
+    /// [`Self::take_unmetered`] reports it to the kernel once.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) -> Plan {
         if self.ended {
             return Plan::default();
@@ -224,14 +258,30 @@ where
             now_ms,
             &mut self.units,
         );
+        let mut to_caller = self.caller_frames(out.downlink);
+        if out.usage_unreadable {
+            self.unmetered = true;
+            let told = self.pump.unmetered_error();
+            to_caller.extend(self.caller_frames(told.into_iter().collect()));
+            let mut plan = self.end();
+            plan.to_caller = to_caller;
+            return plan;
+        }
         Plan {
             to_far_end: out.upstream.into_iter().map(|w| w.0.to_vec()).collect(),
-            to_caller: self.caller_frames(out.downlink),
+            to_caller,
             end: false,
         }
     }
 
+    /// Whether the session ended on a usage report it could not read and the kernel has not been
+    /// told; telling clears it, so it is reported once.
+    pub fn take_unmetered(&mut self) -> bool {
+        std::mem::take(&mut self.unmetered)
+    }
+
     /// The clock, at `now_ns`: a session past its ceiling is told why and ends.
+    #[cfg(test)]
     pub fn tick(&mut self, now_ns: u64, _now_ms: u64) -> Plan {
         if self.ended {
             return Plan::default();
@@ -257,13 +307,16 @@ where
         plan
     }
 
-    /// The session ends: its open turn settles once, and the session's record is written terminal.
+    /// The session ends: its open turn settles once (and the tests' record is written terminal).
     pub fn end(&mut self) -> Plan {
         if !self.ended {
             self.ended = true;
             self.pump.settle_open_turn(&mut self.units);
-            self.row.terminal = true;
-            self.writes.push(self.row.clone());
+            #[cfg(test)]
+            {
+                self.row.terminal = true;
+                self.writes.push(self.row.clone());
+            }
         }
         Plan {
             end: true,

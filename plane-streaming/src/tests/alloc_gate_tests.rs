@@ -12,44 +12,9 @@
 //! allowed to fall on the far side of a byte-for-byte comparison against the serializer that used
 //! to produce it.
 
-use busbar_plane_streaming::codec::topology::twilio::TwilioEnvelope;
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
+use crate::codec::topology::twilio::TwilioEnvelope;
 
-thread_local! {
-    /// Allocations made by THIS thread since the counter was last read.
-    static ALLOCS: Cell<u64> = const { Cell::new(0) };
-}
-
-/// The system allocator, counting.
-struct Counting;
-
-// SAFETY: every call is forwarded verbatim to the system allocator; the counter is a thread-local
-// `Cell` of a plain integer, touched only on the allocating thread, and never reads or writes the
-// memory being handed out.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = ALLOCS.try_with(|c| c.set(c.get() + 1));
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static ALLOC: Counting = Counting;
-
-/// How many allocations one call made on this thread.
-fn allocations_of(f: impl FnOnce()) -> u64 {
-    let before = ALLOCS.with(Cell::get);
-    f();
-    ALLOCS.with(Cell::get) - before
-}
+use busbar_contract::alloc_counter::allocations_of;
 
 /// The identifier a `start` event binds, in the shape this dialect mints them.
 const SID: &str = "MZ18ad3ab5a668481ce02b83e7395059f0";

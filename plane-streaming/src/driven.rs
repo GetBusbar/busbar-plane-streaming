@@ -137,8 +137,10 @@ pub trait Steps {
     /// AUTHENTICATE: whom a unit on this door needs.
     fn authenticate(&self) -> u32;
     /// VERIFY: where, inside the plane's section, the destination a session dials is named.
+    #[cfg(test)]
     fn verify(&self) -> &'static str;
     /// APPROVE: the grant a key must hold, as (kind, value).
+    #[cfg(test)]
     fn approve(&self) -> (&'static str, &'static str);
     /// ADMIT: the units a unit is expected to cost before the far end reports any.
     fn admit(&self) -> Vec<(u32, u64)>;
@@ -155,6 +157,7 @@ pub trait Steps {
     /// METER: a session's units so far, per billable class index, the zero classes left out.
     fn meter(&self, units: &crate::session_unit::CumulativeUnits) -> Vec<(u32, u64)>;
     /// AUDIT: the action a unit on this door is audited under.
+    #[cfg(test)]
     fn audit(&self) -> &'static str;
 }
 
@@ -170,11 +173,13 @@ impl Steps for Door {
     }
 
     /// The kernel resolves `streams.session.model` through the root models and judges it.
+    #[cfg(test)]
     fn verify(&self) -> &'static str {
         crate::door::EGRESS_TARGET
     }
 
     /// The `session` kind, for the one pool every session is served on.
+    #[cfg(test)]
     fn approve(&self) -> (&'static str, &'static str) {
         (crate::door::SCOPE, crate::door::SESSION_POOL)
     }
@@ -230,12 +235,14 @@ impl Steps for Door {
     }
 
     /// A session open.
+    #[cfg(test)]
     fn audit(&self) -> &'static str {
         SESSION_OPEN_ACTION
     }
 }
 
 /// The action a session open is audited under.
+#[cfg(test)]
 pub const SESSION_OPEN_ACTION: &str = "streaming.session.open";
 
 /// The realtime socket an OpenAI Realtime session dials, under the member's base URL. A sideband
@@ -363,12 +370,24 @@ pub fn mint_reply(status: u16, body: &[u8]) -> Reply {
     }
 }
 
-/// The caller's answer to the far end's SDP answer: its status, its body as an SDP answer, and its
-/// `Location` when it named one; the call id in that `Location` is the call the caller's sideband
-/// may attach to.
+/// The caller's answer to the far end's SDP answer: its status and body, and its `Location` when it
+/// named one (the call id in that `Location` is the call the caller's sideband may attach to). A
+/// success is an SDP answer and says so; any other status relays the far end's own `Content-Type`
+/// (`content_type`, a JSON error body is not an SDP answer), and states none where the far end
+/// stated none.
 #[must_use]
-pub fn sdp_reply(status: u16, location: Option<&str>, body: &[u8]) -> Reply {
-    let mut fields = vec![(FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string())];
+pub fn sdp_reply(
+    status: u16,
+    location: Option<&str>,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Reply {
+    let mut fields = Vec::new();
+    if (200..300).contains(&status) {
+        fields.push((FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string()));
+    } else if let Some(ct) = content_type {
+        fields.push((FIELD_CONTENT_TYPE, ct.to_string()));
+    }
     if let Some(loc) = location {
         fields.push((FIELD_LOCATION, loc.to_string()));
     }

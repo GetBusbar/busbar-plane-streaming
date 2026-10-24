@@ -1,10 +1,11 @@
-//! The claims this plane makes over arriving bytes, and the four dialects they name.
+//! The transports the door's routes are carried on ([`WS_TRANSPORT`], [`HTTP_TRANSPORT`]), and the
+//! claim table the crate's tests read through the plane's test-only meta declaration.
 //!
-//! `docs/design/BUSBAR-1.6.0.md`'s protocol-inventory table (the row keyed `voice`) names the
-//! dialect roster this plane speaks and the transports it claims them on:
-//!
-//! `openai-realtime, gemini-live, twilio-media-streams, one-shot transcribe/tts` over
-//! `ws, webrtc, twilio-media, http`.
+//! WHAT THE SHIPPED PLANE PUBLISHES IS ITS DOOR'S FIVE ROUTES (`crate::door::ROUTES`: the secret
+//! mint, the SDP offer, the sideband socket, the Gemini Live socket and the telephony socket), with
+//! the dialects its Statement tail names. The table below ([`DIALECT_CLAIMS`]) is not published:
+//! no door claims it, and its two one-shot operations (`/v1/audio/*`) are served by no door. It is
+//! kept as the tests' fixture of a claim-shaped declaration over the plane's dialects.
 //!
 //! Two carriers bring those dialects in: the WebSocket carrier (both duplex JSON dialects AND the
 //! Twilio telephony dialect) and the request/response carrier (the two one-shot operations). The
@@ -22,7 +23,10 @@
 //!   reads). It is unclaimed: a claim is declared independently, and the boot's own overlap check
 //!   is what proves the claims stay disjoint when it is added.
 
-use busbar_contract::grammar::{one_level_under, Claim, Selector};
+use busbar_contract::grammar::{Claim, Selector};
+
+#[cfg(test)]
+use busbar_contract::grammar::one_level_under;
 
 /// The transport the three WebSocket dialects (`openai-realtime`, `gemini-live`,
 /// `twilio-media-streams`) are claimed against.
@@ -66,41 +70,6 @@ pub enum Dialect {
     OneShotTranscribe,
     /// A one-shot text-to-speech request.
     OneShotTts,
-}
-
-impl Dialect {
-    /// The dialect's own name, as recorded in facts and answered by the `dialects` admin verb.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Dialect::OpenaiRealtime => "openai-realtime",
-            Dialect::GeminiLive => "gemini-live",
-            Dialect::TwilioMediaStreams => "twilio-media-streams",
-            Dialect::OneShotTranscribe => "transcribe",
-            Dialect::OneShotTts => "tts",
-        }
-    }
-
-    /// Whether this dialect is one of the two JSON duplex wires this plane can also DIAL an
-    /// upstream as (the codec-backed dialects, as opposed to the ingress-only Twilio and one-shot
-    /// claims).
-    #[must_use]
-    pub const fn is_duplex_upstream(self) -> bool {
-        matches!(self, Dialect::OpenaiRealtime | Dialect::GeminiLive)
-    }
-
-    /// Whether a unit on this dialect authenticates once at session open and rides the session
-    /// (`CredentialLocator::from_session`), rather than presenting a credential on every unit.
-    ///
-    /// True for the three session-bound dialects; false for the two one-shot HTTP operations, which
-    /// present a credential on the one request they are.
-    #[must_use]
-    pub const fn authenticates_from_session(self) -> bool {
-        matches!(
-            self,
-            Dialect::OpenaiRealtime | Dialect::GeminiLive | Dialect::TwilioMediaStreams
-        )
-    }
 }
 
 /// One claim with the dialect it names recorded beside it, the same pairing
@@ -196,6 +165,7 @@ const _: () = assert!(CLAIMS.len() == DIALECT_CLAIMS.len());
 /// The same walk the kernel runs itself from the declared claims, exposed here so the decode step
 /// can name the dialect it is about to read without a second, differently-ordered answer existing
 /// anywhere.
+#[cfg(test)]
 #[must_use]
 pub fn dialect_for(path: &str) -> Option<Dialect> {
     DIALECT_CLAIMS
@@ -207,6 +177,7 @@ pub fn dialect_for(path: &str) -> Option<Dialect> {
 /// Whether one selector matches a request path.
 ///
 /// Only the forms this plane's claims actually use are answered.
+#[cfg(test)]
 pub(crate) fn matches_selector(s: &Selector, path: &str) -> bool {
     match s {
         Selector::PathSuffix(suffix) => path.ends_with(suffix),

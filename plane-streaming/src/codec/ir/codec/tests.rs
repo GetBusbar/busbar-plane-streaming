@@ -633,6 +633,8 @@ fn usage_totals_saturate_rather_than_wrap() {
         audio_out: 1,
         text_in: 1,
         text_out: 1,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let wire = usage_to_wire(&u);
@@ -1044,8 +1046,8 @@ fn response_done_usage_extracts_split_token_classes() {
         "type": "response.done",
         "response": {
             "usage": {
-                "total_tokens": 150,
-                "input_tokens": 100,
+                "total_tokens": 145,
+                "input_tokens": 95,
                 "output_tokens": 50,
                 "input_token_details": { "audio_tokens": 80, "text_tokens": 15, "cached_tokens": 5 },
                 "output_token_details": { "audio_tokens": 40, "text_tokens": 10 }
@@ -1061,6 +1063,55 @@ fn response_done_usage_extracts_split_token_classes() {
     assert_eq!(u.cached, 5);
     assert_eq!(u.audio_out, 40);
     assert_eq!(u.text_out, 10);
+}
+
+/// RED-BEFORE-GREEN (MONEY; the Realtime API reference: `usage` "will correspond to billing", and
+/// `input_token_details.image_tokens` is "The number of image tokens used as input for the
+/// Response"): a turn whose input carried an image bills its image tokens under their own class,
+/// and the input classes sum to the stated `input_tokens`. RED: only the audio and text entries
+/// were read, so the 10 image tokens billed zero.
+#[test]
+fn image_input_tokens_are_billed() {
+    let src = json!({
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "total_tokens": 230,
+                "input_tokens": 150,
+                "output_tokens": 80,
+                "input_token_details": { "text_tokens": 40, "audio_tokens": 100, "image_tokens": 10 },
+                "output_token_details": { "text_tokens": 20, "audio_tokens": 60 }
+            }
+        }
+    });
+    let ir = OpenAiRealtimeCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    let IrServerEvent::Usage(u) = &ir[0] else {
+        panic!("expected Usage")
+    };
+    assert_eq!((u.audio_in, u.text_in, u.image_in), (100, 40, 10), "{u:?}");
+    let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
+    assert!(
+        billed.contains(&(crate::meta::CLASS_IMAGE_TOKENS_IN, 10)),
+        "the image tokens bill as their own class: {billed:?}"
+    );
+    assert_eq!((u.audio_out, u.text_out), (60, 20), "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY): the image tokens bill even when the stated total is absent: each side
+/// bills the sum of every entry of its breakdown. RED: the image entry was never read.
+#[test]
+fn image_input_tokens_are_billed_without_a_stated_total() {
+    let src = json!({
+        "type": "response.done",
+        "response": { "usage": {
+            "input_token_details": { "text_tokens": 4, "audio_tokens": 0, "image_tokens": 300 }
+        } }
+    });
+    let ir = OpenAiRealtimeCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    let IrServerEvent::Usage(u) = &ir[0] else {
+        panic!("expected Usage")
+    };
+    assert_eq!((u.audio_in, u.text_in, u.image_in), (0, 4, 300), "{u:?}");
 }
 
 #[test]
@@ -1315,6 +1366,8 @@ fn usage_extraction_survives_reencode() {
         audio_out: 4,
         text_in: 1,
         text_out: 2,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let w = down(&codec, IrServerEvent::Usage(u));

@@ -20,7 +20,10 @@ fn the_provider_endpoint_is_keyless_and_each_dialect_names_its_placement() {
     );
     assert_eq!(
         credential_placement(GEMINI_LIVE),
-        CredentialPlacement::Query("key")
+        CredentialPlacement::Header {
+            name: crate::door::LIVE_STYLE,
+            prefix: "",
+        }
     );
     assert_eq!(
         credential_placement(OPENAI_REALTIME),
