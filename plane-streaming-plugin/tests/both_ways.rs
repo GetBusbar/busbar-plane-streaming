@@ -1494,12 +1494,15 @@ fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
             "nothing held, no ceiling: no tick is asked for"
         );
         d.recycle(driver);
-        let before = d.stats().stale_wakes;
+        let stats_before = d.stats();
+        let before = stats_before.stale_wakes;
         let brokered = broker(p, 300, "/v1/realtime/calls/rtc_tick0300", CALLER_REF);
         assert!(brokered.contains("status=201"), "{brokered}");
         assert!(
             woke_retired(&d, before),
-            "recording the call wakes the driver ticket the door was ticked on"
+            "recording the call wakes the driver ticket the door was ticked on (driver {driver:?}; \
+             dispatcher stats before {stats_before:?}, after {:?})",
+            d.stats()
         );
         // The host drives the woken instance and polls its `tick`.
         let (outcome, next) = tick(p, 1_000_000_000);
