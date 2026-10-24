@@ -1417,28 +1417,43 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
     }
 }
 
-/// One `tick` at `now_ns`: its outcome and the next tick it asks for (`0` = none).
+/// One ticket-less `tick` at `now_ns` (`Plugin::call`): its outcome and the next tick it asks for
+/// (`0` = none).
 fn tick(p: &Plugin<Plane>, now_ns: u64) -> (Outcome, u64) {
-    tick_on(
-        p,
-        busbar_contract::abi::mechanism::ticket::Ticket::NONE,
-        now_ns,
-    )
+    let mut k: Frame<TickIn, TickOut> = Frame::new(z(), z());
+    k.input.head = in_head();
+    k.input.now_ns = now_ns;
+    k.out.head = out_head();
+    let c = p.call(life::TICK, &mut k);
+    (c.outcome, k.out.next_tick_ns)
 }
 
-/// One `tick` at `now_ns` on `driver`, the ticket the door names when it has work of its own.
+/// One `tick` at `now_ns` on `driver`, the ticket the door names when it has work of its own, as
+/// the host ticks it: submitted on that ticket through the dispatcher, which crosses with it (a
+/// ticket-less `Plugin::call` crosses with `Ticket::NONE`, whatever its frame names).
 fn tick_on(
+    d: &Dispatcher,
     p: &Plugin<Plane>,
     driver: busbar_contract::abi::mechanism::ticket::Ticket,
     now_ns: u64,
 ) -> (Outcome, u64) {
     let mut k: Frame<TickIn, TickOut> = Frame::new(z(), z());
     k.input.head = in_head();
-    k.input.head.ticket = driver;
     k.input.now_ns = now_ns;
     k.out.head = out_head();
-    let c = p.call(life::TICK, &mut k);
-    (c.outcome, k.out.next_tick_ns)
+    let done = d
+        .submit(
+            p,
+            driver,
+            life::TICK,
+            k,
+            busbar_contract::abi::mechanism::call::DeadlineClass::Call,
+            0,
+        )
+        .wait(std::time::Duration::from_secs(10))
+        .expect("the tick answers");
+    let next = done.frame.as_ref().map_or(0, |f| f.out.next_tick_ns);
+    (done.outcome, next)
 }
 
 /// Whether the host saw a wake land on a retired ticket within a few seconds of `before` (its
@@ -1484,33 +1499,20 @@ fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        // The host adopts the instance as it does when it mints the instance's driver ticket, so
-        // the instance's wakes route to this dispatcher (an instance no dispatcher adopted has its
-        // wakes dropped uncounted). The door is then ticked on a plain ticket the host retires at
-        // once, so the record's wake of it lands as a counted late wake (a wake of a live driver
-        // ticket is a drive, not a late wake).
-        let _adopted = d.driver(p, 0).expect("the instance is adopted");
         let driver = d.mint(0).expect("a ticket on worker 0");
         assert_eq!(
-            tick_on(p, driver, 5),
+            tick_on(&d, p, driver, 5),
             (Outcome::Ready, 0),
             "nothing held, no ceiling: no tick is asked for"
         );
         d.recycle(driver);
-        let stats_before = d.stats();
-        let before = stats_before.stale_wakes;
+        let before = d.stats().stale_wakes;
         let brokered = broker(p, 300, "/v1/realtime/calls/rtc_tick0300", CALLER_REF);
         assert!(brokered.contains("status=201"), "{brokered}");
-        if !woke_retired(&d, before) {
-            let after = d.stats();
-            // Whether the call was recorded at all: a held row makes the next tick ask for one.
-            let probe = tick(p, 1_000_000_000);
-            panic!(
-                "recording the call wakes the driver ticket the door was ticked on (driver \
-                 {driver:?}; dispatcher stats before {stats_before:?}, after {after:?}; a tick \
-                 after the record answers {probe:?})"
-            );
-        }
+        assert!(
+            woke_retired(&d, before),
+            "recording the call wakes the driver ticket the door was ticked on"
+        );
         // The host drives the woken instance and polls its `tick`.
         let (outcome, next) = tick(p, 1_000_000_000);
         assert_eq!(outcome, Outcome::Ready);
