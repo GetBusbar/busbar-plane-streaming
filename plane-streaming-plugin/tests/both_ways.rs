@@ -1484,10 +1484,13 @@ fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        // The instance's DRIVER TICKET, as the host mints it: minting it adopts the instance, so
-        // the instance's wakes route to this dispatcher (a ticket minted with no adopted instance
-        // leaves the instance's wakes nowhere to go, and the host drops them uncounted).
-        let driver = d.driver(p, 0).expect("a driver ticket on worker 0");
+        // The host adopts the instance as it does when it mints the instance's driver ticket, so
+        // the instance's wakes route to this dispatcher (an instance no dispatcher adopted has its
+        // wakes dropped uncounted). The door is then ticked on a plain ticket the host retires at
+        // once, so the record's wake of it lands as a counted late wake (a wake of a live driver
+        // ticket is a drive, not a late wake).
+        let _adopted = d.driver(p, 0).expect("the instance is adopted");
+        let driver = d.mint(0).expect("a ticket on worker 0");
         assert_eq!(
             tick_on(p, driver, 5),
             (Outcome::Ready, 0),
