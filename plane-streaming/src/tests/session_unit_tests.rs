@@ -43,7 +43,7 @@ fn the_callers_audio_on_the_telephony_door_reaches_the_far_end() {
     let started = s.from_caller(&start("audio/x-mulaw"));
     assert!(started.to_caller.is_empty() && !started.end, "{started:?}");
     assert_eq!(started.to_far_end.len(), 1, "the locked session, once");
-    assert!(text(&started.to_far_end).contains("g711_ulaw"));
+    assert!(text(&started.to_far_end).contains("audio/pcmu"));
     let plan = s.from_caller(&media("MZ1", &[0x7f; 160]));
     let up = text(&plan.to_far_end);
     assert!(up.contains("input_audio_buffer.append"), "{up}");
@@ -98,6 +98,39 @@ fn model_audio_and_a_barge_in_reach_the_caller_in_the_carriers_envelope() {
     );
 }
 
+/// RED-BEFORE-GREEN (Law 11: "a tool call on any session, Twilio included, is relayed down that
+/// session as-is"): the model's tool call on a telephony session goes down the session byte for
+/// byte (the item that opens it, its streamed arguments, the item when done), and busbar answers
+/// nothing upstream; a frame the carrier has no event for and that is no tool call still reaches no
+/// one. RED: the envelope kept only audio and barge-ins, so the call was dropped and the session
+/// stalled with no one to answer it.
+#[test]
+fn a_tool_call_on_a_telephony_session_is_relayed_down_the_session_as_is() {
+    let mut s = telephony();
+    let _ = s.from_caller(&start("audio/x-mulaw"));
+    let frames = [
+        r#"{"type":"response.output_item.added","event_id":"e1","response_id":"r1","output_index":0,"item":{"id":"fc1","type":"function_call","call_id":"call_1","name":"lookup","arguments":""}}"#,
+        r#"{"type":"response.function_call_arguments.delta","event_id":"e2","item_id":"fc1","call_id":"call_1","delta":"{\"q\":"}"#,
+        r#"{"type":"response.function_call_arguments.done","event_id":"e3","item_id":"fc1","call_id":"call_1","name":"lookup","arguments":"{\"q\":1}"}"#,
+        r#"{"type":"response.output_item.done","event_id":"e4","response_id":"r1","output_index":0,"item":{"id":"fc1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":1}"}}"#,
+    ];
+    for frame in frames {
+        let plan = s.from_far_end(frame.as_bytes(), 0);
+        assert_eq!(
+            plan.to_caller,
+            vec![frame.as_bytes().to_vec()],
+            "relayed as the far end wrote it"
+        );
+        assert!(
+            plan.to_far_end.is_empty(),
+            "busbar answers nothing (Law 11)"
+        );
+    }
+    let message =
+        r#"{"type":"response.output_item.added","item":{"type":"message","role":"assistant"}}"#;
+    assert!(s.from_far_end(message.as_bytes(), 0).to_caller.is_empty());
+}
+
 #[test]
 fn a_stop_settles_the_open_turns_counters_once() {
     let mut s = telephony();
@@ -136,7 +169,7 @@ fn usage_reports_accumulate_across_turns() {
     let _ = s.from_far_end(&done, 0);
     assert_eq!(
         s.units().0,
-        [20, 40, 6, 8, 0, 0],
+        [20, 40, 6, 8, 0, 0, 0, 0],
         "cached tokens are attribution, never billed"
     );
 }
@@ -209,7 +242,7 @@ fn a_stop_settles_the_open_turns_tool_calls_too() {
         s.from_caller(&json(serde_json::json!({"event":"stop"})))
             .end
     );
-    assert_eq!(s.units().0, [0, 0, 0, 0, 1, 1]);
+    assert_eq!(s.units().0, [0, 0, 0, 0, 1, 1, 0, 0]);
 }
 
 #[test]
@@ -234,7 +267,7 @@ fn one_full_turn_reports_the_six_classes_the_served_plane_metered() {
         "output_token_details":{"audio_tokens":20,"text_tokens":4}}}}),
     );
     let _ = s.from_far_end(&done, 0);
-    assert_eq!(s.units().0, [10, 20, 3, 4, 1, 1]);
+    assert_eq!(s.units().0, [10, 20, 3, 4, 1, 1, 0, 0]);
 }
 
 #[test]
@@ -285,4 +318,35 @@ fn every_emitted_frame_is_a_text_message_and_either_opcode_is_read() {
             "an emitted frame is text"
         );
     }
+}
+
+/// RED-BEFORE-GREEN (MONEY, #42: a present-but-unreadable billed count is a refusal, never a zero):
+/// a far-end usage report the reader cannot read ends the session rather than serve it on
+/// unmetered: the report still reaches the caller, the caller is told why in its dialect, the
+/// session ends, and the door is told once so the kernel counts the refusal. RED: the reader's
+/// refusal was folded into a plain turn close, the turn's tokens billed zero and the session ran on
+/// with nothing surfaced anywhere.
+#[test]
+fn an_unreadable_usage_report_ends_the_session_and_is_reported_once() {
+    let mut s = SessionUnit::open(
+        OpenAiRealtimeCodec,
+        SessionConfig::default(),
+        false,
+        0,
+        None,
+    );
+    let done = json(
+        serde_json::json!({"type":"response.done","response":{"usage":{
+        "input_tokens":"1500","output_tokens":9}}}),
+    );
+    let plan = s.from_far_end(&done, 0);
+    assert!(plan.end, "the session ends: {plan:?}");
+    let down = text(&plan.to_caller);
+    assert!(
+        down.contains("response.done") && down.contains("usage_unreadable"),
+        "the report and why the session ends reach the caller: {down}"
+    );
+    assert!(s.ended());
+    assert!(s.take_unmetered(), "the door is told");
+    assert!(!s.take_unmetered(), "once");
 }

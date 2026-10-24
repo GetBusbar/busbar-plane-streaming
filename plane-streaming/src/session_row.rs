@@ -5,10 +5,12 @@
 //! kept as. The kernel's handle engine stores the row opaquely; what a row holds, and how it reads as
 //! a durable record, is the plane's.
 
+#[cfg(test)]
 use busbar_contract::records::{PlaneDisposition, PlaneRecord};
 use serde::{Deserialize, Serialize};
 
 /// The durable-audit kind stamped on a streaming session's records — matches `PLANE_DECLARATION.audit_kind`.
+#[cfg(test)]
 pub const STREAMING_SESSION_KIND: &str = "streaming_session";
 
 /// THE OPAQUE DURABLE ROW for one voice session — the neutral engine stores it as `Arc<dyn Any>`; the
@@ -38,6 +40,7 @@ pub struct VoiceSessionRow {
 
 impl VoiceSessionRow {
     /// The row as the durable record the store keeps: its body IS the row.
+    #[cfg(test)]
     #[must_use]
     pub fn record(&self) -> PlaneRecord {
         PlaneRecord {

@@ -2,24 +2,25 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! ONE REQUEST UNIT AS THE KERNEL'S ROUTE PUMP DRIVES IT (`BUSBAR-1.6.0.md` Part 3, section 12):
-//! the pieces of a one-request door (the ephemeral-secret mint, the SDP offer, the metadata
-//! document), in the order the pump pushes them, and what the plane answers each with.
+//! the pieces of a one-request door (the ephemeral-secret mint, the SDP offer), in the order the
+//! pump pushes them, and what the plane answers each with.
 //!
 //! Per attempt the pump pushes an ATTEMPT piece first, then the caller's body (re-pushed on every
 //! attempt), then the far end's answer. The plane answers:
 //!
-//! | piece | mint | SDP offer | metadata |
-//! |---|---|---|---|
-//! | ATTEMPT | the mint request, whole | the request head; its body follows | the document |
-//! | the caller's body | nothing (the mint reads no caller body) | relayed to the far end as it arrived | the document, if not yet answered |
-//! | the far end's answer | gathered; on its last piece, the caller's answer | the same | refused: it dials nothing |
+//! | piece | mint | SDP offer |
+//! |---|---|---|
+//! | ATTEMPT | the mint request, whole | the request head; its body follows |
+//! | the caller's body | nothing (the mint reads no caller body) | relayed to the far end as it arrived |
+//! | the far end's answer | gathered; on its last piece, the caller's answer | the same |
 //!
 //! Every answer is plain data in the plane's own vocabulary; writing it into the host's buffers is
 //! the door's job. A new ATTEMPT forgets what the previous attempt's far end said.
 
 use crate::codec::ir::config::SessionConfig;
 use crate::driven::{
-    mint_failed, mint_reply, sdp_reply, Attempt, Door, Reply, Steps, FIELD_LOCATION,
+    mint_failed, mint_reply, sdp_reply, Attempt, Door, Reply, Steps, FIELD_CONTENT_TYPE,
+    FIELD_LOCATION,
 };
 
 /// Who pushed a piece.
@@ -72,6 +73,7 @@ pub struct RequestUnit {
     caller_ref: Option<String>,
     status: Option<u16>,
     location: Option<String>,
+    content_type: Option<String>,
     far: Vec<u8>,
     answered: bool,
 }
@@ -92,18 +94,14 @@ impl RequestUnit {
             caller_ref,
             status: None,
             location: None,
+            content_type: None,
             far: Vec::new(),
             answered: false,
         })
     }
 
-    /// Its door.
-    #[must_use]
-    pub const fn door(&self) -> Door {
-        self.door
-    }
-
     /// `true` once the caller's answer has been given.
+    #[cfg(test)]
     #[must_use]
     pub const fn answered(&self) -> bool {
         self.answered
@@ -124,6 +122,7 @@ impl RequestUnit {
             (_, From::Kernel(_)) => {
                 self.status = None;
                 self.location = None;
+                self.content_type = None;
                 self.far.clear();
                 match self
                     .door
@@ -152,12 +151,16 @@ impl RequestUnit {
     fn far_end_piece(&mut self, piece: Piece<'_>) -> Answer {
         if let Some(status) = piece.status {
             self.status = Some(status);
-            self.location = piece
-                .head
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(FIELD_LOCATION.as_bytes()))
-                .and_then(|(_, value)| std::str::from_utf8(value).ok())
-                .map(str::to_owned);
+            let field = |wanted: &str| {
+                piece
+                    .head
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(wanted.as_bytes()))
+                    .and_then(|(_, value)| std::str::from_utf8(value).ok())
+                    .map(str::to_owned)
+            };
+            self.location = field(FIELD_LOCATION);
+            self.content_type = field(FIELD_CONTENT_TYPE);
         }
         self.far.extend_from_slice(piece.bytes);
         if !piece.last {
@@ -168,7 +171,12 @@ impl RequestUnit {
         };
         let reply = match self.door {
             Door::Mint => mint_reply(status, &self.far),
-            _ => sdp_reply(status, self.location.as_deref(), &self.far),
+            _ => sdp_reply(
+                status,
+                self.location.as_deref(),
+                self.content_type.as_deref(),
+                &self.far,
+            ),
         };
         self.answer(reply)
     }

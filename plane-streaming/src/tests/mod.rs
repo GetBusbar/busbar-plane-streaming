@@ -169,3 +169,23 @@ mod style {
         );
     }
 }
+
+/// The one counting allocator the crate's alloc gates read: busbar-contract's test-only
+/// `alloc-counter` (a dev-dependency feature), so this crate holds no `unsafe` and its root keeps
+/// the literal `#![forbid(unsafe_code)]`.
+#[global_allocator]
+static A: busbar_contract::alloc_counter::Counting =
+    busbar_contract::alloc_counter::Counting::new();
+
+/// What one downlink Twilio audio frame may allocate, and the bytes it must still render.
+mod alloc_gate_tests;
+
+/// The voice corpus through the plane's own codecs: the round trip and the cross-dialect bridge
+/// busbar's voice conformance legs judged before the door-root made the codecs private.
+mod voice_corpus_tests;
+
+/// What reading one wire frame may allocate, borrowed against owned.
+mod codec_alloc_gate_tests;
+
+/// The plane's type-level purity gates, moved in from `tests/purity.rs`.
+mod purity_gate_tests;

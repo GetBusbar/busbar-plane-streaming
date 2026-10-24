@@ -23,7 +23,9 @@
 //! or the session ending with a turn open), the turn's usage and counters, and whether the session
 //! stays open.
 
-use crate::codec::ir::codec::{DecodeState, DuplexReader, DuplexWriter, WireEvent, WireRef};
+use crate::codec::ir::codec::{
+    DecodeState, DuplexReader, DuplexWriter, WireEvent, WireRef, USAGE_UNREADABLE,
+};
 use crate::codec::ir::config::SessionConfig;
 use crate::codec::ir::control::IrDuplexControl;
 use crate::codec::ir::event::{IrClientEvent, IrServerEvent};
@@ -45,6 +47,8 @@ pub struct Outbound {
     pub downlink: Vec<WireEvent>,
     /// The session must close: its turn sink answered that it may not continue.
     pub close: bool,
+    /// The far end reported usage the reader could not read: the turn's tokens cannot be metered.
+    pub usage_unreadable: bool,
 }
 
 /// Where a closed turn goes: its usage and its counters. The answer is whether the session may
@@ -52,16 +56,6 @@ pub struct Outbound {
 pub trait TurnSink {
     /// One turn closed.
     fn turn_closed(&mut self, usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> bool;
-}
-
-/// No turn sink: an ungoverned session. A closed turn attributes to nobody and never closes it.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Unmetered;
-
-impl TurnSink for Unmetered {
-    fn turn_closed(&mut self, _: Option<&IrDuplexUsage>, _: TurnCounters) -> bool {
-        true
-    }
 }
 
 /// THE SESSION PUMP over the session's codec `C`.
@@ -91,7 +85,7 @@ where
             .unwrap_or(AudioFormat::Pcm16);
         let rules = match &locked_config {
             Some(locked) => std::iter::once(codec.configure_rule(locked))
-                .chain(codec.response_rule())
+                .chain(codec.response_rule(locked))
                 .collect(),
             None => Vec::new(),
         };
@@ -119,10 +113,28 @@ where
         )
     }
 
-    /// The locked session as a frame that configures the far end: what a caller-side envelope that
-    /// configures nothing itself (the telephony carrier) is translated into. `None` with no lock.
+    /// The error frame a session is told before it ends because the far end's usage report could
+    /// not be read, in its dialect; `None` when the dialect has no place to say so.
+    pub fn unmetered_error(&mut self) -> Option<WireEvent> {
+        self.codec.write_down(
+            IrServerEvent::Error {
+                code: USAGE_UNREADABLE.to_string(),
+                message: "the far end's usage report could not be read, so the session cannot be \
+                          metered; it ends rather than serve unmetered"
+                    .to_string(),
+            },
+            &mut self.decode,
+        )
+    }
+
+    /// The locked session as a frame that configures the far end, in the shape its socket reads
+    /// ([`LockedKeys::locked_frame`]): what a caller-side envelope that configures nothing itself
+    /// (the telephony carrier) is translated into. `None` with no lock.
     pub fn locked_update(&mut self) -> Option<WireEvent> {
         let config = self.locked_config.clone()?;
+        if let Some(frame) = self.codec.locked_frame(&config) {
+            return Some(WireEvent(frame.into()));
+        }
         self.codec.write_up(
             IrClientEvent::Control(IrDuplexControl::SessionConfigure { config }),
             &mut self.decode,
@@ -149,7 +161,10 @@ where
         {
             match ev {
                 IrServerEvent::Usage(u) => self.settle_turn(sink, Some(&u), &mut out),
-                IrServerEvent::Error { .. } => self.settle_turn(sink, None, &mut out),
+                IrServerEvent::Error { code, .. } => {
+                    out.usage_unreadable |= code == USAGE_UNREADABLE;
+                    self.settle_turn(sink, None, &mut out);
+                }
                 IrServerEvent::Tool(IrDuplexTool::CallOpen { .. }) => self.turn.open_tool_call(),
                 _ => {}
             }

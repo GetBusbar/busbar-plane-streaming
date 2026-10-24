@@ -76,6 +76,7 @@ fn the_strict_key_lists_are_the_session_objects_own_members() {
         tools: vec![serde_json::json!({})],
         tool_choice: Some(serde_json::json!("auto")),
         max_output_tokens: Some(MaxOutputTokens::Inf),
+        context_window_tokens: Some(1),
     };
     assert_eq!(
         keys(serde_json::to_value(&full).expect("json")),
@@ -96,6 +97,40 @@ fn the_strict_key_lists_are_the_session_objects_own_members() {
         assert_eq!(
             keys(serde_json::to_value(&vad).expect("json")),
             sorted(list)
+        );
+    }
+}
+
+/// RED-BEFORE-GREEN (the section's two token ceilings): a per-response output cap at or above the
+/// context window leaves the locked session no room for the conversation, so the section is refused
+/// at load, the refusal naming both settings and their values; the defaults (4096 below 32768)
+/// load and leave the conversation 28672 tokens. RED: such a section loaded and the locked
+/// session's context limit after its output saturated to 0.
+#[test]
+fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings() {
+    for (blob, words) in [
+        (
+            r#"{"max_output_tokens":4096,"context_window_tokens":4096}"#,
+            "streams.max_output_tokens (4096) must be below streams.context_window_tokens (4096)",
+        ),
+        (
+            r#"{"max_output_tokens":8192,"context_window_tokens":4096}"#,
+            "streams.max_output_tokens (8192) must be below streams.context_window_tokens (4096)",
+        ),
+    ] {
+        let refused = crate::door::read_settings(blob.as_bytes()).expect_err(blob);
+        assert!(refused.contains(words), "{blob}: {refused}");
+    }
+    for blob in [&b""[..], &b"{}"[..]] {
+        let cfg = crate::door::read_settings(blob).expect("the defaults load");
+        assert_eq!(
+            (cfg.max_output_tokens, cfg.context_window_tokens),
+            (4096, 32_768)
+        );
+        let locked = crate::session_door::with_ceilings(cfg.session.clone(), &cfg);
+        assert_eq!(
+            locked.ga_session()["truncation"]["token_limits"]["post_instructions"],
+            28_672
         );
     }
 }

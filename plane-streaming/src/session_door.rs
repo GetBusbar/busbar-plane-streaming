@@ -19,7 +19,7 @@
 //!   the session's unsolicited output: the door wakes the instance's driver ticket, `drive` names
 //!   the session, and each collection (`FROM_KERNEL`, no bytes, no attempt) answers the next queued
 //!   frame, toward the side it is bound for.
-//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the six classes the plane counts over its
+//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the eight classes the plane counts over its
 //!   closed turns and its open turn's running counts (so a cancel or a cut, which reports nothing
 //!   of its own, bills what streamed from the last answer), and, once the far end has first
 //!   answered the session, its fee unit ([`PER_SESSION_CLASS`], `1`): a session whose far end never
@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use busbar_contract::abi::mechanism::ticket::Ticket;
 
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
-use crate::codec::ir::config::SessionConfig;
+use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
 use crate::codec::ir::GeminiLiveCodec;
 use crate::config::StreamsCfg;
 use crate::driven::{Door, Steps};
@@ -56,7 +56,7 @@ const NS_PER_SEC: u64 = 1_000_000_000;
 /// reading on the tick clock, and a ceiling compared across two clocks is no ceiling.
 pub const CEILING_TICK_NS: u64 = NS_PER_SEC;
 
-/// The tail's class index of the session's fee unit (`per_session`), after the six counted
+/// The tail's class index of the session's fee unit (`per_session`), after the eight counted
 /// classes ([`crate::session_unit::CLASSES`]).
 pub const PER_SESSION_CLASS: u32 = crate::session_unit::CLASSES.len() as u32;
 
@@ -113,7 +113,11 @@ pub struct Live {
     started_ns: Option<u64>,
     /// The far end has answered the session: its fee unit was incurred.
     answered: bool,
-    /// The provider's call a sideband session attaches to, as its arrival named it.
+    /// The far end accepted the session's upgrade (its status a switch or a success).
+    accepted: bool,
+    /// The provider's call a sideband session attaches to, as its arrival named it. The call's
+    /// fee unit was reported by the SDP offer that brokered it, so an attached session reports
+    /// none of its own: one fee per call.
     call_id: Option<String>,
     /// The model a session attached to no call names on its dial (`?model=`): the provider's wire
     /// name for the session model its route was named for (the catalog entry's `upstream_model`,
@@ -135,6 +139,7 @@ impl Live {
     /// The session a stream's first piece on `door` opens, under `cfg`; `None` for a door that
     /// answers one request. The telephony door locks the carrier's µ-law on both legs; the other
     /// doors lock the section's session.
+    #[cfg(test)]
     #[must_use]
     pub fn open(door: Door, cfg: &StreamsCfg) -> Option<Live> {
         Self::open_locked(door, cfg, None)
@@ -151,7 +156,8 @@ impl Live {
     }
 
     /// [`Self::open`], locked to `rewritten` where a session-open hook rewrote the params
-    /// ([`Self::locked`]) this session opens under.
+    /// ([`Self::locked`]) this session opens under, with the section's two token ceilings applied
+    /// ([`with_ceilings`]).
     #[must_use]
     pub fn open_locked(
         door: Door,
@@ -159,8 +165,12 @@ impl Live {
         rewritten: Option<SessionConfig>,
     ) -> Option<Live> {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
-        // The locked session as the provider is told it: the session model by its wire name.
-        let locked = cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg)));
+        // The locked session as the provider is told it: under the section's token ceilings, the
+        // session model by its wire name.
+        let locked = with_ceilings(
+            cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg))),
+            cfg,
+        );
         let unit = match door {
             Door::Sideband | Door::Realtime => Unit::Realtime(SessionUnit::open(
                 OpenAiRealtimeCodec,
@@ -188,6 +198,7 @@ impl Live {
             ceiling_secs: ceiling,
             started_ns: None,
             answered: false,
+            accepted: false,
             call_id: None,
             dial_model: match door {
                 Door::Realtime | Door::Twilio => cfg
@@ -208,6 +219,23 @@ impl Live {
         self.call_id = Some(call_id);
     }
 
+    /// The far end accepted the session's upgrade.
+    pub fn accept(&mut self) {
+        self.accepted = true;
+    }
+
+    /// Whether the far end accepted the session's upgrade.
+    #[must_use]
+    pub fn accepted(&self) -> bool {
+        self.accepted
+    }
+
+    /// The provider's call this session is attached to, if any.
+    #[must_use]
+    pub fn call_id(&self) -> Option<&str> {
+        self.call_id.as_deref()
+    }
+
     /// The target the session dials under the member's base URL: the dialect's socket `path`; for
     /// a session attached to a provider's call, that call only (`?call_id=`, the provider's
     /// sideband connection to the call's own session); for a plain or telephony session, the
@@ -225,6 +253,12 @@ impl Live {
         }
     }
 
+    /// Whether the session ended on a far-end usage report it could not read and the kernel has
+    /// not been told; telling clears it.
+    pub fn take_unmetered(&mut self) -> bool {
+        each!(&mut self.unit, |u| u.take_unmetered())
+    }
+
     /// Queue what `plan` owes either side, the far end's frames first.
     fn take(&mut self, plan: Plan) {
         self.queued
@@ -235,6 +269,7 @@ impl Live {
     }
 
     /// A caller piece; `last` = the caller's side ended.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8], last: bool) {
         let plan = each!(&mut self.unit, |u| {
             let mut plan = if bytes.is_empty() {
@@ -252,6 +287,7 @@ impl Live {
     }
 
     /// A far-end piece, at `now_ms`. The first one incurs the session's fee unit.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) {
         self.answered = true;
         let plan = each!(&mut self.unit, |u| u.from_far_end(bytes, now_ms));
@@ -304,16 +340,33 @@ impl Live {
     }
 
     /// The session's cumulative units, as the door reports them: (class index, amount), the zero
-    /// classes left out; the fee unit is `1` once the far end has answered.
+    /// classes left out; the fee unit is `1` once the far end has answered, unless the session is
+    /// attached to a call whose SDP offer already reported the call's fee.
     #[must_use]
     pub fn units(&self) -> Vec<(u32, u64)> {
         let units: CumulativeUnits = each!(&self.unit, |u| u.units());
         let mut out = Door::Sideband.meter(&units);
-        if self.answered {
+        if self.answered && self.call_id.is_none() {
             out.push((PER_SESSION_CLASS, 1));
         }
         out
     }
+}
+
+/// THE SECTION'S TOKEN CEILINGS over the session params `locked`: the per-response output cap is
+/// `streams.max_output_tokens`, or the session's own where that is lower, and the context window is
+/// `streams.context_window_tokens`. Each dialect states them in its own keys when the session is
+/// locked (`max_output_tokens` and `truncation` on OpenAI Realtime, `generationConfig.maxOutputTokens`
+/// and `contextWindowCompression` on Gemini Live).
+#[must_use]
+pub fn with_ceilings(mut locked: SessionConfig, cfg: &StreamsCfg) -> SessionConfig {
+    let cap = match locked.max_output_tokens {
+        Some(MaxOutputTokens::Limit(n)) => n.min(cfg.max_output_tokens),
+        _ => cfg.max_output_tokens,
+    };
+    locked.max_output_tokens = Some(MaxOutputTokens::Limit(cap));
+    locked.context_window_tokens = Some(cfg.context_window_tokens);
+    locked
 }
 
 /// THE SESSION-OPEN PARAMS A COMMITTED HOOK REWRITE PRODUCED (the session-open hook projection the
@@ -446,6 +499,7 @@ impl Sessions {
     }
 
     /// How many streams' sessions owe an answer of their own.
+    #[cfg(test)]
     #[must_use]
     pub fn ready_count(&self) -> usize {
         self.live.values().filter(|l| l.ready()).count()
@@ -459,15 +513,10 @@ impl Sessions {
     }
 
     /// How many sessions are live.
+    #[cfg(test)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.live.len()
-    }
-
-    /// Whether none is.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.live.is_empty()
     }
 }
 

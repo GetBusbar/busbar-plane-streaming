@@ -32,57 +32,63 @@
 //!
 //! The plane value ([`StreamingPlane`]) is immutable and carries only its configured upstream list.
 //! A door instance holds its live generations; a live session's state (the codec's decode state, the
-//! open turn's counters, the session's cumulative units and record) is a [`session_unit::SessionUnit`].
+//! open turn's counters and the session's cumulative units) is a [`session_unit::SessionUnit`].
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-pub mod broker;
-pub mod claims;
+mod broker;
+mod claims;
 // `#![deny(missing_docs)]` above is a rule this crate holds itself to; the `codec` module was not
 // written under it and is exempt, scoped to exactly this module.
 #[allow(missing_docs)]
-pub mod codec;
-pub mod config;
-pub mod diagnostics;
-pub mod door;
-pub mod driven;
-pub mod meta;
+mod codec;
+mod config;
+mod door;
+mod driven;
+mod meta;
 /// What an `on_piece` answer owes the reply buffer across re-calls, and the one settle of its buffers.
 mod piece;
-pub mod provider;
-pub mod register;
-pub mod request_unit;
-pub mod session;
-pub mod session_door;
-pub mod session_params;
-pub mod session_pump;
-pub mod session_row;
-pub mod session_unit;
-pub mod sessions;
-pub mod splice;
+mod provider;
+mod request_unit;
+mod session;
+mod session_door;
+mod session_params;
+mod session_pump;
+/// The session record the crate's tests read (the door writes none: the kernel writes a session's
+/// one line).
+#[cfg(test)]
+mod session_row;
+mod session_unit;
+/// The live sessions one open builds, by door (the crate's tests' driver; the door holds `Live`).
+#[cfg(test)]
+mod sessions;
+mod splice;
 
 #[cfg(test)]
 mod tests;
 
+// The plane value and its upstreams: the crate's tests' (purity, the plane's meta); a shipped build
+// states the plane through its door alone.
+#[cfg(test)]
 use busbar_contract::ids::LaneId;
+#[cfg(test)]
 use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
 
-/// The dialect roster this plane speaks, re-exported so a caller names it through the STREAMING plane it
-/// registered. The live realtime voice dialect appears here as [`Dialect::OpenaiRealtime`] /
-/// [`Dialect::GeminiLive`] — one dialect among the five, never the plane's name.
-pub use claims::Dialect;
+#[cfg(test)]
+use claims::Dialect;
 
-/// The composition-root wiring shape and the plane value it registers (the plane side of S1/S4).
-pub use register::{plane_for_root, CAP_KEY};
+/// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
+pub use door::door;
 
 /// One configured upstream this plane may dial or pair a claim against.
 ///
 /// Borrowed for the life of the program, the same way `busbar-plane-llm::Upstream` is: the
 /// composition root interns every config-derived key once through
 /// the host's word interner (its `Registration`) and hands over names that outlive it.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Upstream {
+pub(crate) struct Upstream {
     /// The priced lane this upstream is reached on.
     pub lane: LaneId,
     /// The host to dial.
@@ -98,11 +104,13 @@ pub struct Upstream {
 ///
 /// The one field is a borrowed, immutable list: no cell, no lock, no atomic. The purity test in
 /// `tests::purity` asserts that by walking the type rather than by trusting this sentence.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StreamingPlane {
+pub(crate) struct StreamingPlane {
     upstreams: &'static [Upstream],
 }
 
+#[cfg(test)]
 impl StreamingPlane {
     /// A plane with a configured upstream set.
     #[must_use]
@@ -117,12 +125,6 @@ impl StreamingPlane {
     /// not a panic, and not a fabricated host.
     pub const EMPTY: Self = Self::new(&[]);
 
-    /// The configured upstreams, in declaration order.
-    #[must_use]
-    pub const fn upstreams(&self) -> &'static [Upstream] {
-        self.upstreams
-    }
-
     /// The first configured upstream that speaks a given dialect.
     ///
     /// First match wins, the declaration order the operator wrote. Choosing among several when more
@@ -133,12 +135,14 @@ impl StreamingPlane {
     }
 }
 
+#[cfg(test)]
 impl Default for StreamingPlane {
     fn default() -> Self {
         Self::EMPTY
     }
 }
 
+#[cfg(test)]
 impl Plugin for StreamingPlane {
     fn key(&self) -> &'static str {
         <Self as busbar_contract::plane::PlaneMeta>::KEY

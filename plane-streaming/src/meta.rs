@@ -1,31 +1,40 @@
 //! What this plane declares about itself.
 //!
 //! Everything here is a constant, because everything here is read once at registration and sealed
-//! into policy. The meter-class list, in particular, is the exact list
-//! `docs/design/BUSBAR-1.6.0.md`'s protocol-inventory table names for the `voice` row —
-//! `audio_tokens_in/out, text_tokens_in/text_tokens_out, cached_tokens, audio_seconds_in,
-//! tool_calls` — and no other class is declared, because the table names that list and no other.
+//! into policy. The meter-class list is the voice row's list (`audio_tokens_in/out`,
+//! `text_tokens_in/out`, `audio_seconds_in`, `tool_calls`; `cached_tokens` is attribution only)
+//! and the two input classes the providers bill apart from text, `image_tokens_in` and
+//! `video_tokens_in` (#77(4): classes are strings the plane declares).
 //!
 //! In particular the table names `audio_seconds_in` and no outbound twin. Metering the downlink by
 //! duration would be a second reading of the same audio the `audio_tokens_out` class already prices,
 //! so the absent class is the table's decision and not an omission this module quietly fills in.
 
-use busbar_contract::ids::{
-    AdminVerbId, ClassDirection, MeterClassDecl, MeterClassId, OpClassId, RecordSchemaId,
-};
+use busbar_contract::ids::{MeterClassId, OpClassId};
+
+// The plane's meta declaration, which only the crate's tests read now that the door states the
+// plane (the Statement tail and its `declares`).
+#[cfg(test)]
+use busbar_contract::ids::{AdminVerbId, ClassDirection, MeterClassDecl, RecordSchemaId};
+#[cfg(test)]
 use busbar_contract::plane::PlaneMeta;
 
+#[cfg(test)]
 use crate::claims;
+#[cfg(test)]
 use crate::StreamingPlane;
 
 /// The family every token-shaped meter class rolls up into, the same family
 /// `busbar-plane-llm` uses for its own token classes.
+#[cfg(test)]
 const TOKEN_FAMILY: &str = "token";
 
 /// The family the duration-shaped class rolls up into.
+#[cfg(test)]
 const DURATION_FAMILY: &str = "duration";
 
 /// The family the count-shaped class rolls up into.
+#[cfg(test)]
 const COUNT_FAMILY: &str = "count";
 
 /// Bytes per token, as the default divisor for the token classes.
@@ -33,22 +42,13 @@ const COUNT_FAMILY: &str = "count";
 /// This exists so a class cap works with no rate card configured at all — the same reasoning
 /// `busbar-plane-llm` states for its own default. It sizes a HOLD; the metering step settles
 /// against what [`crate::codec::ir::IrDuplexUsage`] actually reports.
+#[cfg(test)]
 const BYTES_PER_TOKEN: u32 = 4;
 
 /// Seconds per unit for the duration class's default divisor: one, because the class is reported in
 /// its own unit (see [`audio_seconds_in`]), not in bytes a divisor would have to convert.
+#[cfg(test)]
 const SECONDS_PER_UNIT: u32 = 1;
-
-/// The `text_tokens` figure a span of text estimates to, through the class's own declared divisor.
-///
-/// A one-shot text-to-speech request is priced on the text it asks to be spoken, and no upstream
-/// reports a token count for it before the audio comes back. So the figure is an estimate, and it
-/// is the class's OWN default divisor that produces it rather than a second constant invented at
-/// the call site: what the class says a token costs in bytes is what a token costs here.
-#[must_use]
-pub const fn text_tokens_of(byte_len: usize) -> u64 {
-    (byte_len as u64).div_ceil(BYTES_PER_TOKEN as u64)
-}
 
 /// Milliseconds in the second the `audio_seconds_in` class is denominated in.
 const MS_PER_SECOND: u64 = 1_000;
@@ -69,6 +69,7 @@ pub const fn audio_seconds_in(ms: u64) -> u64 {
 }
 
 /// One tool call per unit, for the same reason.
+#[cfg(test)]
 const CALLS_PER_UNIT: u32 = 1;
 
 /// The meter classes this plane declares.
@@ -90,6 +91,7 @@ const CALLS_PER_UNIT: u32 = 1;
 /// cached from uncached audio/text truthfully (there is no per-modality cache split reported), so no
 /// disjoint `*_cached`/`*_uncached` pair is declared either; the figure is carried unbilled instead,
 /// as the [`FACT_CACHED_TOKENS`] content fact — attribution, not a ledger class.
+#[cfg(test)]
 const METER_CLASSES: &[MeterClassDecl] = &[
     MeterClassDecl {
         key: CLASS_AUDIO_TOKENS_IN,
@@ -126,6 +128,18 @@ const METER_CLASSES: &[MeterClassDecl] = &[
         family: COUNT_FAMILY,
         direction: ClassDirection::Response,
         default_divisor: CALLS_PER_UNIT,
+    },
+    MeterClassDecl {
+        key: CLASS_IMAGE_TOKENS_IN,
+        family: TOKEN_FAMILY,
+        direction: ClassDirection::Input,
+        default_divisor: BYTES_PER_TOKEN,
+    },
+    MeterClassDecl {
+        key: CLASS_VIDEO_TOKENS_IN,
+        family: TOKEN_FAMILY,
+        direction: ClassDirection::Input,
+        default_divisor: BYTES_PER_TOKEN,
     },
 ];
 
@@ -167,6 +181,7 @@ pub const CLASS_TEXT_TOKENS_OUT: MeterClassId = MeterClassId::new("text_tokens_o
 /// money only via [`FACT_CACHED_TOKENS`], an unbilled attribution fact. Kept as a `MeterClassId`
 /// (rather than a bare string) because callers outside this crate that read the figure still
 /// identify it by the same typed key every billable class uses.
+#[cfg(test)]
 pub const CLASS_CACHED_TOKENS: MeterClassId = MeterClassId::new("cached_tokens");
 
 /// The class key the seconds of inbound audio a turn consumed are counted under.
@@ -175,6 +190,15 @@ pub const CLASS_CACHED_TOKENS: MeterClassId = MeterClassId::new("cached_tokens")
 /// unit price, and a root that spelled it out inline would be one more chance for that spelling to
 /// drift from the declaration above.
 pub const CLASS_AUDIO_SECONDS_IN: MeterClassId = MeterClassId::new("audio_seconds_in");
+
+/// The class key the image input tokens of a turn are counted under (OpenAI Realtime's
+/// `input_token_details.image_tokens`, Gemini Live's IMAGE modality entries): its own class, because
+/// the providers price image input apart from text (#77(4): classes are strings the plane declares).
+pub const CLASS_IMAGE_TOKENS_IN: MeterClassId = MeterClassId::new("image_tokens_in");
+
+/// The class key the video input tokens of a turn are counted under (Gemini Live's VIDEO modality
+/// entries): its own class, because the provider prices video input apart from text.
+pub const CLASS_VIDEO_TOKENS_IN: MeterClassId = MeterClassId::new("video_tokens_in");
 
 /// The class key a tool call is counted under.
 ///
@@ -198,6 +222,7 @@ pub const OP_SESSION_OPEN: OpClassId = OpClassId::new("streaming.session.open");
 /// provider tool call — the last one is what a `Progress::OneShot` a provider pushes mid-session is
 /// priced as (see `crate::plane`'s `decode_response` for the mapping this plane makes from
 /// `IrDuplexTool::CallOpen` onto it).
+#[cfg(test)]
 const OP_CLASSES: &[OpClassId] = &[
     OP_SESSION_OPEN,
     OpClassId::new("duplex_turn"),
@@ -207,32 +232,32 @@ const OP_CLASSES: &[OpClassId] = &[
 ];
 
 /// The fact key under which the decode step reports which dialect a session or one-shot unit is.
+#[cfg(test)]
 pub const FACT_DIALECT: &str = "dialect";
-/// The fact key under which a tool-call unit reports the tool name.
-pub const FACT_TOOL_NAME: &str = "tool_name";
-/// The fact key under which a tool-call unit reports the upstream's own call id.
-pub const FACT_CALL_ID: &str = "call_id";
 /// The fact key under which a response reports the audio input milliseconds this plane admitted
 /// since the turn opened — this plane's own derived quantity, not one `IrDuplexUsage` carries.
+#[cfg(test)]
 pub const FACT_AUDIO_MS_IN: &str = "audio_ms_in";
 /// The fact key under which a response reports how many tool calls opened since the turn opened —
 /// this plane's own derived count, not one `IrDuplexUsage` carries.
+#[cfg(test)]
 pub const FACT_TOOL_CALLS: &str = "tool_calls";
 /// The fact key under which a response reports the four token classes `IrDuplexUsage` carries.
+#[cfg(test)]
 pub const FACT_AUDIO_TOKENS_IN: &str = "audio_tokens_in";
 /// See [`FACT_AUDIO_TOKENS_IN`].
+#[cfg(test)]
 pub const FACT_AUDIO_TOKENS_OUT: &str = "audio_tokens_out";
 /// The fact key under which a response reports the text tokens the turn consumed.
+#[cfg(test)]
 pub const FACT_TEXT_TOKENS_IN: &str = "text_tokens_in";
 /// The fact key under which a response reports the text tokens the model EMITTED. Separate from
 /// [`FACT_TEXT_TOKENS_IN`] because the two price under different classes at different rates.
+#[cfg(test)]
 pub const FACT_TEXT_TOKENS_OUT: &str = "text_tokens_out";
 /// See [`FACT_AUDIO_TOKENS_IN`].
+#[cfg(test)]
 pub const FACT_CACHED_TOKENS: &str = "cached_tokens";
-/// The fact key under which a response reports an upstream error's stable code.
-pub const FACT_ERROR_CODE: &str = "error_code";
-/// The fact key under which a response reports an upstream error's message.
-pub const FACT_ERROR_MESSAGE: &str = "error_message";
 
 /// The fact key this plane's `INTERRUPT_FACT` names — written wherever a barge-in truncation is
 /// established, in either direction: when the client (or the plane, synthesizing on the client's
@@ -241,6 +266,7 @@ pub const FACT_ERROR_MESSAGE: &str = "error_message";
 /// `audio_played_ms` figure itself, as `FactValue::Int`. See `crate::plane`'s `decode_ingress` (the
 /// client-authored case) and `decode_response` (the plane-synthesized case, on an upstream's
 /// `SpeechStarted`).
+#[cfg(test)]
 pub const FACT_INTERRUPT_AUDIO_PLAYED_MS: &str = "streaming.interrupt.audio_played_ms";
 
 /// The fact key this plane's `EGRESS_PACING_FACT` names — written on every downlink audio frame
@@ -248,15 +274,18 @@ pub const FACT_INTERRUPT_AUDIO_PLAYED_MS: &str = "streaming.interrupt.audio_play
 /// at the moment the frame was relayed. The kernel's outbound write path uses this to pace delivery
 /// against how much the client has actually played out, the same bookkeeping the barge-in truncate
 /// arithmetic reads. See `crate::plane`'s `decode_response`.
+#[cfg(test)]
 pub const EGRESS_PACING_FACT_KEY: &str = "streaming.pacing.played_ms";
 
 /// The session fact keys this plane writes.
 ///
 /// The dialect is a session fact for the same reason `busbar-plane-llm` declares its own dialect
 /// fact one: a session that changed dialect mid-stream would be a different priced thing.
+#[cfg(test)]
 const SESSION_FACTS: &[&str] = &[FACT_DIALECT];
 
 /// The content fact keys this plane produces.
+#[cfg(test)]
 const CONTENT_FACTS: &[&str] = &[
     FACT_AUDIO_MS_IN,
     FACT_TOOL_CALLS,
@@ -268,6 +297,7 @@ const CONTENT_FACTS: &[&str] = &[
 ];
 
 /// The read-only introspection verb that lists the dialects this plane speaks.
+#[cfg(test)]
 pub const VERB_DIALECTS: AdminVerbId = AdminVerbId::new("dialects");
 
 /// The verbs this plane answers.
@@ -275,9 +305,11 @@ pub const VERB_DIALECTS: AdminVerbId = AdminVerbId::new("dialects");
 /// Kept small and read-only, the same restraint `busbar-plane-llm` states for its own verb list: an
 /// admin verb answers a question about what the plane is, never a question about a live session's
 /// content.
+#[cfg(test)]
 const INTROSPECTION_VERBS: &[AdminVerbId] = &[VERB_DIALECTS];
 
 /// The schema of this plane's own configuration block.
+#[cfg(test)]
 const CONFIG_SCHEMA: &str = r#"{
   "type": "object",
   "additionalProperties": false,
@@ -287,6 +319,7 @@ const CONFIG_SCHEMA: &str = r#"{
   }
 }"#;
 
+#[cfg(test)]
 impl PlaneMeta for StreamingPlane {
     const KEY: &'static str = "streaming";
     const CLAIMS: &'static [busbar_contract::grammar::Claim] = claims::CLAIMS;
