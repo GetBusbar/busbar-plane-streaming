@@ -4,6 +4,9 @@
 //! Tests for `crates/busbar-plane-streaming/src/broker.rs`.
 
 use super::*;
+use busbar_contract::abi::sdk::test_support::chip::cred;
+
+use crate::tests::sealed_bytes;
 
 #[test]
 fn a_mint_asks_for_the_requested_lifetime_held_inside_its_bounds() {
@@ -82,7 +85,7 @@ fn a_minted_answer_reads_the_ek_secret_and_its_expiry() {
     assert_eq!(
         m,
         Minted {
-            value: "ek_live".into(),
+            value: cred("ek_live"),
             expires_at_unix: 1_700_000_600
         }
     );
@@ -105,10 +108,13 @@ fn a_mint_answer_that_is_not_an_ephemeral_secret_is_refused() {
 
 #[test]
 fn the_browser_is_answered_the_secret_and_its_expiry_only() {
-    let body = minted_answer(&Minted {
-        value: "ek_1".into(),
-        expires_at_unix: 5,
-    });
+    let body = sealed_bytes(
+        &mut minted_answer(&Minted {
+            value: cred("ek_1"),
+            expires_at_unix: 5,
+        })
+        .expect("text"),
+    );
     let read: serde_json::Value = serde_json::from_slice(&body).expect("json");
     assert_eq!(
         read,
@@ -127,4 +133,85 @@ fn the_call_id_is_the_rtc_segment_of_the_location() {
         Some("rtc_z".into())
     );
     assert_eq!(rtc_call_id_of("/v1/realtime/calls/abc"), None);
+}
+
+/// The browser's answer as 1.6.0-pre built it: the secret, held as text, in `serde_json`'s object.
+fn minted_answer_as_built_before(value: &str, expires_at_unix: u64) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "value": value,
+        "expires_at_unix": expires_at_unix,
+    }))
+    .unwrap_or_default()
+}
+
+/// THE ANSWER IS BYTE FOR BYTE WHAT IT WAS: the SDK-sealed answer, read off the provider's mint
+/// answer, is the bytes the text-holding answer wrote for the same input, every escape included.
+#[test]
+fn the_sealed_answer_is_the_answer_as_built_before() {
+    // Each as the provider's JSON spells it, escapes and all.
+    let secrets = [
+        r#"ek_1"#,
+        r#"ek_68d2b0c0a1e4819092f3b5d6c7e8f901"#,
+        r#"ek_q\"uote\\back\/slash"#,
+        r#"ek_\u0001\b\f\n\r\t\u001f\u007f"#,
+        r#"ek_h\u00e9llo \u2713 \ud83d\ude00 \u2028 é"#,
+    ];
+    for (i, escaped) in secrets.iter().enumerate() {
+        let expires = [1_u64, 5, 1_767_225_600, u64::MAX, 600][i];
+        let body = format!(
+            r#"{{"value":"{escaped}","expires_at":{expires},"session":{{"type":"realtime"}}}}"#
+        );
+        let text: String =
+            serde_json::from_str(&format!("\"{escaped}\"")).expect("the test's own string");
+        let minted = read_minted(body.as_bytes()).expect("reads");
+        let mut sealed = minted_answer(&minted).expect("text");
+        assert_eq!(
+            sealed.len(),
+            minted_answer_as_built_before(&text, expires).len()
+        );
+        assert_eq!(
+            sealed_bytes(&mut sealed),
+            minted_answer_as_built_before(&text, expires),
+            "{escaped}"
+        );
+    }
+}
+
+/// RED-BEFORE-GREEN: the mint answer's decode failure is described by its class and position, the
+/// texts the caller was answered before, word for word, and never the value the decoder met.
+#[test]
+fn a_mint_answer_that_does_not_parse_keeps_its_text_and_quotes_no_value() {
+    for (body, want) in [
+        (
+            &br#"{"value":5}"#[..],
+            "client-secret response did not parse: a field is missing or has the wrong type \
+             (line 1, column 10; the decoder's text is withheld)",
+        ),
+        (
+            &b"not json"[..],
+            "client-secret response did not parse: it is not well-formed JSON (line 1, column 2; \
+             the decoder's text is withheld)",
+        ),
+        (
+            &br#"{"value":"ek_live","expires_at":"ek_live"}"#[..],
+            "client-secret response did not parse: a field is missing or has the wrong type \
+             (line 1, column 41; the decoder's text is withheld)",
+        ),
+        (
+            &br#"{"value":"ek_live""#[..],
+            "client-secret response did not parse: it ends before the JSON does (line 1, column \
+             18; the decoder's text is withheld)",
+        ),
+    ] {
+        let refused = read_minted(body).expect_err("refused");
+        assert_eq!(refused, want);
+        assert!(!refused.contains("ek_live"), "{refused}");
+    }
+}
+
+/// `Debug` of a minted secret names its expiry and nothing of the secret.
+#[test]
+fn a_minted_secret_debugs_its_expiry_only() {
+    let m = read_minted(br#"{"value":"ek_CANARY51","expires_at":9}"#).expect("reads");
+    assert_eq!(format!("{m:?}"), "Minted { expires_at_unix: 9, .. }");
 }

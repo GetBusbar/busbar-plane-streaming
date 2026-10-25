@@ -43,7 +43,7 @@ dependencies = [
 [[package]]
 name = "busbar-contract"
 version = "1.6.0"
-source = "git+https://www.github.com/GetBusbar/busbar?rev=c46779d2175b5845338405e98fb8008a07fb01db#c46779d2175b5845338405e98fb8008a07fb01db"
+source = "git+https://www.github.com/GetBusbar/busbar?rev=dd7bad638ff9ca07df451edfa55ded375da68abc#dd7bad638ff9ca07df451edfa55ded375da68abc"
 dependencies = [
  "async-trait",
  "base64",
@@ -73,6 +73,7 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -88,7 +89,7 @@ dependencies = [
 [[package]]
 name = "busbar-plugin-loader"
 version = "1.5.0"
-source = "git+https://github.com/GetBusbar/busbar?rev=c46779d2175b5845338405e98fb8008a07fb01db#c46779d2175b5845338405e98fb8008a07fb01db"
+source = "git+https://github.com/GetBusbar/busbar?rev=dd7bad638ff9ca07df451edfa55ded375da68abc#dd7bad638ff9ca07df451edfa55ded375da68abc"
 dependencies = [
  "base64",
  "busbar-contract",
