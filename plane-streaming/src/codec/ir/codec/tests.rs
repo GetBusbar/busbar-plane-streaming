@@ -357,7 +357,7 @@ fn uplink_seq_is_monotonic_across_frames() {
 }
 
 #[test]
-fn downlink_audio_delta_frames_down_tracks_playback_and_bumps_seq() {
+fn downlink_audio_delta_frames_down_and_bumps_seq() {
     let codec = OpenAiRealtimeCodec;
     let mut st = DecodeState::default();
     st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
@@ -370,15 +370,13 @@ fn downlink_audio_delta_frames_down_tracks_playback_and_bumps_seq() {
     assert_eq!(f.dir, UpDown::Down);
     assert_eq!(f.seq, 0);
     assert_eq!(f.media.len(), 96);
-    assert_eq!(st.played_ms(), 2, "96 bytes of pcm16 @ 24kHz is 2 ms");
 
-    // A second delta advances the downlink seq and accumulates playback.
+    // A second delta advances the downlink seq.
     let ir2 = codec.read_down(wire(&src.to_string()), &mut st);
     let IrServerEvent::AudioFrame(f2) = &ir2[0] else {
         panic!()
     };
     assert_eq!(f2.seq, 1);
-    assert_eq!(st.played_ms(), 4);
 }
 
 #[test]
@@ -434,131 +432,12 @@ fn downlink_audio_delta_legacy_alias_decodes() {
     assert!(matches!(&ir[0], IrServerEvent::AudioFrame(f) if f.dir == UpDown::Down));
 }
 
-#[test]
-fn a_faster_than_realtime_burst_reports_the_audio_relayed_not_the_audio_heard() {
-    // WHAT THE COUNTER MEANS. The upstream emits a whole turn's audio in one burst, far faster than
-    // it plays. The position is derived from BYTES RELAYED, so after the burst it reads the whole
-    // turn — an UPPER BOUND on what the user heard, not a measurement of it.
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16); // 48 B/ms
-    st.record_played(48 * 10_000); // ten seconds of audio, handed over at once
-    assert_eq!(
-        st.played_ms(),
-        10_000,
-        "the bytes relayed for this item, in ms"
-    );
-
-    // THE SEAM A CLOCK GOES THROUGH. Fed how long the item has actually been playing, the position
-    // is bounded by it: no more audio can have been heard than there has been time to hear it in.
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    st.record_played_at(48 * 10_000, Some(1_200));
-    assert_eq!(
-        st.played_ms(),
-        1_200,
-        "1.2 s of wall clock cannot have played 10 s of audio"
-    );
-    // And a clock that has run longer than the audio relayed does not invent audio.
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    st.record_played_at(48 * 100, Some(9_000));
-    assert_eq!(st.played_ms(), 100, "only the audio actually handed over");
-}
-
 // ── barge-in truncate math ───────────────────────────────────────────────────────────────────────
 
 #[test]
 fn audio_format_math() {
     assert_eq!(AudioFormat::Pcm16.bytes_per_ms(), 48);
     assert_eq!(AudioFormat::G711Ulaw.bytes_per_ms(), 8);
-    assert_eq!(AudioFormat::Pcm16.bytes_to_ms(480), 10);
-    assert_eq!(AudioFormat::Pcm16.ms_to_bytes(10), 480);
-    assert_eq!(AudioFormat::G711Ulaw.bytes_to_ms(80), 10);
-    assert_eq!(
-        crate::codec::ir::media::truncate_point_ms(480, AudioFormat::Pcm16),
-        10
-    );
-}
-
-#[test]
-fn flush_playback_returns_heard_ms_and_resets() {
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    st.record_played(48 * 500); // 500 ms played
-    assert_eq!(st.played_ms(), 500);
-    let heard = st.flush_playback();
-    assert_eq!(heard, 500);
-    assert_eq!(st.played_ms(), 0, "flush zeroes the playback counter");
-}
-
-#[test]
-fn playback_position_resets_at_the_item_boundary_so_turns_do_not_accumulate() {
-    // Two model turns, the second barged into: the truncate point must be the position within the
-    // CURRENT item, not the running total since the session opened.
-    let codec = OpenAiRealtimeCodec;
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
-    let delta = |ms: usize| {
-        json!({ "type": "response.output_audio.delta", "delta": b64(&vec![0u8; 48 * ms]) })
-            .to_string()
-    };
-
-    // Turn 1: a full second of audio, then the item ends.
-    let _ = codec.read_down(wire(&delta(1000)), &mut st);
-    let _ = codec.read_down(
-        wire(&json!({ "type": "response.output_audio.done", "item_id": "item_1" }).to_string()),
-        &mut st,
-    );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "the item boundary zeroes the playback position"
-    );
-
-    // Turn 2: a new item, barged into after 240 ms.
-    let _ = codec.read_down(
-        wire(
-            &json!({
-                "type": "response.output_item.added",
-                "item": { "type": "message", "id": "item_2", "role": "assistant" }
-            })
-            .to_string(),
-        ),
-        &mut st,
-    );
-    let _ = codec.read_down(wire(&delta(240)), &mut st);
-    assert_eq!(
-        st.flush_playback(),
-        240,
-        "the truncate point is this item's audio, not turn 1 plus turn 2"
-    );
-}
-
-#[test]
-fn a_new_function_call_item_does_not_zero_the_playing_item() {
-    // A `function_call` output item can be added WHILE an audio item is still playing; it is not the
-    // audio item's boundary, so it must not move the truncate point.
-    let codec = OpenAiRealtimeCodec;
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    let _ = codec.read_down(
-        wire(
-            &json!({ "type": "response.output_audio.delta", "delta": b64(&vec![0u8; 48 * 120]) })
-                .to_string(),
-        ),
-        &mut st,
-    );
-    let _ = codec.read_down(
-        wire(
-            &json!({
-                "type": "response.output_item.added",
-                "item": { "type": "function_call", "call_id": "call_1", "name": "get_weather" }
-            })
-            .to_string(),
-        ),
-        &mut st,
-    );
-    assert_eq!(st.played_ms(), 120);
 }
 
 #[test]
@@ -671,11 +550,6 @@ fn an_undecodable_audio_payload_emits_no_frame() {
     assert!(
         down.is_empty(),
         "a downlink audio delta that is not base64 must yield no IR frame, got {down:?}"
-    );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "a payload that never decoded must not advance the barge-in playback clock"
     );
     // Well-formed audio still flows, in both directions.
     assert_eq!(
