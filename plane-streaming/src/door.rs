@@ -126,19 +126,16 @@ const SECTIONS: &[Section] = &[
     Section {
         name: abi_str(SECTION),
         flags: SECTION_DECLARING,
-        _reserved: 0,
         ..Section::ZERO
     },
     Section {
         name: abi_str(PROVIDERS_SECTION),
         flags: SECTION_CONSUMED,
-        _reserved: 0,
         ..Section::ZERO
     },
     Section {
         name: abi_str(MODELS_SECTION),
         flags: SECTION_CONSUMED,
-        _reserved: 0,
         ..Section::ZERO
     },
 ];
@@ -177,7 +174,6 @@ const fn dialect_auth(dialect: u32, style: &'static str) -> DialectAuth {
     DialectAuth {
         dialect,
         // No provider names a realtime dialect, and no caller signs one.
-        flags: 0,
         style: abi_str(style),
         params: Blob::ABSENT,
         ..DialectAuth::ZERO
@@ -199,14 +195,12 @@ const SCOPE_KINDS: &[AbiStr] = &[abi_str(SCOPE)];
 const OP_CLASSES: &[OpClass] = &[OpClass {
     op: abi_str(meta::OP_SESSION_OPEN.as_str()),
     name: abi_str(LABEL),
-    ..OpClass::ZERO
 }];
 
 const fn class(class: &'static str, family: &'static str) -> BillableClass {
     BillableClass {
         class: abi_str(class),
         family: abi_str(family),
-        ..BillableClass::ZERO
     }
 }
 
