@@ -228,3 +228,27 @@ fn plain_openai_realtime_over_ws_is_its_own_session_door() {
         "the plain session dials the provider's realtime socket, attached to no call"
     );
 }
+
+/// `Debug` of a minted secret, and of the reply that carries it to the caller, prints no byte of the
+/// live `ek_` key, as text or as the body's byte list: a `{:?}` in a log line holds no credential.
+#[test]
+fn debug_of_a_minted_secret_and_its_reply_prints_no_key() {
+    const CANARY: &str = "ek_CANARY7c1f9e";
+    let minted =
+        crate::broker::read_minted(format!(r#"{{"value":"{CANARY}","expires_at":9}}"#).as_bytes())
+            .unwrap();
+    let reply = mint_reply(
+        200,
+        format!(r#"{{"value":"{CANARY}","expires_at":9}}"#).as_bytes(),
+    );
+    assert_eq!(reply.status, 200);
+    let as_bytes = CANARY
+        .bytes()
+        .map(|b| b.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    for out in [format!("{minted:?}"), format!("{reply:?}")] {
+        assert!(!out.contains(CANARY), "ek_ key in Debug: {out}");
+        assert!(!out.contains(&as_bytes), "ek_ key bytes in Debug: {out}");
+    }
+}
