@@ -318,8 +318,9 @@ pub fn sdp_attempt(offer: &[u8]) -> Attempt {
     }
 }
 
-/// What the caller is answered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What the caller is answered. Its `Debug` prints the body's length, never its bytes: a mint
+/// answer's body is the live `ek_` secret.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Reply {
     /// The status.
     pub status: u16,
@@ -330,6 +331,23 @@ pub struct Reply {
     /// For an SDP answer that names its call: the provider's `rtc_` call id, read off its
     /// `Location`: the call the caller's own sideband may attach to.
     pub rtc_call_id: Option<String>,
+}
+
+impl std::fmt::Debug for Reply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            status,
+            fields,
+            body,
+            rtc_call_id,
+        } = self;
+        f.debug_struct("Reply")
+            .field("status", status)
+            .field("fields", fields)
+            .field("body", &format_args!("<redacted {} bytes>", body.len()))
+            .field("rtc_call_id", rtc_call_id)
+            .finish()
+    }
 }
 
 /// The status the served plane answers a failed mint with.

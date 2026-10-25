@@ -56,14 +56,23 @@ pub fn mint_request_body(ttl_secs: u64, config: &SessionConfig) -> Result<Vec<u8
     serde_json::to_vec(&body).map_err(|e| format!("mint request body did not serialize: {e}"))
 }
 
-/// A minted ephemeral secret and when it expires.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A minted ephemeral secret and when it expires. Its `Debug` prints the secret as `<redacted>`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Minted {
     /// The `ek_` secret the browser presents.
     pub value: String,
     /// When it expires, in Unix seconds, as the provider stated it. Never zero: a secret whose
     /// expiry the provider did not state is refused, not handed to a browser as "expires at 0".
     pub expires_at_unix: u64,
+}
+
+impl std::fmt::Debug for Minted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Minted")
+            .field("value", &"<redacted>")
+            .field("expires_at_unix", &self.expires_at_unix)
+            .finish()
+    }
 }
 
 #[derive(serde::Deserialize)]
