@@ -22,7 +22,7 @@ use busbar_plane_streaming::door::{
     RIDES_LIVE_SOCKET, RIDES_REALTIME_PASS, RIDES_REALTIME_SOCKET,
 };
 use busbar_plane_streaming::driven::{
-    mint_reply, GEMINI_SOCKET_PATH, MINT_FAILED_STATUS, REALTIME_SOCKET_PATH, SESSION_OPEN_ACTION,
+    GEMINI_SOCKET_PATH, MINT_FAILED_STATUS, REALTIME_SOCKET_PATH, SESSION_OPEN_ACTION,
 };
 use busbar_plane_streaming::provider::{GEMINI_LIVE, OPENAI_REALTIME};
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -72,6 +72,10 @@ pub fn downlink(bytes: usize) -> Vec<u8> {
 
 /// The OpenAI Realtime mint's far-end answer.
 const MINTED: &[u8] = br#"{"value":"ek_oracle_0001","expires_at":1767225600}"#;
+
+/// The caller's answer to [`MINTED`], as the plane writes it (its body is sealed by the SDK and
+/// cannot be read back from `mint_reply`): the secret and its expiry, members in name order.
+const MINTED_ANSWER: &[u8] = br#"{"expires_at_unix":1767225600,"value":"ek_oracle_0001"}"#;
 
 /// One `answer` as a line: the step, the outcome and the cumulative units.
 pub fn units_of(what: &str, a: &Answer) -> String {
@@ -1026,7 +1030,7 @@ fn fail_check(o: &FailObs) -> Result<String, String> {
     if a.outcome != Outcome::Ready
         || !a.done
         || a.status != 200
-        || a.emitted != mint_reply(200, MINTED).body
+        || a.emitted != MINTED_ANSWER
     {
         return Err(format!(
             "attempt 2's answer was not the caller's whole answer, free of attempt 1: {a:?}"

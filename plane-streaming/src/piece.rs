@@ -16,7 +16,10 @@
 use busbar_contract::abi::plane::{
     OnPieceIn, OnPieceOut, OutField, UnitCount, EMIT_DONE, EMIT_TO_FAR_END, PIECE_OUT_TEXT,
 };
+use busbar_contract::abi::sdk::cred::SealedWrite;
 use busbar_contract::abi::sdk::{HostBuf, Lent, Out};
+
+use crate::driven::Body;
 
 /// Whether `input` is the kernel's re-call after a `more = 1` answer: no bytes, no flags and no
 /// attempt.
@@ -27,18 +30,54 @@ pub fn is_recall(input: Lent<'_, OnPieceIn>) -> bool {
 }
 
 /// The bytes a unit's answer still owes the host's reply buffer, and the `EMIT_*` bits they carry.
-#[derive(Debug, Default)]
+/// A sealed answer (a mint's) is owed as the SDK's [`SealedWrite`], which moves its bytes into the
+/// reply buffer itself; its `Debug` gives lengths only.
+#[derive(Default)]
 pub struct Owed {
     bytes: Vec<u8>,
     at: usize,
+    sealed: Option<SealedWrite>,
     flags: u32,
+}
+
+impl std::fmt::Debug for Owed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Owed")
+            .field("bytes", &self.bytes.len())
+            .field("at", &self.at)
+            .field("sealed", &self.sealed.as_ref().map(SealedWrite::remaining))
+            .field("flags", &self.flags)
+            .finish()
+    }
 }
 
 impl Owed {
     /// Whether any byte is still owed.
     #[must_use]
     pub fn pending(&self) -> bool {
-        self.at < self.bytes.len()
+        self.at < self.bytes.len() || self.sealed.as_ref().is_some_and(|w| !w.finished())
+    }
+
+    /// Owe a caller's answer `body` under the `EMIT_*` `flags`, and pay what fits now: public bytes
+    /// as [`Owed::owe`] owes them, a sealed answer through the SDK. Answers whether the unit is done.
+    pub fn owe_body(
+        &mut self,
+        body: Body,
+        flags: u32,
+        input: Lent<'_, OnPieceIn>,
+        out: &mut Out<'_, OnPieceOut>,
+    ) -> bool {
+        match body {
+            Body::Public(bytes) => self.owe(&bytes, flags, input, out),
+            Body::Sealed(write) => {
+                *self = Owed {
+                    sealed: Some(write),
+                    flags,
+                    ..Owed::default()
+                };
+                self.pay(input, out)
+            }
+        }
     }
 
     /// Owe `bytes` under the `EMIT_*` `flags`, and pay what fits now. Answers whether the unit is
@@ -62,8 +101,21 @@ impl Owed {
     /// far-bound message's `PIECE_OUT_TEXT` (the kernel gathers a far-bound message whole, so its
     /// last piece names it text). Answers whether the unit is done.
     pub fn pay(&mut self, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPieceOut>) -> bool {
-        let n = input.reply_buf().stream(&self.bytes[self.at..]);
-        self.at += n;
+        let n = match &mut self.sealed {
+            // A sealed answer the SDK refuses to put in a host buffer (one carrying a credential
+            // that must go out secured: never a captured `ek_`) is dropped unwritten.
+            Some(write) => write
+                .stream_into(&mut input.reply_buf())
+                .unwrap_or_else(|_| {
+                    self.sealed = None;
+                    0
+                }),
+            None => {
+                let n = input.reply_buf().stream(&self.bytes[self.at..]);
+                self.at += n;
+                n
+            }
+        };
         let more = self.pending();
         out.set(|o| &o.emitted, n as u64);
         out.set(|o| &o.more, u32::from(more));

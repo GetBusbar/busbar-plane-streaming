@@ -65,7 +65,8 @@ fn the_mint_attempt_names_the_caller_and_carries_the_locked_session() {
 fn a_minted_secret_is_answered_and_a_failure_keeps_the_served_text() {
     let ok = mint_reply(200, br#"{"value":"ek_1","expires_at":9}"#);
     assert_eq!(ok.status, 200);
-    let v: serde_json::Value = serde_json::from_slice(&ok.body).expect("json");
+    let v: serde_json::Value =
+        serde_json::from_slice(&crate::tests::body_bytes(ok.body)).expect("json");
     assert_eq!(
         v,
         serde_json::json!({"value": "ek_1", "expires_at_unix": 9})
@@ -74,13 +75,13 @@ fn a_minted_secret_is_answered_and_a_failure_keeps_the_served_text() {
     let refused = mint_reply(400, b"{}");
     assert_eq!(refused.status, 502);
     assert_eq!(
-        String::from_utf8(refused.body).expect("utf-8"),
+        String::from_utf8(crate::tests::body_bytes(refused.body)).expect("utf-8"),
         "streaming ephemeral-secret mint failed: ephemeral token mint failed: client-secret \
          endpoint returned 400 Bad Request"
     );
     let not_ek = mint_reply(200, br#"{"value":"sk-real"}"#);
     assert_eq!(not_ek.status, 502);
-    assert!(!String::from_utf8(not_ek.body)
+    assert!(!String::from_utf8(crate::tests::body_bytes(not_ek.body))
         .expect("utf-8")
         .contains("sk-real"));
 }
@@ -122,7 +123,7 @@ fn a_failed_sdp_offers_error_body_keeps_the_far_ends_content_type() {
     let error = br#"{"error":{"message":"bad offer","type":"invalid_request_error"}}"#;
     let r = sdp_reply(400, None, Some("application/json"), error);
     assert_eq!(r.status, 400);
-    assert_eq!(r.body, error.to_vec());
+    assert_eq!(crate::tests::body_bytes(r.body), error.to_vec());
     assert_eq!(
         r.fields,
         vec![("content-type", "application/json".to_string())]

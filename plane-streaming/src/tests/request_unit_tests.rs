@@ -41,6 +41,8 @@ fn far_first<'a>(
     }
 }
 
+use crate::tests::body_bytes;
+
 fn reply(a: Answer) -> Reply {
     match a {
         Answer::ToCaller(r) => r,
@@ -67,10 +69,10 @@ fn the_mint_attempt_is_whole_and_the_callers_body_is_not_read() {
         .iter()
         .any(|(n, v)| *n == SAFETY_IDENTIFIER_HEADER && v == "ab12"));
     assert!(!a.body.is_empty(), "the mint body goes with the ATTEMPT");
-    assert_eq!(
+    assert!(matches!(
         u.on_piece(piece(From::Caller, b"{\"ignored\":true}", true)),
         Answer::Nothing
-    );
+    ));
 }
 
 #[test]
@@ -86,21 +88,21 @@ fn a_mint_with_no_caller_reference_names_no_caller() {
 fn the_far_ends_mint_answer_is_gathered_then_answered_once() {
     let mut u = unit(Door::Mint, None);
     let _ = u.on_piece(piece(From::Kernel(1), &[], false));
-    assert_eq!(
+    assert!(matches!(
         u.on_piece(far_first(200, b"{\"value\":\"ek_1\",", false, &[])),
         Answer::Nothing
-    );
+    ));
     let r = reply(u.on_piece(piece(From::FarEnd, b"\"expires_at\":7}", true)));
     assert_eq!(r.status, 200);
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&r.body).expect("json"),
+        serde_json::from_slice::<serde_json::Value>(&body_bytes(r.body)).expect("json"),
         serde_json::json!({"value": "ek_1", "expires_at_unix": 7})
     );
     assert!(u.answered());
-    assert_eq!(
+    assert!(matches!(
         u.on_piece(piece(From::FarEnd, b"late", true)),
         Answer::Nothing
-    );
+    ));
 }
 
 #[test]
@@ -110,7 +112,7 @@ fn a_refused_mint_is_the_served_502_text() {
     let r = reply(u.on_piece(far_first(401, b"nope", true, &[])));
     assert_eq!(r.status, MINT_FAILED_STATUS);
     assert_eq!(
-        r.body,
+        body_bytes(r.body),
         b"streaming ephemeral-secret mint failed: ephemeral token mint failed: \
           client-secret endpoint returned 401 Unauthorized"
     );
@@ -124,15 +126,18 @@ fn the_sdp_offer_is_relayed_and_the_answer_keeps_its_location() {
     };
     assert_eq!((a.verb, a.target), ("POST", CALLS_PATH));
     assert!(a.body.is_empty(), "the offer follows as the caller's body");
-    assert_eq!(
+    assert!(matches!(
         u.on_piece(piece(From::Caller, b"v=0\r\n", false)),
-        Answer::ToFarEnd(b"v=0\r\n".to_vec())
-    );
-    assert_eq!(u.on_piece(piece(From::Caller, b"", true)), Answer::Nothing);
+        Answer::ToFarEnd(b) if b == b"v=0\r\n"
+    ));
+    assert!(matches!(
+        u.on_piece(piece(From::Caller, b"", true)),
+        Answer::Nothing
+    ));
     let head: &[(&[u8], &[u8])] = &[(b"location", b"/v1/realtime/calls/rtc_abc")];
     let r = reply(u.on_piece(far_first(201, b"v=0 answer", true, head)));
     assert_eq!(r.status, 201);
-    assert_eq!(r.body, b"v=0 answer");
+    assert_eq!(body_bytes(r.body), b"v=0 answer");
     assert_eq!(r.rtc_call_id.as_deref(), Some("rtc_abc"));
     assert!(r
         .fields
@@ -148,22 +153,49 @@ fn a_new_attempt_forgets_the_previous_far_end() {
     let _ = u.on_piece(far_first(503, b"stale", false, head));
     let _ = u.on_piece(piece(From::Kernel(2), &[], false));
     let r = reply(u.on_piece(far_first(201, b"fresh", true, &[])));
-    assert_eq!((r.status, r.body.as_slice()), (201, &b"fresh"[..]));
     assert_eq!(r.rtc_call_id, None);
+    assert_eq!(
+        (r.status, body_bytes(r.body).as_slice()),
+        (201, &b"fresh"[..])
+    );
 }
 
 #[test]
 fn a_far_end_answer_with_no_status_is_refused() {
     let mut u = unit(Door::Sdp, None);
     let _ = u.on_piece(piece(From::Kernel(1), &[], false));
-    assert_eq!(u.on_piece(piece(From::FarEnd, b"x", true)), Answer::Refused);
+    assert!(matches!(
+        u.on_piece(piece(From::FarEnd, b"x", true)),
+        Answer::Refused
+    ));
 }
 
 #[test]
 fn a_piece_from_the_kernel_that_is_no_attempt_is_refused() {
     let mut u = unit(Door::Mint, None);
-    assert_eq!(
+    assert!(matches!(
         u.on_piece(piece(From::Kernel(0), &[], false)),
         Answer::Refused
-    );
+    ));
+}
+
+/// RED-BEFORE-GREEN: a unit's `Debug` gives the far end's gathered answer as a length. A mint's
+/// answer carries the live `ek_` secret while it is gathered; RED: the derived `Debug` printed
+/// the gathered bytes.
+#[test]
+fn a_units_debug_prints_no_byte_of_a_gathered_mint_answer() {
+    const CANARY: &[u8] = b"ek_CANARY0b9e";
+    let mut u = unit(Door::Mint, None);
+    let _ = u.on_piece(piece(From::Kernel(1), &[], false));
+    let _ = u.on_piece(far_first(200, b"{\"value\":\"", false, &[]));
+    let _ = u.on_piece(piece(From::FarEnd, CANARY, false));
+    let shown = format!("{u:?}");
+    let as_list = CANARY
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    assert!(!shown.contains("CANARY"), "{shown}");
+    assert!(!shown.contains(&as_list), "{shown}");
+    assert!(shown.contains("far: 23 bytes"), "{shown}");
 }

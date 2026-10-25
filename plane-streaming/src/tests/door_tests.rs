@@ -464,7 +464,8 @@ fn the_instance_429_clears_once_rows_expire() {
     let reply = calls_full_reply();
     assert_eq!(u32::from(reply.status), STATUS_CALLS_FULL);
     assert_eq!(reply.rtc_call_id, None, "a refused offer brokers no call");
-    let body: serde_json::Value = serde_json::from_slice(&reply.body).expect("json");
+    let body: serde_json::Value =
+        serde_json::from_slice(&crate::tests::body_bytes(reply.body)).expect("json");
     assert_eq!(body["error"]["type"], "rate_limit_error");
     assert_eq!(body["error"]["message"], CALLS_FULL_TEXT);
     // The clock moves past the reading the rows were recorded at: their age counts from here.

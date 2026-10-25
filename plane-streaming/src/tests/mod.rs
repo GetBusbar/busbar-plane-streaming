@@ -189,3 +189,23 @@ mod codec_alloc_gate_tests;
 
 /// The plane's type-level purity gates, moved in from `tests/purity.rs`.
 mod purity_gate_tests;
+
+/// The bytes a caller's answer body puts on the wire, read as a test's stand-in for the host's reply
+/// buffer: a sealed answer through the SDK's test-only driver (`test-seal`).
+pub(crate) fn body_bytes(body: crate::driven::Body) -> Vec<u8> {
+    match body {
+        crate::driven::Body::Public(bytes) => bytes,
+        crate::driven::Body::Sealed(mut write) => sealed_bytes(&mut write),
+    }
+}
+
+/// The bytes a sealed write puts on the wire (`test-seal`).
+pub(crate) fn sealed_bytes(write: &mut busbar_contract::abi::sdk::cred::SealedWrite) -> Vec<u8> {
+    let mut out = Vec::new();
+    let done = busbar_contract::abi::sdk::test_support::chip::drive_sealed::<()>(write, |b| {
+        out.extend_from_slice(b);
+        std::task::Poll::Ready(Ok(b.len()))
+    });
+    assert!(done.is_ready(), "the sealed write is taken whole");
+    out
+}
