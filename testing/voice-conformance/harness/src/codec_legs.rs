@@ -33,6 +33,7 @@ use busbar_plane_streaming::codec::ir::{
 };
 use busbar_plane_streaming::door::{read_settings, RIDES_LIVE_SOCKET, RIDES_REALTIME_SOCKET};
 use busbar_plane_streaming::driven::{GEMINI_SOCKET_PATH, REALTIME_SOCKET_PATH};
+use busbar_plane_streaming::session_door::with_ceilings;
 use busbar_plane_streaming::session_door::PER_SESSION_CLASS;
 use busbar_plane_streaming::splice::{splice, LockedKeys};
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -41,7 +42,7 @@ use bytes::Bytes;
 use serde_json::Value;
 
 use crate::door::{
-    judge_planted, open, result, Emission, Log, Plant, Rig, Session, PUBLIC, SESSION,
+    dials_socket, judge_planted, open, result, Emission, Log, Plant, Rig, Session, PUBLIC, SESSION,
 };
 
 // ── the two dialects ────────────────────────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ use crate::door::{
 /// A duplex dialect the plane dials, and the session door that speaks it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dialect {
-    /// OpenAI Realtime: the browser's sideband socket (claim 2).
+    /// OpenAI Realtime: plain server-to-server OpenAI Realtime over WS (claim 5).
     OpenAi,
     /// Gemini Live: the Gemini socket (claim 3).
     Gemini,
@@ -76,7 +77,7 @@ impl Dialect {
     /// The door claim that opens a session in it.
     pub const fn claim(self) -> u32 {
         match self {
-            Dialect::OpenAi => 2,
+            Dialect::OpenAi => 5,
             Dialect::Gemini => 3,
         }
     }
@@ -426,8 +427,8 @@ fn governed(dialect: Dialect, locked: &SessionConfig, bytes: &[u8]) -> Option<Ve
     let rule = match (dialect, configures, responds) {
         (Dialect::OpenAi, true, _) => Some(OpenAiRealtimeCodec.configure_rule(locked)),
         (Dialect::Gemini, true, _) => Some(GeminiLiveCodec.configure_rule(locked)),
-        (Dialect::OpenAi, false, true) => OpenAiRealtimeCodec.response_rule(),
-        (Dialect::Gemini, false, true) => GeminiLiveCodec.response_rule(),
+        (Dialect::OpenAi, false, true) => OpenAiRealtimeCodec.response_rule(locked),
+        (Dialect::Gemini, false, true) => GeminiLiveCodec.response_rule(locked),
         _ => None,
     };
     match rule {
@@ -438,9 +439,10 @@ fn governed(dialect: Dialect, locked: &SessionConfig, bytes: &[u8]) -> Option<Ve
 
 /// The session rules over `wires`, computed from the wire (never by the door).
 pub fn expect(dialect: Dialect, wires: &[Wire]) -> Expected {
-    let locked = read_settings(SESSION)
-        .expect("the leg's section reads")
-        .session;
+    let cfg = read_settings(SESSION).expect("the leg's section reads");
+    // The session as the door tells the provider it is locked: the model by its wire name, under
+    // the section's two token ceilings.
+    let locked = with_ceilings(cfg.wire_session(cfg.session.clone()), &cfg);
     let mut st = DecodeState::default();
     let mut x = Expected {
         far: Vec::new(),
@@ -527,7 +529,8 @@ pub fn relay_check(dialect: Dialect, log: &Log, x: &Expected) -> Result<String, 
         ));
     }
     for e in log.emissions.iter().filter(|e| e.to_far) {
-        if e.need != dialect.ride() || e.verb != "GET" || e.target != dialect.socket() {
+        if e.need != dialect.ride() || e.verb != "GET" || !dials_socket(&e.target, dialect.socket())
+        {
             return Err(format!(
                 "a far frame rode need {} to {} {}, not the {} socket (need {})",
                 e.need,

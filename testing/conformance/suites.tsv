@@ -1,0 +1,2 @@
+voice-openai-realtime	bash testing/conformance/voice.sh openai
+voice-gemini-live	bash testing/conformance/voice.sh gemini
