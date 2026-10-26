@@ -33,6 +33,6 @@ pub use codec::DuplexWriter;
 pub use config::{MaxOutputTokens, SessionConfig};
 pub use control::{Eagerness, IrDuplexControl, IrVad};
 pub use event::{IrClientEvent, IrServerEvent};
-pub use media::{truncate_point_ms, IrAudioFrame, UpDown};
+pub use media::{IrAudioFrame, UpDown};
 pub use tool::{CallRef, IrDuplexTool};
 R
