@@ -152,12 +152,6 @@ pub struct DecodeState {
     /// from `call_ids` and then sighted again mints a fresh handle — orphaning the entry the old
     /// handle keyed, which nothing can ever reach to remove.
     call_args_order: VecDeque<CallRef>,
-    /// Downlink audio bytes RELAYED for the CURRENT item — reset when the item ends (its audio is
-    /// done, a new audio-bearing item begins) and on a barge-in flush.
-    played_bytes: u64,
-    /// The latest clock reading the runtime has fed for the current item (ms of playback elapsed),
-    /// `None` while nobody feeds one. This crate owns no time source; it bounds, never invents.
-    played_clock_ms: Option<u64>,
     /// Negotiated OUTPUT format the truncate math measures against.
     output_fmt: AudioFormat,
     /// Negotiated INPUT format — what the bytes the CLIENT sends are in.
@@ -181,8 +175,6 @@ impl Default for DecodeState {
             dropped_fields: VecDeque::new(),
             call_args: HashMap::new(),
             call_args_order: VecDeque::new(),
-            played_bytes: 0,
-            played_clock_ms: None,
             output_fmt: AudioFormat::Pcm16,
             input_fmt: AudioFormat::Pcm16,
         }
@@ -363,67 +355,6 @@ impl DecodeState {
     /// Adopt the negotiated input audio format (from a session config that states one).
     pub fn set_input_format(&mut self, fmt: AudioFormat) {
         self.input_fmt = fmt;
-    }
-
-    /// Account `n` bytes of downlink audio as RELAYED for the current item.
-    ///
-    /// WHAT THIS COUNTS, PLAINLY: bytes that went out, not audio that came back. The upstream emits a
-    /// turn's audio far faster than it plays, so immediately after a burst this counter already holds
-    /// the whole turn while the user has heard a fraction of it. It is therefore an UPPER BOUND on the
-    /// audio heard — the right shape for a truncate point (never cut BEFORE what was heard), and not a
-    /// measurement of playback. [`Self::record_played_at`] is the seam a real clock narrows it through.
-    pub fn record_played(&mut self, n: u64) {
-        self.record_played_at(n, None);
-    }
-
-    /// The same accounting WITH A CLOCK: `at_ms` is how long this item's audio has actually been
-    /// playing when these bytes were relayed.
-    ///
-    /// This is the seam the runtime feeds a clock through — it owns the wall clock, this crate owns no
-    /// time source and invents none. While `None` is passed the position is the bytes relayed, exactly
-    /// as before; once a reading arrives the position cannot exceed the time there has been to hear it
-    /// in, which is the difference between "audio handed over" and "audio heard".
-    pub fn record_played_at(&mut self, n: u64, at_ms: Option<u64>) {
-        self.played_bytes += n;
-        if let Some(ms) = at_ms {
-            self.played_clock_ms = Some(self.played_clock_ms.map_or(ms, |prev| prev.max(ms)));
-        }
-    }
-
-    /// The audio the user can have heard so far, in ms — the barge-in truncate point.
-    ///
-    /// The bytes relayed for this item, converted at the negotiated format's rate, and bounded by the
-    /// clock when the runtime has fed one (no clock: the bytes stand alone, an upper bound).
-    #[cfg(test)]
-    #[must_use]
-    pub fn played_ms(&self) -> u64 {
-        let by_bytes =
-            crate::codec::ir::media::truncate_point_ms(self.played_bytes, self.output_fmt);
-        match self.played_clock_ms {
-            Some(elapsed) => by_bytes.min(elapsed),
-            None => by_bytes,
-        }
-    }
-
-    /// FLUSH the queued/played downlink audio on `speech_started` (barge-in): returns the just-heard
-    /// duration (ms) — the value an [`IrDuplexControl::ItemTruncate`] carries — and zeroes the
-    /// playback counter for the next item. This is the DATA move; the runtime that cancels the
-    /// in-flight response and emits the truncate is the next layer.
-    #[cfg(test)]
-    pub fn flush_playback(&mut self) -> u64 {
-        let ms = self.played_ms();
-        self.played_bytes = 0;
-        self.played_clock_ms = None;
-        ms
-    }
-
-    /// THE ITEM BOUNDARY — the played-out position belongs to ONE item, so it starts over when that
-    /// item's audio ends (or the next audio-bearing item begins). Without this the barge-in truncate
-    /// point would be the running total since the session opened, and turn two would be truncated at
-    /// turn one plus turn two.
-    pub fn reset_playback(&mut self) {
-        self.played_bytes = 0;
-        self.played_clock_ms = None;
     }
 }
 
@@ -735,7 +666,6 @@ impl DuplexReader for OpenAiRealtimeCodec {
                 let Some(media) = decode_audio(str_at(&v, "delta")) else {
                     return Vec::new();
                 };
-                st.record_played(media.len() as u64);
                 vec![IrServerEvent::AudioFrame(IrAudioFrame {
                     dir: UpDown::Down,
                     seq: st.next_down_seq(),
@@ -745,9 +675,6 @@ impl DuplexReader for OpenAiRealtimeCodec {
                 })]
             }
             wire::OUTPUT_AUDIO_DONE | wire::OUTPUT_AUDIO_DONE_LEGACY => {
-                // THE ITEM BOUNDARY: this item's audio is complete, so the played-out position starts
-                // over. Carrying it forward would truncate the NEXT turn at the running session total.
-                st.reset_playback();
                 vec![IrServerEvent::AudioDone {
                     item_id: str_at(&v, "item_id").to_string(),
                 }]
@@ -761,17 +688,12 @@ impl DuplexReader for OpenAiRealtimeCodec {
                     // Remember the name for the RESULT leg: OpenAI's `function_call_output` carries
                     // none, and a Gemini `functionResponse` requires one.
                     st.remember_call_name(call_id, &name);
-                    // A tool-call item is NOT the playing audio item's boundary — it can be added
-                    // while that item is still playing — so the playback position stands.
                     vec![IrServerEvent::Tool(IrDuplexTool::CallOpen {
                         call_ref,
                         call_id: call_id.to_string(),
                         name,
                     })]
                 } else {
-                    // A new AUDIO-BEARING output item begins: its playback starts at zero, even if the
-                    // previous item's `…audio.done` never arrived.
-                    st.reset_playback();
                     Vec::new()
                 }
             }

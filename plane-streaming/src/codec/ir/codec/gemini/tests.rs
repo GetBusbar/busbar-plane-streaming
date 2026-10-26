@@ -261,11 +261,6 @@ fn an_undecodable_gemini_audio_payload_emits_no_frame() {
             .any(|e| matches!(e, IrServerEvent::AudioFrame(_))),
         "expected no downlink audio frame, got {down:?}"
     );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "a payload that never decoded must not advance the barge-in playback clock"
-    );
 }
 
 #[test]
@@ -717,7 +712,7 @@ fn the_uplink_verbs_gemini_has_no_word_for_frame_nothing() {
 // ── serverContent (downlink audio, turn/interrupt) ───────────────────────────────────────────────
 
 #[test]
-fn server_content_audio_frames_down_tracks_playback() {
+fn server_content_audio_frames_down() {
     let codec = GeminiLiveCodec;
     let mut st = DecodeState::default();
     st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
@@ -734,7 +729,6 @@ fn server_content_audio_frames_down_tracks_playback() {
     assert_eq!(f.dir, UpDown::Down);
     assert_eq!(f.seq, 0);
     assert_eq!(f.media.len(), 96);
-    assert_eq!(st.played_ms(), 2, "96 bytes of pcm16 @24kHz is 2 ms");
 }
 
 #[test]
@@ -781,33 +775,6 @@ fn server_content_audio_then_turn_complete_is_multi_event() {
 }
 
 #[test]
-fn the_gemini_turn_boundary_resets_the_playback_position() {
-    // `turnComplete` IS Gemini's item boundary; the next turn's barge-in must truncate at the audio of
-    // THAT turn, not at the session's running total.
-    let codec = GeminiLiveCodec;
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
-    let turn = |ms: usize| {
-        json!({
-            "serverContent": {
-                "modelTurn": { "parts": [ { "inlineData": {
-                    "mimeType": "audio/pcm;rate=24000", "data": b64(&vec![0u8; 48 * ms])
-                } } ] }
-            }
-        })
-        .to_string()
-    };
-    let _ = codec.read_down(wire(&turn(1000)), &mut st);
-    let _ = codec.read_down(
-        wire(&json!({ "serverContent": { "turnComplete": true } }).to_string()),
-        &mut st,
-    );
-    assert_eq!(st.played_ms(), 0, "turnComplete zeroes the played position");
-    let _ = codec.read_down(wire(&turn(240)), &mut st);
-    assert_eq!(st.flush_playback(), 240, "this turn's audio only");
-}
-
-#[test]
 fn a_downlink_blob_at_the_uplink_rate_is_not_counted_as_playback() {
     // The playback position is BYTES ÷ the negotiated format's bytes-per-ms, and `pcm16` means
     // 24 kHz (48 B/ms). A downlink blob tagged 16 kHz is not that format: counted at 48 B/ms it
@@ -824,11 +791,6 @@ fn a_downlink_blob_at_the_uplink_rate_is_not_counted_as_playback() {
         ir.is_empty(),
         "a downlink blob at a rate this dialect does not synthesize has no frame: {ir:?}"
     );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "and nothing it carried was accounted as played"
-    );
     // The 24 kHz downlink the dialect DOES synthesize still counts.
     let ok = json!({
         "serverContent": { "modelTurn": { "parts": [
@@ -836,7 +798,6 @@ fn a_downlink_blob_at_the_uplink_rate_is_not_counted_as_playback() {
         ] } }
     });
     assert_eq!(codec.read_down(wire(&ok.to_string()), &mut st).len(), 1);
-    assert_eq!(st.played_ms(), 10, "480 bytes at 48 B/ms");
 }
 
 // ── setupComplete ↔ SessionCreated ────────────────────────────────────────────────────────────────
