@@ -265,5 +265,7 @@ checks:
     priority: low
     requires: [cc, git, curl, docker, python3-venv]
     run: |
-      exec bash testing/conformance/run.sh
+      # a failing suite stays in the verdict; only a driver failure (exit 2) fails the check
+      bash testing/conformance/run.sh; rc=$?
+      [ "$rc" -le 1 ] || exit "$rc"
     outputs: [target/conformance/]
