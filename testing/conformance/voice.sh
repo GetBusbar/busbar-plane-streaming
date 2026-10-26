@@ -41,6 +41,8 @@ if [ ! -f "$run/done" ]; then
   touch "$run/done"
 fi
 
+# what the harness build said, for the log of a run that could not build it
+grep -h -E '^error' -A6 "$run/battery.log" 2>/dev/null | head -n 40
 python3 -I - "$dialect" "$run" "$CONFORMANCE_OUT/verdict.json" "$CONFORMANCE_SUITE" <<'PY'
 import json, os, sys
 dialect, run, out, suite = sys.argv[1:5]
