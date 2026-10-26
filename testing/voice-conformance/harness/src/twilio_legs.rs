@@ -174,9 +174,11 @@ fn lock_of(session: &Value) -> String {
 /// operator's `streams.session` (the leg's [`SESSION`] sets only the model) with µ-law on both
 /// audio formats, as one `session.update`, and nothing else. Twilio configures nothing itself
 /// (THE DESIGN §2 l.418-419 and Part 2 #45: Twilio Media Streams with a µ-law codec; #45: the
-/// caller "cannot override the session's locked instructions").
+/// caller "cannot override the session's locked instructions"), and the section's two token
+/// ceilings the door states in OpenAI Realtime's own keys when it locks a session
+/// (`session_door::with_ceilings`: `max_output_tokens`, and `truncation` for the context window).
 fn lock_line() -> String {
-    "far-lock:in=mulaw,out=mulaw,more=[]".to_string()
+    "far-lock:in=mulaw,out=mulaw,more=[\"max_output_tokens\", \"truncation\"]".to_string()
 }
 
 /// Push `steps` through the session on `stream` (the door is open), step by step.
@@ -881,7 +883,7 @@ fn route_check(o: &RouteObs) -> Result<String, String> {
     if a.outcome != Outcome::Ready
         || a.principal != PRINCIPAL_REQUIRED
         || a.route != (ROUTE_DIRECT, MODEL.to_string())
-        || o.dialect != Dialect::TwilioMediaStreams.name()
+        || o.dialect != busbar_plane_streaming::provider::TWILIO_MEDIA_STREAMS
     {
         return Err(format!(
             "the Twilio door arrived as {a:?} in dialect {}: it must ask for a principal",
@@ -915,7 +917,14 @@ fn route_check(o: &RouteObs) -> Result<String, String> {
             o.after_start.lines
         ));
     }
-    quiet(&o.typed, 2).map_err(|e| format!("a type-tagged frame: {e}"))?;
+    // A frame that is not Twilio's shape (no `event`) is REFUSED by the bridge and ends the session
+    // (`CallerStep::Refused`): it is never taken for Twilio audio and sends the far end nothing.
+    if !o.typed.anomalies.is_empty() || o.typed.done != 1 || o.typed.lines.len() != 2 {
+        return Err(format!(
+            "a type-tagged frame was not refused as not Twilio's shape: {:?}",
+            o.typed
+        ));
+    }
     if o.typed.lines != [start, "type-tagged append -> []".to_string()] {
         return Err(format!(
             "an OpenAI type-tagged frame was taken for Twilio audio: {:?}",
@@ -1367,6 +1376,7 @@ fn meter_expected() -> Vec<String> {
         "unanswered start Ready units=[]".to_string(),
         "unanswered audio 1s Ready units=[4:1=1]".to_string(),
         "unanswered stop Ready units=[4:1=1] done=true".to_string(),
+        "settled start Ready units=[]".to_string(),
         format!("settled stop Ready units=[{}] done=true", usage_units(2)),
     ]
 }

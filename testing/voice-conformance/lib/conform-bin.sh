@@ -18,22 +18,13 @@ VC_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VC_DIR="$(cd "$VC_LIB_DIR/.." && pwd)"          # testing/voice-conformance
 VC_ROOT="$(cd "$VC_DIR/../.." && pwd)"          # repo root
 VC_FIXTURES="$VC_DIR/fixtures"
-VC_MAP="$VC_ROOT/qa/evidence/voice-cross-dialect-map.json"
-
-# THE PINNED PLANE'S WORKSPACE: the streaming plane lives in its own repo (GetBusbar/busbar-plane-streaming,
-# row 106), pinned in the root manifest. Echo the `Cargo.toml` of the workspace cargo checked it out
-# at for the rev this checkout's lock pins (its logic crate's manifest, two levels up), and return 0
-# when there is one. The dropped-in door is that workspace's cdylib twin, `busbar-plane-streaming-plugin`.
-_vc_plane_ws() {
-  local man
-  man="$(cargo metadata --format-version 1 --locked --manifest-path "$VC_ROOT/Cargo.toml" 2>/dev/null \
-    | grep -o '"manifest_path":"[^"]*/plane-streaming/Cargo.toml"' | head -n 1 \
-    | sed 's/^"manifest_path":"//; s/"$//')"
-  [ -n "$man" ] || return 1
-  man="$(dirname "$(dirname "$man")")/Cargo.toml"
-  [ -f "$man" ] || return 1
-  printf '%s' "$man"
-}
+# The cross-dialect map is busbar's (the kernel's equivalence table): read from the busbar checkout
+# the suite runs against ($BUSBAR_CHECKOUT, the pin), else from this tree when it is busbar itself.
+VC_MAP="${BUSBAR_CHECKOUT:-$VC_ROOT}/qa/evidence/voice-cross-dialect-map.json"
+# The workspace the harness builds in. In this repo the harness is not a member of the root
+# workspace; testing/conformance/voice.sh writes, at run time, a workspace that adds it and names it
+# here. Unset, the root manifest is used (busbar's layout).
+VC_MANIFEST="${VC_WORKSPACE_MANIFEST:-$VC_ROOT/Cargo.toml}"
 
 # The trees the harness IS. A `voice_conform` older than any file under these is a binary that would
 # judge source it was not built from — which is not an error at run time, it is a PASS about code
@@ -41,15 +32,13 @@ _vc_plane_ws() {
 # answers a `composition <slice>` subcommand per leg, so a leg added after the binary was built is a
 # slice the binary has never heard of.
 _vc_harness_trees() {
-  local ws
-  if ws="$(_vc_plane_ws)"; then
-    ws="$(dirname "$ws")"
-    printf '%s\n' "$ws/plane-streaming/src" "$ws/plane-streaming-plugin/src"
-  fi
+  local core="${BUSBAR_CHECKOUT:-$VC_ROOT}"
   printf '%s\n' \
+    "$VC_ROOT/plane-streaming/src" \
+    "$VC_ROOT/plane-streaming-plugin/src" \
     "$VC_DIR/harness/src" \
-    "$VC_ROOT/crates/plugin-loader/src" \
-    "$VC_ROOT/crates/busbar-contract/src" \
+    "$core/crates/plugin-loader/src" \
+    "$core/crates/busbar-contract/src" \
     "$VC_DIR/legs" \
     "$VC_DIR/lib"
 }
@@ -99,14 +88,14 @@ voice_conform_bin() {
     return 0
   fi
   local bin="${CARGO_TARGET_DIR:-$VC_ROOT/target}/debug/voice_conform"
-  cargo build -q --manifest-path "$VC_ROOT/Cargo.toml" -p voice-conformance-harness \
+  cargo build -q --manifest-path "$VC_MANIFEST" -p voice-conformance-harness \
     --bin voice_conform >&2 || return 1
   # The twin is built in THIS workspace (the harness's dev edge on it, at the rev the root pins the
   # plane), so it compiles against the host's busbar-contract through the root's [patch], the
   # contract the loader admits it against, exactly as the linked row is. Built from the plane's own
   # workspace it took that repo's busbar pin instead, and a pin whose plane ops table is not the
   # host's is refused at load in every leg (TableSlots), a finding about the build, not the door.
-  cargo build -q --locked --manifest-path "$VC_ROOT/Cargo.toml" -p busbar-plane-streaming-plugin \
+  cargo build -q --locked --manifest-path "$VC_MANIFEST" -p busbar-plane-streaming-plugin \
     >&2 || return 1
   [ -x "$bin" ] || return 1
   printf '%s' "$bin"
