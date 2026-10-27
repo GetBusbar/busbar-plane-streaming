@@ -83,6 +83,8 @@ use crate::session_door::{
 
 /// The name the plane's Statement carries.
 pub const NAME: &str = crate::codec::PLANE_KEY;
+/// The version the Statement names: the crate's (a test pins the two equal).
+pub const VERSION: &str = "1.6.0";
 /// The plane's config section.
 pub const SECTION: &str = "streams";
 /// The grant kind that admits traffic on this plane: one live session.
@@ -1752,7 +1754,7 @@ busbar_contract::statement_extensions!(
 busbar_contract::plugin_door! {
     ops: busbar_contract::abi::plane::Ops,
     statement: {
-        let mut s = statement(NAME, env!("CARGO_PKG_VERSION"), 64)
+        let mut s = statement(NAME, VERSION, 64)
             .with_sections(SECTIONS)
             .with_needs(NEEDS)
             .with_kind_tail(TAIL);
