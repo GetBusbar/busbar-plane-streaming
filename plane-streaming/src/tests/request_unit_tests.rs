@@ -28,7 +28,7 @@ fn the_mint_door_asks_for_a_ticket_locking_its_session_once() {
         Answer::Nothing
     );
     assert_eq!(
-        unit.on_piece(piece(From::Kernel(1), b"", false)),
+        unit.on_piece(piece(From::Kernel, b"", false)),
         Answer::Nothing
     );
     let Answer::Mint { ttl_secs, record } = unit.on_piece(piece(From::Caller, b"}", true)) else {
