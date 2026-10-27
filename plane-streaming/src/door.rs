@@ -1119,8 +1119,9 @@ slot!(Validate, ValidateIn, OutHead, |_, input, out| {
 });
 
 slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
-    let Ok(cfg) = read_dealt(input.open().settings().bytes()) else {
-        return Outcome::Refused;
+    let cfg = match read_dealt(input.open().settings().bytes()) {
+        Ok(cfg) => cfg,
+        Err(words) => return out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words)),
     };
     let public_url = input
         .public_url()
@@ -1155,8 +1156,11 @@ slot!(
         let Some(p) = instance.get() else {
             return Outcome::Failed;
         };
-        let Ok(cfg) = read_dealt(input.settings().bytes()) else {
-            return Outcome::Refused;
+        let cfg = match read_dealt(input.settings().bytes()) {
+            Ok(cfg) => cfg,
+            Err(words) => {
+                return out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words))
+            }
         };
         p.publish(&mut out, |o| &o.snapshot, input.generation(), cfg);
         Outcome::Ready
@@ -1334,12 +1338,15 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         out.counted();
         return Outcome::Ready;
     }
-    let model = instance
-        .get()
-        .and_then(Plane::newest)
-        .and_then(|cfg| cfg.session.model);
-    if let Some(model) = model {
-        out.route(ROUTE_DIRECT, &model);
+    // The model is read where the newest generation holds it: an arrival copies no section.
+    if let Some(p) = instance.get() {
+        let generations = lock(&p.generations);
+        if let Some(model) = generations
+            .last()
+            .and_then(|(cfg, _)| cfg.session.model.as_deref())
+        {
+            out.route(ROUTE_DIRECT, model);
+        }
     }
     Outcome::Ready
 });
