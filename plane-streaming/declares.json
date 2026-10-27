@@ -1,6 +1,7 @@
 {
   "needs": [
     "http",
+    "webrtc",
     "ws"
   ]
 }

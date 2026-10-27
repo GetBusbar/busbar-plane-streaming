@@ -75,7 +75,8 @@ pub enum Side {
 /// The session over its door's codec.
 #[derive(Debug)]
 enum Unit {
-    /// The OpenAI Realtime far end (the sideband, telephony and plain realtime sockets).
+    /// The OpenAI Realtime far end (the sideband, telephony and plain realtime sockets, and the
+    /// browser's call busbar terminates, its events on the call's data channel).
     Realtime(SessionUnit<OpenAiRealtimeCodec>),
     /// The Gemini Live far end.
     Gemini(SessionUnit<GeminiLiveCodec>),
@@ -124,6 +125,9 @@ pub struct Live {
     /// else its name; Part 2 #51), on the plain realtime and telephony doors; `None` on the sideband
     /// (it names its call) and on the Gemini Live socket (its model rides the setup frame).
     dial_model: Option<String>,
+    /// Busbar's own call an SDP door's session placed (row 132): the call a sideband names, freed
+    /// when the session ends.
+    placed: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
     pub(crate) near: crate::piece::Owed,
     /// What the frame a far-side answer is writing still owes the reply buffer.
@@ -177,12 +181,12 @@ impl Live {
             cfg,
         );
         let unit = match door {
-            Door::Sideband | Door::Realtime => {
+            Door::Sideband | Door::Realtime | Door::Sdp => {
                 Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, false))
             }
             Door::Twilio => Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, true)),
             Door::Gemini => Unit::Gemini(SessionUnit::open(GeminiLiveCodec, locked, false)),
-            Door::Mint | Door::Sdp => return None,
+            Door::Mint => return None,
         };
         Some(Live {
             unit,
@@ -200,6 +204,7 @@ impl Live {
                     .or_else(|| cfg.session.model.clone()),
                 _ => None,
             },
+            placed: None,
             near: crate::piece::Owed::default(),
             far: crate::piece::Owed::default(),
             short_near: None,
@@ -250,6 +255,33 @@ impl Live {
     /// not been told; telling clears it.
     pub fn take_unmetered(&mut self) -> bool {
         each!(&mut self.unit, |u| u.take_unmetered())
+    }
+
+    /// THE SESSION'S OPENING CALL: `frame`, owed the far end before anything else (the SDP door's
+    /// request, which places busbar's own call and so dials the session's far end at its open).
+    pub fn open_far(&mut self, frame: Vec<u8>) {
+        self.queued.push_front((Side::FarEnd, frame));
+    }
+
+    /// The session ends now: whatever it still owes is collected, then its end.
+    pub fn end(&mut self) {
+        self.ending = true;
+    }
+
+    /// The session placed busbar's own call `id` (the SDP door's open).
+    pub fn place(&mut self, id: String) {
+        self.placed = Some(id);
+    }
+
+    /// Busbar's own call the session placed, if any.
+    #[must_use]
+    pub fn placed_call(&self) -> Option<&str> {
+        self.placed.as_deref()
+    }
+
+    /// The provider answered busbar's call with a success: the session's fee unit is incurred.
+    pub fn answered_call(&mut self) {
+        self.answered = true;
     }
 
     /// Queue what `plan` owes either side, the far end's frames first.
@@ -404,6 +436,9 @@ pub struct Sessions {
     /// The streams whose sessions ended most recently, oldest first (at most [`MAX_SESSIONS`]): a
     /// cut ends a session before the kernel asks for the cut's frame.
     ended: VecDeque<u64>,
+    /// Busbar's calls placed by sessions that ended, until the door frees them
+    /// ([`Sessions::take_ended_calls`]).
+    ended_calls: Vec<String>,
 }
 
 impl Sessions {
@@ -434,6 +469,13 @@ impl Sessions {
         self.rewritten.insert(unit, params);
     }
 
+    /// The session-open params stated for the session unit `unit` opens (a hook's rewrite, or a
+    /// ticket's record), until its first piece opens it.
+    #[must_use]
+    pub fn rewritten(&self, unit: u64) -> Option<&SessionConfig> {
+        self.rewritten.get(&unit)
+    }
+
     /// Stream `stream`'s session, when one is open.
     pub fn get(&mut self, stream: u64) -> Option<&mut Live> {
         self.live.get_mut(&stream)
@@ -448,14 +490,20 @@ impl Sessions {
 
     /// Stream `stream`'s session is over: it and its tickets are forgotten.
     pub fn close(&mut self, stream: u64) {
-        if self.live.remove(&stream).is_some() {
+        if let Some(live) = self.live.remove(&stream) {
             while self.ended.len() >= MAX_SESSIONS {
                 self.ended.pop_front();
             }
             self.ended.push_back(stream);
+            self.ended_calls.extend(live.placed);
         }
         self.rewritten.remove(&stream);
         self.tickets.retain(|_, s| *s != stream);
+    }
+
+    /// Busbar's calls placed by the sessions that ended since this was last asked.
+    pub fn take_ended_calls(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.ended_calls)
     }
 
     /// The op on `ticket` is cancelled: the session it serves, if any, is over. Answers whether

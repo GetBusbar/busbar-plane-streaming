@@ -167,15 +167,26 @@ fn a_served_path_under_another_method_is_405_with_the_lines_allow() {
 fn the_sockets_are_upgrade_lines_and_the_one_request_doors_are_not() {
     for (i, line) in ROUTES.iter().enumerate() {
         let door = Door::of(i as u32).expect("a door per line");
-        assert_eq!(line.upgrade, door.is_session(), "{}", line.target);
+        // The SDP door opens a session over a datagram carrier (row 132): a session, not an
+        // upgrade line.
+        let datagram = door == Door::Sdp;
+        assert_eq!(
+            line.upgrade,
+            door.is_session() && !datagram,
+            "{}",
+            line.target
+        );
         assert_eq!(
             line.carrier,
             if line.upgrade {
                 WS_TRANSPORT
+            } else if datagram {
+                crate::claims::WEBRTC_TRANSPORT
             } else {
                 HTTP_TRANSPORT
             },
-            "an upgrade line hands the connection to the socket transport"
+            "an upgrade line hands the connection to the socket transport; the SDP door's \
+             session rides the datagram carrier"
         );
     }
 }
