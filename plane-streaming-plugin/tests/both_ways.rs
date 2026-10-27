@@ -399,6 +399,54 @@ fn the_dropped_door_answers_as_the_linked_door_does() {
     }
 }
 
+/// The words of a REFUSED lifecycle answer.
+fn words(error: Option<Vec<u8>>) -> String {
+    String::from_utf8(error.expect("a refusal states why")).expect("the words are text")
+}
+
+/// A REFUSED `open` or `refresh` says why, in the grammar's words, as `validate` does and as the
+/// sibling planes' `open` and `refresh` do; the two doors alike. RED before: both answered a bare
+/// REFUSED.
+#[test]
+fn an_open_or_refresh_the_grammar_refuses_says_why() {
+    const BAD: &[u8] = br#"{"nonsense_key":1}"#;
+    let d = Dispatcher::new(DispatchConfig::default());
+    for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
+        let p = door(&d);
+        let mut i: PlaneOpenIn = z();
+        i.open.head = in_head();
+        i.open.generation = 1;
+        i.open.settings = json(BAD);
+        let mut o: PlaneOpenOut = z();
+        o.open.head = out_head();
+        let mut f = Frame::new(i, o);
+        let c = p.call(life::OPEN, &mut f);
+        assert_eq!(c.outcome, Outcome::Refused);
+        let said = words(c.error);
+        assert!(said.contains("nonsense_key"), "open said: {said}");
+
+        let p = door(&d);
+        assert_eq!(open(&p, 1, b"{}", None).0, Outcome::Ready);
+        let mut r = Frame::new(
+            RefreshIn {
+                head: in_head(),
+                generation: 2,
+                settings: json(BAD),
+                secrets: std::ptr::null(),
+                secrets_len: 0,
+            },
+            PlaneRefreshOut {
+                head: out_head(),
+                snapshot: std::ptr::null(),
+            },
+        );
+        let c = p.call(life::REFRESH, &mut r);
+        assert_eq!(c.outcome, Outcome::Refused);
+        let said = words(c.error);
+        assert!(said.contains("nonsense_key"), "refresh said: {said}");
+    }
+}
+
 #[test]
 fn the_tail_states_what_the_served_plane_declares() {
     // The billable classes a session counts in, the per-session fee and the `session` grant kind:
