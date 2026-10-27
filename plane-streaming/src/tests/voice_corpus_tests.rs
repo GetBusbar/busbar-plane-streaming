@@ -626,3 +626,54 @@ fn an_unhandled_asymmetry_or_a_lost_field_fails_the_bridge() {
     let n2 = [Norm::Truncate(0)];
     assert!(survives("planted", &n1, &n2, Dialect::OpenAi, Dialect::OpenAi).is_err());
 }
+
+// ── V4: crossing a dialect down-scopes (the governance checkpoint's codec half) ──────────────────
+
+/// The caller's OpenAI Realtime update busbar's V4 checkpoint pushes through the door: an
+/// OpenAI-only semantic VAD and µ-law formats beside instructions of its own.
+fn downscope_update() -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({"type": "session.update", "session": {
+        "instructions": "x",
+        "turn_detection": {"type": "semantic_vad", "eagerness": "high"},
+        "input_audio_format": "g711_ulaw", "output_audio_format": "g711_ulaw"}}))
+    .expect("the update serializes")
+}
+
+/// Whether a bridged reading widened toward Gemini: it carries an OpenAI-only concept.
+fn widened(norms: &[Norm]) -> bool {
+    let text = format!("{norms:?}");
+    text.contains("semantic") || text.contains("g711")
+}
+
+/// The V4 checkpoint's codec half, moved here with the codecs (busbar's harness reads the wire
+/// itself, ARCHITECT ruling R-18): an OpenAI-only concept bridged toward Gemini is down-scoped,
+/// never widened, and the update still bridges as a session config.
+#[test]
+fn an_openai_only_concept_is_down_scoped_never_widened_toward_gemini() {
+    let br = bridge(Dialect::OpenAi, Dialect::Gemini, &[downscope_update()]);
+    assert!(
+        br.n1.iter().any(|n| matches!(n, Norm::Config(_))),
+        "the update did not read as a session config: {:?}",
+        br.n1
+    );
+    assert!(
+        br.n2.iter().any(|n| matches!(n, Norm::Config(_))),
+        "the update did not bridge as a config: {:?}",
+        br.n2
+    );
+    assert!(
+        !widened(&br.n2),
+        "the bridge toward Gemini widened: {:?}",
+        br.n2
+    );
+}
+
+/// RED: a bridged reading that carried the semantic VAD or the µ-law format over is refused.
+#[test]
+fn a_bridge_that_carries_an_openai_only_concept_is_refused() {
+    assert!(widened(&[Norm::Config("semantic_vad".to_string())]));
+    assert!(widened(&[Norm::ConfigModalities(vec![
+        "g711_ulaw".to_string()
+    ])]));
+    assert!(!widened(&[Norm::Config("None|None|0|None".to_string())]));
+}
