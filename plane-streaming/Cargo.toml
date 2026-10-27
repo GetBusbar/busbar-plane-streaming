@@ -33,6 +33,9 @@ description = "The streaming plane for busbar: the plugin contract's plane and s
 # without naming this crate or resolving its checkout. Links no native library.
 links = "busbar-door-cells-busbar-plane-streaming"
 
+[lints]
+workspace = true
+
 [lib]
 name = "busbar_plane_streaming"
 path = "src/lib.rs"
