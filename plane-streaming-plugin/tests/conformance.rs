@@ -14,11 +14,8 @@ use busbar_plugin_loader::dispatch::LoadedDoor;
 
 /// This plugin's own door, named for the loader.
 fn loaded_door() -> LoadedDoor {
-    // SAFETY: `busbar_plane_streaming::door` is this crate's own door: it answers the `'static` door
-    // of this plugin.
-    #[allow(unused_unsafe)]
-    let loaded = unsafe { LoadedDoor::from_raw(busbar_plane_streaming::door) };
-    loaded
+    let door: busbar_contract::abi::mechanism::door::DoorFn = busbar_plane_streaming::door;
+    LoadedDoor::from(door)
 }
 
 busbar_plugin_loader::conformance_suite! {

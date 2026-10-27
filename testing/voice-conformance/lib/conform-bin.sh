@@ -20,7 +20,7 @@ VC_ROOT="$(cd "$VC_DIR/../.." && pwd)"          # repo root
 VC_FIXTURES="$VC_DIR/fixtures"
 # The cross-dialect map is busbar's (the kernel's equivalence table): read from the busbar checkout
 # the suite runs against ($BUSBAR_CHECKOUT, the pin), else from this tree when it is busbar itself.
-VC_MAP="${BUSBAR_CHECKOUT:-$VC_ROOT}/qa/evidence/voice-cross-dialect-map.json"
+VC_MAP="${BUSBAR_CHECKOUT:-$VC_ROOT}/docs/evidence/voice-cross-dialect-map.json"
 # The workspace the harness builds in. In this repo the harness is not a member of the root
 # workspace; testing/conformance/voice.sh writes, at run time, a workspace that adds it and names it
 # here. Unset, the root manifest is used (busbar's layout).
