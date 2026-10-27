@@ -9,6 +9,10 @@
 //! provider key authenticates only the busbar-to-provider hop and never enters anything built or
 //! returned here.
 
+use busbar_contract::abi::sdk::cred::{
+    json_reply, Cred, JsonReplyError, NotJsonText, SealedJson, SealedWrite,
+};
+
 use crate::codec::ir::config::SessionConfig;
 
 /// The provider's client-secret mint path, under its base URL.
@@ -43,11 +47,13 @@ pub fn mint_request_body(config: &SessionConfig) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&body).map_err(|e| format!("mint request body did not serialize: {e}"))
 }
 
-/// A minted ephemeral secret and when it expires. Its `Debug` prints the secret as `<redacted>`.
+/// A minted ephemeral secret and when it expires. The secret is a [`Cred`]: no getter, no
+/// `Display`, no `Serialize`; this plane only ever hands it on, through [`minted_answer`]. Its
+/// `Debug` names the expiry alone.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Minted {
     /// The `ek_` secret the browser presents.
-    pub value: String,
+    pub value: Cred,
     /// When it expires, in Unix seconds, as the provider stated it. Never zero: a secret whose
     /// expiry the provider did not state is refused, not handed to a browser as "expires at 0".
     pub expires_at_unix: u64,
@@ -56,15 +62,15 @@ pub struct Minted {
 impl std::fmt::Debug for Minted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Minted")
-            .field("value", &"<redacted>")
             .field("expires_at_unix", &self.expires_at_unix)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
+/// The provider's mint answer, as the SDK reads it: the secret captured straight into a [`Cred`].
 #[derive(serde::Deserialize)]
 struct ClientSecretResponse {
-    value: String,
+    value: Cred,
     expires_at: Option<u64>,
 }
 
@@ -72,20 +78,18 @@ struct ClientSecretResponse {
 ///
 /// # Errors
 /// A body that does not parse, a value that is not an `ek_` ephemeral secret, or a secret with no
-/// stated expiry, each with the text the caller reports.
+/// stated expiry, each with the text the caller reports. A body that does not parse is described
+/// by its class and position only ([`JsonReplyError`]): the decoder's own text would quote the
+/// value it met, and the body carries the secret.
 ///
 /// THE EXPIRY IS PART OF THE SECRET (X-2204). A browser holds an `ek_` only for as long as it says
 /// it lives; one the provider minted without saying when it dies was carried out as
 /// `expires_at_unix: 0`, a figure that is not an instant, so a client could neither schedule its
 /// refresh nor tell the secret was already past. An answer with no `expires_at`, or `0`, is refused.
 pub fn read_minted(body: &[u8]) -> Result<Minted, String> {
-    let parsed: ClientSecretResponse = serde_json::from_slice(body).map_err(|e| {
-        format!(
-            "client-secret response did not parse: {}",
-            json_failure_shape(&e)
-        )
-    })?;
-    if !parsed.value.starts_with(EK_PREFIX) {
+    let parsed: ClientSecretResponse = json_reply(body)
+        .map_err(|e: JsonReplyError| format!("client-secret response did not parse: {e}"))?;
+    if !parsed.value.starts_with(EK_PREFIX.as_bytes()) {
         return Err("client-secret response value is not an ek_ ephemeral secret".into());
     }
     let expires_at_unix = parsed
@@ -98,32 +102,16 @@ pub fn read_minted(body: &[u8]) -> Result<Minted, String> {
     })
 }
 
-/// A decode failure on the mint answer, described WITHOUT `serde_json::Error`'s own `Display`.
+/// The browser's answer to a mint: the secret and its expiry, and nothing else, encoded by the SDK
+/// into a sealed write (members in name order, as `serde_json` writes an object).
 ///
-/// The body being decoded carries the minted secret, and a data error quotes the offending value
-/// (`invalid type: integer ..., expected a string`, or the string itself), so the decoder's text is
-/// withheld at this format site (secret-hygiene #53, Check 3). What survives is the CLASS of the
-/// failure and where it sits — what an operator needs to tell a truncated answer from a malformed
-/// one from a wrongly-shaped one, and nothing of what the answer held.
-fn json_failure_shape(e: &serde_json::Error) -> String {
-    let class = match e.classify() {
-        serde_json::error::Category::Io => "the body could not be read",
-        serde_json::error::Category::Syntax => "it is not well-formed JSON",
-        serde_json::error::Category::Data => "a field is missing or has the wrong type",
-        serde_json::error::Category::Eof => "it ends before the JSON does",
-    };
-    let (line, column) = (e.line(), e.column());
-    format!("{class} (line {line}, column {column}; the decoder's text is withheld)")
-}
-
-/// The browser's answer to a mint: the secret and its expiry, and nothing else.
-#[must_use]
-pub fn minted_answer(minted: &Minted) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "value": minted.value,
-        "expires_at_unix": minted.expires_at_unix,
-    }))
-    .unwrap_or_default()
+/// # Errors
+/// The secret is not UTF-8 text (never, for one read off a JSON answer).
+pub fn minted_answer(minted: &Minted) -> Result<SealedWrite, NotJsonText> {
+    SealedJson::new()
+        .public("expires_at_unix", minted.expires_at_unix)
+        .sealed("value", &minted.value)
+        .encoded()
 }
 
 /// The provider's call id in an SDP answer's `Location`: the last path segment starting `rtc_`, less

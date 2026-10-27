@@ -737,6 +737,55 @@ fn the_dropped_door_answers_the_one_request_doors_as_the_linked_door_does() {
     );
 }
 
+/// A mint answered through a reply buffer of 16 bytes: the sealed answer, a buffer at a time, its
+/// `more` re-calls (no bytes, no flags) paying the rest, `done` only with the last byte.
+fn narrow_mint_script(p: &Plugin<Plane>) -> (Vec<u8>, Vec<String>) {
+    let _ = open(p, 1, SESSION, Some(PUBLIC));
+    let mut b = Bufs::new(256);
+    let _ = b.call(p, &attempt(7, 0));
+    let _ = b.call(p, &push(7, 0, FROM_CALLER, PIECE_LAST, &[]));
+    let mut narrow = Bufs::new(16);
+    let far = Push {
+        status: 200,
+        ..push(7, 0, FROM_FAR_END, PIECE_HAS_STATUS | PIECE_LAST, MINTED)
+    };
+    let mut lines = vec![narrow.call(p, &far)];
+    let mut bytes = Vec::new();
+    loop {
+        let line = lines.last().expect("a line");
+        let emitted = line
+            .split(" emitted=")
+            .nth(1)
+            .and_then(|r| r.split(" more=").next())
+            .expect("emitted");
+        bytes.extend_from_slice(emitted.as_bytes());
+        if line.contains(" more=0 ") || lines.len() > 64 {
+            break;
+        }
+        lines.push(narrow.call(p, &push(7, 0, FROM_FAR_END, 0, &[])));
+    }
+    (bytes, lines)
+}
+
+/// The sealed mint answer streams through a narrow reply buffer, byte for byte the served answer,
+/// and the dropped-in door answers it as the linked door does.
+#[test]
+fn a_sealed_mint_answer_streams_through_a_narrow_reply_buffer() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let (bytes, lines) = narrow_mint_script(&linked(&d));
+    let minted = minted_answer();
+    assert_eq!(bytes, minted, "{lines:#?}");
+    assert_eq!(lines.len(), minted.len().div_ceil(16), "{lines:#?}");
+    for line in &lines[..lines.len() - 1] {
+        assert!(
+            line.contains(" more=1 ") && line.contains(" done=false "),
+            "{line}"
+        );
+    }
+    assert!(lines[lines.len() - 1].contains(" done=true "), "{lines:#?}");
+    assert_eq!(narrow_mint_script(&dropped(&d)), (bytes, lines));
+}
+
 // ── LIVE SESSIONS THROUGH THE DOOR (K6) ──────────────────────────────────────────────────────────
 
 /// A piece of the live session on stream `stream` (claim 2, the sideband socket).

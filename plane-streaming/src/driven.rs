@@ -19,6 +19,7 @@ use crate::broker::{
     SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
 };
 use crate::codec::ir::config::SessionConfig;
+use busbar_contract::abi::sdk::cred::SealedWrite;
 
 /// The media type of a JSON body.
 pub const JSON_CONTENT_TYPE: &str = "application/json";
@@ -223,16 +224,36 @@ pub fn sdp_attempt(offer: &[u8]) -> Attempt {
     }
 }
 
-/// What the caller is answered. Its `Debug` prints the body's length, never its bytes: a mint
-/// answer's body is the live `ek_` secret.
-#[derive(Clone, PartialEq, Eq)]
+/// A caller's answer body: public bytes, or a mint's answer sealed by the SDK (it carries the live
+/// `ek_` secret, which this plane never holds as text and cannot read back).
+#[allow(missing_debug_implementations)]
+pub enum Body {
+    /// Public bytes (a refusal's text, the far end's SDP answer).
+    Public(Vec<u8>),
+    /// The SDK's sealed write: the door moves it into the host's reply buffer
+    /// (`SealedWrite::stream_into`).
+    Sealed(SealedWrite),
+}
+
+impl Body {
+    /// The length in bytes (public: the head states it).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Public(b) => b.len(),
+            Self::Sealed(w) => w.len(),
+        }
+    }
+}
+
+/// What the caller is answered. Its `Debug` prints the body's length, never its bytes.
 pub struct Reply {
     /// The status.
     pub status: u16,
     /// The head fields, in order.
     pub fields: Vec<(&'static str, String)>,
     /// The body.
-    pub body: Vec<u8>,
+    pub body: Body,
     /// For an SDP answer that names its call: the provider's `rtc_` call id, read off its
     /// `Location`: the call the caller's own sideband may attach to.
     pub rtc_call_id: Option<String>,
@@ -264,10 +285,12 @@ pub fn mint_failed(reason: &str) -> Reply {
     Reply {
         status: MINT_FAILED_STATUS,
         fields: Vec::new(),
-        body: format!(
-            "streaming ephemeral-secret mint failed: ephemeral token mint failed: {reason}"
-        )
-        .into_bytes(),
+        body: Body::Public(
+            format!(
+                "streaming ephemeral-secret mint failed: ephemeral token mint failed: {reason}"
+            )
+            .into_bytes(),
+        ),
         rtc_call_id: None,
     }
 }
@@ -282,14 +305,18 @@ pub fn mint_reply(status: u16, body: &[u8]) -> Reply {
             status_text(status)
         ));
     }
-    match read_minted(body) {
-        Ok(minted) => Reply {
+    let minted = match read_minted(body) {
+        Ok(minted) => minted,
+        Err(reason) => return mint_failed(&reason),
+    };
+    match minted_answer(&minted) {
+        Ok(answer) => Reply {
             status: 200,
             fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
-            body: minted_answer(&minted),
+            body: Body::Sealed(answer),
             rtc_call_id: None,
         },
-        Err(reason) => mint_failed(&reason),
+        Err(_) => mint_failed("client-secret response value is not text"),
     }
 }
 
@@ -317,7 +344,7 @@ pub fn sdp_reply(
     Reply {
         status,
         fields,
-        body: body.to_vec(),
+        body: Body::Public(body.to_vec()),
         rtc_call_id: location.and_then(rtc_call_id_of),
     }
 }

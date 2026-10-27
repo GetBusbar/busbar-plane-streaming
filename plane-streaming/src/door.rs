@@ -1243,7 +1243,7 @@ fn answer_piece(
                 return (Outcome::Failed, false);
             }
             out.set(|o| &o.reply_status, u32::from(reply.status));
-            let done = held.owed.owe(&reply.body, EMIT_DONE, input, out);
+            let done = held.owed.owe_body(reply.body, EMIT_DONE, input, out);
             (Outcome::Ready, done)
         }
     }
@@ -1520,7 +1520,7 @@ fn calls_full_reply() -> crate::driven::Reply {
     crate::driven::Reply {
         status,
         fields: vec![(FIELD_CONTENT_TYPE, CONTENT_TYPE_JSON.to_string())],
-        body: refusal_body(status, CALLS_FULL_TEXT),
+        body: crate::driven::Body::Public(refusal_body(status, CALLS_FULL_TEXT)),
         rtc_call_id: None,
     }
 }
