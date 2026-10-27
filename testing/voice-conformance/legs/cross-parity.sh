@@ -6,7 +6,7 @@
 #
 # LEG: cross-parity — the 4 ORDERED OpenAI<->Gemini pairs (oo, og, go, gg).
 #
-# For every shared concept of the machine-readable `qa/evidence/voice-cross-dialect-map.json`:
+# For every shared concept of the machine-readable `docs/evidence/voice-cross-dialect-map.json`:
 #   * CODEC: the plane's own codecs (`busbar_plane_streaming::codec`, the module the door's sessions
 #     run) bridge the concept A → IR → B → IR keeping its load-bearing fields (correlation-collapsed
 #     fingerprint; documented non-survivors excluded per the map);
