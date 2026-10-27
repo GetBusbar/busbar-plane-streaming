@@ -152,6 +152,19 @@ pub struct StreamsCfg {
     /// a key of `streams:`.
     #[serde(skip)]
     pub upstream_model: Option<String>,
+    /// THE BROWSER'S MEDIA LISTENER (row 132): where the SDP door's media associations arrive.
+    /// Absent ⇒ no media is served, and the SDP door refuses every offer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaCfg>,
+}
+
+/// `streams.media`: the one datagram port busbar terminates the browser's media on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaCfg {
+    /// The `ip:port` the port binds; the one candidate every association advertises, so never a
+    /// wildcard.
+    pub listen: String,
 }
 
 impl StreamsCfg {
@@ -183,6 +196,7 @@ impl Default for StreamsCfg {
             context_window_tokens: default_context_window_tokens(),
             max_output_tokens: default_max_output_tokens(),
             upstream_model: None,
+            media: None,
         }
     }
 }
