@@ -15,8 +15,8 @@
 //! that could not be reached is the kernel's route terminal and is not answered here.
 
 use crate::broker::{
-    clamped_ttl_secs, mint_request_body, minted_answer, read_minted, rtc_call_id_of, CALLS_PATH,
-    CLIENT_SECRETS_PATH, SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
+    mint_request_body, minted_answer, read_minted, rtc_call_id_of, CALLS_PATH, CLIENT_SECRETS_PATH,
+    SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
 };
 use crate::codec::ir::config::SessionConfig;
 use busbar_contract::abi::sdk::cred::SealedWrite;
@@ -75,12 +75,6 @@ impl Door {
         self.line().dialect
     }
 
-    /// `true` for the door read without a credential.
-    #[must_use]
-    pub const fn is_open(self) -> bool {
-        self.line().open()
-    }
-
     /// `true` for a door that opens a live session rather than answering one request.
     #[must_use]
     pub const fn is_session(self) -> bool {
@@ -129,116 +123,31 @@ pub const fn arrive(claim: u32) -> Option<Arrival> {
     }
 }
 
-// ── the plane's answer at each loop step, in the order the kernel's loop runs them ─────────────
-
-/// THE PLANE'S ANSWER AT EACH LOOP STEP for a unit on one of its doors: what the kernel's loop asks
-/// the plane at authenticate, verify, approve, admit, route, meter and audit. The door answers the
-/// driver through these; nothing here reaches the kernel any other way.
-pub trait Steps {
-    /// AUTHENTICATE: whom a unit on this door needs.
-    fn authenticate(&self) -> u32;
-    /// VERIFY: where, inside the plane's section, the destination a session dials is named.
-    #[cfg(test)]
-    fn verify(&self) -> &'static str;
-    /// APPROVE: the grant a key must hold, as (kind, value).
-    #[cfg(test)]
-    fn approve(&self) -> (&'static str, &'static str);
-    /// ADMIT: the units a unit is expected to cost before the far end reports any.
-    fn admit(&self) -> Vec<(u32, u64)>;
-    /// ROUTE: the request an attempt sends the far end; `None` when the door sends nothing.
+impl Door {
+    /// The request an attempt on this door sends the far end: the session doors dial the dialect's
+    /// realtime socket (the credential is the kernel's, never in the target); the mint and SDP
+    /// doors send their one request.
     ///
     /// # Errors
-    /// The request body's serializer text.
-    fn route(
-        &self,
+    /// The mint request body's serializer text.
+    pub fn route(
+        self,
         config: &SessionConfig,
         caller_ref: Option<&str>,
         body: &[u8],
-    ) -> Result<Option<Attempt>, String>;
-    /// METER: a session's units so far, per billable class index, the zero classes left out.
-    fn meter(&self, units: &crate::session_unit::CumulativeUnits) -> Vec<(u32, u64)>;
-    /// AUDIT: the action a unit on this door is audited under.
-    #[cfg(test)]
-    fn audit(&self) -> &'static str;
-}
-
-impl Steps for Door {
-    /// Every keyed door needs a principal; a door read without a credential (none today) answers
-    /// anyone.
-    fn authenticate(&self) -> u32 {
-        if self.is_open() {
-            busbar_contract::abi::plane::PRINCIPAL_NONE
-        } else {
-            busbar_contract::abi::plane::PRINCIPAL_REQUIRED
-        }
-    }
-
-    /// The kernel resolves `streams.session.model` through the root models and judges it.
-    #[cfg(test)]
-    fn verify(&self) -> &'static str {
-        crate::door::EGRESS_TARGET
-    }
-
-    /// The `session` kind, for the one pool every session is served on.
-    #[cfg(test)]
-    fn approve(&self) -> (&'static str, &'static str) {
-        (crate::door::SCOPE, crate::door::SESSION_POOL)
-    }
-
-    /// None: a session is admitted at open and pays for what the far end reports (and its
-    /// per-session fee, which the kernel counts); the one-request doors report nothing.
-    fn admit(&self) -> Vec<(u32, u64)> {
-        match self {
-            Door::Mint
-            | Door::Sdp
-            | Door::Sideband
-            | Door::Gemini
-            | Door::Twilio
-            | Door::Realtime => Vec::new(),
-        }
-    }
-
-    /// The session doors dial the dialect's realtime socket (the credential is the kernel's, never
-    /// in the target); the mint and SDP doors send their one request.
-    fn route(
-        &self,
-        config: &SessionConfig,
-        caller_ref: Option<&str>,
-        body: &[u8],
-    ) -> Result<Option<Attempt>, String> {
+    ) -> Result<Attempt, String> {
+        let socket = |target| Attempt {
+            verb: "GET",
+            target,
+            fields: Vec::new(),
+            body: Vec::new(),
+        };
         Ok(match self {
-            Door::Mint => Some(mint_attempt(config, caller_ref, None)?),
-            Door::Sdp => Some(sdp_attempt(body)),
-            Door::Sideband | Door::Twilio | Door::Realtime => Some(Attempt {
-                verb: "GET",
-                target: REALTIME_SOCKET_PATH,
-                fields: Vec::new(),
-                body: Vec::new(),
-            }),
-            Door::Gemini => Some(Attempt {
-                verb: "GET",
-                target: GEMINI_SOCKET_PATH,
-                fields: Vec::new(),
-                body: Vec::new(),
-            }),
+            Door::Mint => mint_attempt(config, caller_ref)?,
+            Door::Sdp => sdp_attempt(body),
+            Door::Sideband | Door::Twilio | Door::Realtime => socket(REALTIME_SOCKET_PATH),
+            Door::Gemini => socket(GEMINI_SOCKET_PATH),
         })
-    }
-
-    /// Counts only; the kernel prices nothing the plane names.
-    fn meter(&self, units: &crate::session_unit::CumulativeUnits) -> Vec<(u32, u64)> {
-        units
-            .0
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| **n != 0)
-            .map(|(i, n)| (i as u32, *n))
-            .collect()
-    }
-
-    /// A session open.
-    #[cfg(test)]
-    fn audit(&self) -> &'static str {
-        SESSION_OPEN_ACTION
     }
 }
 
@@ -287,15 +196,11 @@ pub struct Attempt {
 }
 
 /// The mint's ATTEMPT: the locked session params the browser's session is bound to, the secret's
-/// lifetime (the requested one held inside its bounds), and the caller named for attribution.
+/// lifetime, and the caller named for attribution.
 ///
 /// # Errors
 /// The body's serializer text.
-pub fn mint_attempt(
-    config: &SessionConfig,
-    caller: Option<&str>,
-    requested_ttl_secs: Option<u64>,
-) -> Result<Attempt, String> {
+pub fn mint_attempt(config: &SessionConfig, caller: Option<&str>) -> Result<Attempt, String> {
     let mut fields = vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())];
     if let Some(r) = caller.filter(|r| !r.is_empty()) {
         fields.push((SAFETY_IDENTIFIER_HEADER, r.to_string()));
@@ -304,7 +209,7 @@ pub fn mint_attempt(
         verb: "POST",
         target: CLIENT_SECRETS_PATH,
         fields,
-        body: mint_request_body(clamped_ttl_secs(requested_ttl_secs), config)?,
+        body: mint_request_body(config)?,
     })
 }
 

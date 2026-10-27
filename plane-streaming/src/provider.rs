@@ -1,73 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! A DIALECT'S PROVIDER ADDRESS RULES — the names of the two dialects this plane speaks, the keyless
-//! provider endpoint each dials, and where each dialect's credential is presented on that dial.
+//! The names of the dialects this plane speaks, in the order the tail's `dialects` lists them.
 
-/// THE DIALECT NAME this plane speaks first — OpenAI's bidirectional Realtime voice API. Named once
-/// here; it is the dialect registry key and the FIRST of the plane's wire formats.
+/// OpenAI's bidirectional Realtime voice API.
 pub const OPENAI_REALTIME: &str = "openai_realtime";
 
-/// THE SECOND DIALECT this plane speaks — Google's Gemini Live `BidiGenerateContent` API. Its codec is
-/// `GeminiLiveCodec`; adding it to the wire formats is what EARNS the plane its superset IR
-/// (a plane earns a superset at its SECOND wire format and not before).
+/// Google's Gemini Live `BidiGenerateContent` API.
 pub const GEMINI_LIVE: &str = "gemini_live";
 
 /// THE TELEPHONY DIALECT a caller arrives in on the telephony door: Twilio Media Streams' JSON
 /// event envelope (never dialled: its session's far end speaks [`OPENAI_REALTIME`]).
 pub const TWILIO_MEDIA_STREAMS: &str = "twilio_media_streams";
-
-/// THE PROVIDER SIDE OF A DIAL — the origin, converted to its socket scheme, plus the fixed path the
-/// dialect's realtime endpoint answers on. Carries no credential: the dialect's
-/// [`credential_placement`] says where the host presents one, and the host adds it to the upgrade
-/// request only, so this plane never holds or formats the secret.
-#[cfg(test)]
-#[must_use]
-pub fn provider_ws_url(base_url: &str, dialect: &str) -> String {
-    let ws = base_url
-        .replacen("https://", "wss://", 1)
-        .replacen("http://", "ws://", 1);
-    let ws = ws.trim_end_matches('/');
-    if dialect == GEMINI_LIVE {
-        format!("{ws}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")
-    } else {
-        format!("{ws}/v1/realtime")
-    }
-}
-
-/// Where a dialect's provider dial presents its credential — declared here as data, applied by the
-/// host to the upgrade request.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CredentialPlacement {
-    /// A request header `name: {prefix}{secret}`.
-    Header {
-        /// The header name (lowercase).
-        name: &'static str,
-        /// Written before the secret.
-        prefix: &'static str,
-    },
-}
-
-/// THE DIALECT'S NATIVE CREDENTIAL SCHEME on its realtime socket, as the door's outbound needs
-/// declare it (`crate::door::LIVE_STYLE`, `crate::door::REALTIME_STYLE`): Gemini Live takes the
-/// `x-goog-api-key` header; OpenAI Realtime takes `Authorization: Bearer`.
-#[cfg(test)]
-#[must_use]
-pub fn credential_placement(dialect: &str) -> CredentialPlacement {
-    if dialect == GEMINI_LIVE {
-        CredentialPlacement::Header {
-            name: "x-goog-api-key",
-            prefix: "",
-        }
-    } else {
-        CredentialPlacement::Header {
-            name: "authorization",
-            prefix: "Bearer ",
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "tests/provider_tests.rs"]
-mod tests;

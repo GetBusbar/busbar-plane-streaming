@@ -48,7 +48,8 @@ fn bind(d: &Dispatcher, instance: &str) -> Bind {
 
 /// This plugin's own door, named for the loader.
 fn loaded_door() -> LoadedDoor {
-    busbar_plugin_loader::dispatch::admit_linked(door).expect("the streaming door is admitted")
+    let door: busbar_contract::abi::mechanism::door::DoorFn = door;
+    LoadedDoor::from(door)
 }
 
 /// The compiled-in row: the door and the Statement rendering it states.
@@ -60,7 +61,10 @@ fn row() -> LinkedRow {
 fn tail() -> &'static busbar_contract::abi::plane::PlaneTail {
     use busbar_contract::abi::plane::PlaneTail;
     // SAFETY: the door's `'static` Door, its Statement, and the plane tail it points at.
-    unsafe { &*(*door().statement()).kind_tail().cast::<PlaneTail>() }
+    #[allow(unused_unsafe)]
+    unsafe {
+        &*(*door().statement()).kind_tail().cast::<PlaneTail>()
+    }
 }
 
 /// The need a far request rides, as `OnPieceOut::need` names it: the index plus one of the outbound

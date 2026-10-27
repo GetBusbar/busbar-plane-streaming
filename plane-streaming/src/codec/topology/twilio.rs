@@ -58,15 +58,6 @@ pub enum TwilioError {
         /// The channel count Twilio actually negotiated.
         channels: u64,
     },
-    /// The connection presented a `streamSid` that does not match the one bound at admission — a forged
-    /// or replayed connection, refused before any byte is admitted.
-    #[cfg(test)]
-    Forged {
-        /// The `streamSid` bound to this call at admission.
-        expected: String,
-        /// The `streamSid` the inbound frame actually presented.
-        actual: String,
-    },
 }
 
 impl std::fmt::Display for TwilioError {
@@ -83,10 +74,6 @@ impl std::fmt::Display for TwilioError {
                 f,
                 "Twilio media format refused: {encoding} {sample_rate}Hz {channels}ch is not g711_ulaw/8000Hz/mono"
             ),
-            #[cfg(test)]
-            TwilioError::Forged { expected, actual } => {
-                write!(f, "Twilio streamSid mismatch: expected {expected}, got {actual}")
-            }
         }
     }
 }
@@ -362,100 +349,6 @@ pub fn assert_g711_ulaw(fmt: &MediaFormat) -> Result<(), TwilioError> {
             channels: fmt.channels,
         })
     }
-}
-
-/// THE PRE-ADMISSION FORGERY GUARD — the binding a Twilio Media Streams connection is checked against
-/// before any of its bytes are admitted into the session. `call_id` is minted at the TwiML webhook and
-/// embedded in the `<Stream>` URL; `stream_sid` is the value Twilio declares at `start` and repeats on
-/// every later frame. The proxy/session engine do not authenticate the caller — this guard does, so a
-/// replayed or forged WS connection cannot inject audio into a call it does not own.
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdmissionGuard {
-    call_id: String,
-    stream_sid: String,
-}
-
-#[cfg(test)]
-impl AdmissionGuard {
-    /// Bind the guard from the webhook-minted `call_id` and the `stream_sid` the `start` event
-    /// declared. The route calls this once, after [`assert_g711_ulaw`] clears the `start` format.
-    #[must_use]
-    pub fn bind(call_id: impl Into<String>, stream_sid: impl Into<String>) -> Self {
-        Self {
-            call_id: call_id.into(),
-            stream_sid: stream_sid.into(),
-        }
-    }
-
-    /// The webhook-minted call id this guard is bound to.
-    #[must_use]
-    pub fn call_id(&self) -> &str {
-        &self.call_id
-    }
-
-    /// The `streamSid` bound at admission.
-    #[must_use]
-    pub fn stream_sid(&self) -> &str {
-        &self.stream_sid
-    }
-
-    /// ADMIT an inbound frame's `stream_sid`. A mismatch is a forged/replayed connection and is REFUSED
-    /// — the caller must not hand the frame's bytes to `client_in`.
-    pub fn admit(&self, stream_sid: &str) -> Result<(), TwilioError> {
-        if stream_sid == self.stream_sid {
-            Ok(())
-        } else {
-            Err(TwilioError::Forged {
-                expected: self.stream_sid.clone(),
-                actual: stream_sid.to_string(),
-            })
-        }
-    }
-}
-
-/// Build the `wss://…/twilio/{call_id}` URL Twilio dials, from a WS base and the webhook-minted
-/// `call_id`. Kept next to the TwiML renderer so the URL the webhook advertises and the route the WS
-/// accepts are derived the one way.
-#[cfg(test)]
-#[must_use]
-pub fn stream_url(ws_base: &str, call_id: &str) -> String {
-    format!("{}/twilio/{}", ws_base.trim_end_matches('/'), call_id)
-}
-
-/// Render the inbound-webhook TwiML that tells Twilio to open a Media Streams WS to `ws_url`. Pure: it
-/// carries no audio and no provider secret, exactly one variable (the URL, XML-escaped).
-#[cfg(test)]
-#[must_use]
-pub fn render_connect_stream(ws_url: &str) -> String {
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Connect><Stream url=\"{}\"/></Connect></Response>",
-        xml_escape(ws_url)
-    )
-}
-
-/// Render the webhook TwiML directly from a WS base and the minted `call_id` — the composition the
-/// webhook handler uses.
-#[cfg(test)]
-#[must_use]
-pub fn render_twiml_for_call(ws_base: &str, call_id: &str) -> String {
-    render_connect_stream(&stream_url(ws_base, call_id))
-}
-
-#[cfg(test)]
-fn xml_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// THE TELEPHONY CARRIER'S ENVELOPE around a session: the caller speaks Twilio Media Streams, the

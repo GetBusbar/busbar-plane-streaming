@@ -25,15 +25,16 @@ use busbar_plane_streaming::driven::{
     GEMINI_SOCKET_PATH, MINT_FAILED_STATUS, REALTIME_SOCKET_PATH, SESSION_OPEN_ACTION,
 };
 use busbar_plane_streaming::provider::{GEMINI_LIVE, OPENAI_REALTIME};
+use busbar_plane_streaming::session_door::PER_SESSION_CLASS;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::Plugin;
 use serde_json::{json, Value};
 
 use crate::codec_legs::{caller_norms, far_norms, frame, usage_tokens, Dialect, Norm};
 use crate::door::{
-    arrive, attempt, drive, judge, judge_planted, open, piece, refusal, refusal_for, request,
-    result, session, Answer, Arrived, Emission, Log, Opened, Piece, Rendered, Rig, Session,
-    CALLER_REF, MODEL, PUBLIC, SESSION,
+    arrive, attempt, dials_socket, drive, judge, judge_planted, open, piece, refusal, refusal_for,
+    request, result, session, Answer, Arrived, Emission, Log, Opened, Piece, Rendered, Rig,
+    Session, CALLER_REF, MODEL, PUBLIC, SESSION,
 };
 
 // ── the frames the legs push ────────────────────────────────────────────────────────────────────
@@ -47,7 +48,7 @@ pub const GEMINI_USAGE: &[u8] = br#"{"usageMetadata":{"promptTokenCount":140,"re
 /// The cumulative units a session reports once `USAGE_DONE` closed a turn holding `secs` seconds
 /// of the caller's audio: the four token classes, the audio seconds and the session fee.
 pub fn usage_units(secs: u64) -> String {
-    format!("0:1=10 1:1=20 2:1=3 3:1=4 4:1={secs} 6:1=1")
+    format!("0:1=10 1:1=20 2:1=3 3:1=4 4:1={secs} {PER_SESSION_CLASS}:1=1")
 }
 
 /// `ms` milliseconds of the caller's 24 kHz PCM16 audio, as an OpenAI Realtime frame.
@@ -179,7 +180,7 @@ fn cred_script(p: &Plugin<Plane>) -> CredObs {
         ride("mint", &piece(p, &attempt(7, 0, 1))),
         ride("sdp", &piece(p, &attempt(8, 1, 1))),
     ];
-    let mut s = Session::open(p, 20, 2);
+    let mut s = Session::open(p, 20, 5);
     rides.push(ride("sideband", &s.push(FROM_CALLER, 0, &uplink(100))));
     let mut g = Session::open(p, 21, 3);
     rides.push(ride("gemini", &g.push(FROM_CALLER, 0, &gemini_uplink(100))));
@@ -308,42 +309,42 @@ fn meter_script(p: &Plugin<Plane>) -> MeterObs {
     let admitted = (0..5).map(|claim| arrive(p, claim).units).collect();
     let audio = uplink(2000);
     let mut lines = Vec::new();
-    let a = piece(p, &session(20, 2, FROM_CALLER, 0, &audio));
+    let a = piece(p, &session(20, 5, FROM_CALLER, 0, &audio));
     lines.push(units_of("caller audio", &a));
     let turn = Piece {
         attempt_no: 1,
-        ..session(20, 2, FROM_KERNEL, 0, &[])
+        ..session(20, 5, FROM_KERNEL, 0, &[])
     };
     lines.push(units_of("turn attempt", &piece(p, &turn)));
     let far = Piece {
         status: 101,
-        ..session(20, 2, FROM_FAR_END, PIECE_HAS_STATUS, USAGE_DONE)
+        ..session(20, 5, FROM_FAR_END, PIECE_HAS_STATUS, USAGE_DONE)
     };
     lines.push(units_of("far usage", &piece(p, &far)));
     lines.push(units_of(
         "collect",
-        &piece(p, &session(20, 2, FROM_KERNEL, 0, &[])),
+        &piece(p, &session(20, 5, FROM_KERNEL, 0, &[])),
     ));
     let short = Piece {
         units_cap: 2,
-        ..session(20, 2, FROM_CALLER, 0, &audio)
+        ..session(20, 5, FROM_CALLER, 0, &audio)
     };
     lines.push(units_of("short", &piece(p, &short)));
     lines.push(units_of(
         "short re-call",
-        &piece(p, &session(20, 2, FROM_CALLER, 0, &audio)),
+        &piece(p, &session(20, 5, FROM_CALLER, 0, &audio)),
     ));
     lines.push(units_of(
         "caller end",
-        &piece(p, &session(20, 2, FROM_CALLER, PIECE_LAST, &[])),
+        &piece(p, &session(20, 5, FROM_CALLER, PIECE_LAST, &[])),
     ));
     lines.push(units_of(
         "unanswered audio",
-        &piece(p, &session(30, 2, FROM_CALLER, 0, &audio)),
+        &piece(p, &session(30, 5, FROM_CALLER, 0, &audio)),
     ));
     lines.push(units_of(
         "unanswered end",
-        &piece(p, &session(30, 2, FROM_CALLER, PIECE_LAST, &[])),
+        &piece(p, &session(30, 5, FROM_CALLER, PIECE_LAST, &[])),
     ));
     MeterObs {
         classes,
@@ -377,6 +378,8 @@ fn meter_check(o: &MeterObs) -> Result<String, String> {
         "text_tokens_out/token",
         "audio_seconds_in/duration",
         "tool_calls/count",
+        "image_tokens_in/token",
+        "video_tokens_in/token",
         "per_session/count",
     ];
     if o.classes != classes {
@@ -396,7 +399,7 @@ fn meter_check(o: &MeterObs) -> Result<String, String> {
         return Err(format!("the session reported {:?}; want {want:?}", o.lines));
     }
     Ok(
-        "the door counts in its six declared classes plus the per-session fee, admits on no \
+        "the door counts in its declared classes plus the per-session fee, admits on no \
          estimate, and reports every turn's far-end tokens and audio seconds as cumulative \
          REPORTED units: the open turn's seconds running in every answer (so the last answer \
          before a cancel or a cut bills what streamed), each turn counted once (a short answer's \
@@ -465,7 +468,7 @@ fn scope_check(o: &ScopeObs) -> Result<String, String> {
         return Err(format!("the tail's grant kinds are {:?}", o.scope_kinds));
     }
     for (claim, a) in SCOPE_CLAIMS.iter().zip(&o.arrivals) {
-        let door = *claim <= 4;
+        let door = *claim <= 5;
         let ok = if door {
             a.outcome == Outcome::Ready && a.principal == PRINCIPAL_REQUIRED && a.op_class == 0
         } else {
@@ -484,7 +487,7 @@ fn scope_check(o: &ScopeObs) -> Result<String, String> {
         return Err(format!("the grant refusal rendered as {:?}", o.refused));
     }
     Ok(
-        "the door declares the `session` grant kind, every one of its five doors asks for a \
+        "the door declares the `session` grant kind, every one of its six doors asks for a \
          principal (none admits anonymously) under the one session-open operation, an \
          unpublished claim is refused 404 with the plane's own code, and a grant refusal renders \
          as the dialect's permission_error. Matching the key's grants (wildcard, explicit, \
@@ -640,7 +643,7 @@ struct DialObs {
 
 fn dial_script(p: &Plugin<Plane>) -> DialObs {
     let _ = open(p, SESSION, Some(PUBLIC));
-    let mut s = Session::open(p, 50, 2);
+    let mut s = Session::open(p, 50, 5);
     s.push(FROM_CALLER, 0, &uplink(100));
     s.push(FROM_FAR_END, 0, USAGE_DONE);
     let mut g = Session::open(p, 51, 3);
@@ -670,7 +673,7 @@ fn dial_one(
     if far.is_empty()
         || far
             .iter()
-            .any(|e| e.verb != "GET" || e.target != socket || e.need != need)
+            .any(|e| e.verb != "GET" || !dials_socket(&e.target, socket) || e.need != need)
     {
         return Err(format!(
             "{}: the session's far frames are not GET {socket} on need {need}: {far:?}",
@@ -684,7 +687,13 @@ fn dial_one(
         .filter(|u| u.0 < 4)
         .map(|u| (u.0, u.2))
         .collect();
-    if want.is_empty() || got != want || !log.units.iter().any(|u| u.0 == 6 && u.2 == 1) {
+    if want.is_empty()
+        || got != want
+        || !log
+            .units
+            .iter()
+            .any(|u| u.0 == PER_SESSION_CLASS && u.2 == 1)
+    {
         return Err(format!(
             "{}: the far end's usage {want:?} was reported as {:?}",
             dialect.name(),
@@ -807,8 +816,8 @@ fn admit_script(p: &Plugin<Plane>) -> AdmitObs {
             }
         })
         .collect();
-    let far = piece(p, &session(60, 2, FROM_FAR_END, 0, &downlink(96)));
-    let collect = piece(p, &session(60, 2, FROM_KERNEL, 0, &[]));
+    let far = piece(p, &session(60, 5, FROM_FAR_END, 0, &downlink(96)));
+    let collect = piece(p, &session(60, 5, FROM_KERNEL, 0, &[]));
     let after = vec![
         format!("far {:?} emitted={}", far.outcome, far.emitted.len()),
         format!(
@@ -818,7 +827,7 @@ fn admit_script(p: &Plugin<Plane>) -> AdmitObs {
         ),
     ];
     let drive = drive(p);
-    let mut s = Session::open(p, 61, 2);
+    let mut s = Session::open(p, 61, 5);
     let control = s.push(FROM_CALLER, 0, &uplink(100));
     AdmitObs {
         rendered,
@@ -1121,7 +1130,7 @@ fn audit_script(p: &Plugin<Plane>) -> AuditObs {
         .collect();
     let mut records = 0;
     for stream in [80, 81] {
-        let mut s = Session::open(p, stream, 2);
+        let mut s = Session::open(p, stream, 5);
         s.push(FROM_CALLER, 0, &uplink(100));
         s.push(FROM_FAR_END, 0, USAGE_DONE);
         s.push(FROM_CALLER, PIECE_LAST, &[]);
@@ -1209,13 +1218,13 @@ struct ExitObs {
 
 fn exit_script(p: &Plugin<Plane>) -> ExitObs {
     let _ = open(p, SESSION, Some(PUBLIC));
-    let mut s = Session::open(p, 90, 2);
+    let mut s = Session::open(p, 90, 5);
     s.push(FROM_CALLER, 0, &uplink(1000));
     s.push(FROM_FAR_END, 0, USAGE_DONE);
     s.push(FROM_CALLER, 0, &uplink(1000));
     let end = s.push(FROM_CALLER, PIECE_LAST, &[]);
-    let collect = piece(p, &session(90, 2, FROM_KERNEL, 0, &[]));
-    let far = piece(p, &session(90, 2, FROM_FAR_END, 0, &downlink(96)));
+    let collect = piece(p, &session(90, 5, FROM_KERNEL, 0, &[]));
+    let far = piece(p, &session(90, 5, FROM_FAR_END, 0, &downlink(96)));
     let after = vec![
         format!(
             "collect {:?} emitted={}",
@@ -1225,7 +1234,7 @@ fn exit_script(p: &Plugin<Plane>) -> ExitObs {
         format!("far {:?} emitted={}", far.outcome, far.emitted.len()),
     ];
     let drive = drive(p);
-    let mut t = Session::open(p, 91, 2);
+    let mut t = Session::open(p, 91, 5);
     let interrupted = t.push(FROM_CALLER, PIECE_LAST, &[]);
     ExitObs {
         end,
