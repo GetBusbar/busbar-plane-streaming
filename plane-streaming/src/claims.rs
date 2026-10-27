@@ -1,32 +1,14 @@
-//! The transports the door's routes are carried on ([`WS_TRANSPORT`], [`HTTP_TRANSPORT`]), and the
-//! claim table the crate's tests read through the plane's test-only meta declaration.
+//! The transports the door's routes are carried on ([`WS_TRANSPORT`], [`HTTP_TRANSPORT`]), and a
+//! claim table only the tests (and the voice conformance harness) read.
 //!
-//! WHAT THE SHIPPED PLANE PUBLISHES IS ITS DOOR'S FIVE ROUTES (`crate::door::ROUTES`: the secret
-//! mint, the SDP offer, the sideband socket, the Gemini Live socket and the telephony socket), with
-//! the dialects its Statement tail names. The table below ([`DIALECT_CLAIMS`]) is not published:
-//! no door claims it, and its two one-shot operations (`/v1/audio/*`) are served by no door. It is
-//! kept as the tests' fixture of a claim-shaped declaration over the plane's dialects.
-//!
-//! Two carriers bring those dialects in: the WebSocket carrier (both duplex JSON dialects AND the
-//! Twilio telephony dialect) and the request/response carrier (the two one-shot operations). The
-//! browser media leg is unclaimed (below).
-//!
-//! * **Twilio Media Streams rides the WebSocket carrier.** Its wire is one JSON event per WebSocket
-//!   message (`connected`/`start`/`media`/`mark`/`dtmf`/`stop`): the carrier frames the messages and
-//!   the event envelope is this plane's dialect ([`crate::codec::topology::twilio`]). The design
-//!   lists five transports and no telephony one. Twilio
-//!   cannot present a busbar bearer or API key, so its claim authenticates under the
-//!   `webhook-signature` alternative alone: the `X-Twilio-Signature` HMAC over the request URL,
-//!   verified by the auth kind's inbound verify, never by this plane.
-//! * **`webrtc`** — no codec surface for the RTP media plane exists anywhere in this crate's closure
-//!   (a plane cannot claim a transport it cannot decode frames from without lying about what it
-//!   reads). It is unclaimed: a claim is declared independently, and the boot's own overlap check
-//!   is what proves the claims stay disjoint when it is added.
-
-use busbar_contract::grammar::{Claim, Selector};
+//! WHAT THE SHIPPED PLANE PUBLISHES IS ITS DOOR'S ROUTES (`crate::door::ROUTES`). The table below
+//! ([`DIALECT_CLAIMS`]) is not published: no door claims it, and its two one-shot operations
+//! (`/v1/audio/*`) are served by no door, so it is compiled for the tests alone. Twilio Media
+//! Streams rides the WebSocket carrier and authenticates under the `webhook-signature` alternative
+//! alone: Twilio holds no busbar bearer or API key.
 
 #[cfg(test)]
-use busbar_contract::grammar::one_level_under;
+use busbar_contract::grammar::{one_level_under, Claim, Selector};
 
 /// The transport the three WebSocket dialects (`openai-realtime`, `gemini-live`,
 /// `twilio-media-streams`) are claimed against.
@@ -39,18 +21,22 @@ pub const HTTP_TRANSPORT: &str = "http";
 ///
 /// One scheme with alternatives, not several schemes, the same discipline `busbar-plane-llm` uses:
 /// which alternative a unit narrows to is the authenticate step's answer.
+#[cfg(test)]
 pub(crate) const SCHEME: &str = "streaming-key";
 
 /// The alternatives a duplex-session unit (`ws`) may narrow to: a bearer token or a vendor API-key
 /// header, presented once at session open and cached for the life of the session.
+#[cfg(test)]
 const WS_SCHEME_ALTS: &[&str] = &["bearer", "api-key"];
 
 /// The one alternative a Twilio Media Streams unit may narrow to: the webhook signature Twilio puts
 /// on the WebSocket upgrade (`X-Twilio-Signature`). Twilio holds no busbar credential, so a bearer or
 /// API-key alternative here would be either unusable or unauthenticated.
+#[cfg(test)]
 const TWILIO_SCHEME_ALTS: &[&str] = &["webhook-signature"];
 
 /// The alternatives a one-shot HTTP unit may narrow to — the same two an ordinary API caller uses.
+#[cfg(test)]
 const HTTP_SCHEME_ALTS: &[&str] = &["bearer", "api-key"];
 
 /// The four dialects this plane's declared claims name.
@@ -58,6 +44,7 @@ const HTTP_SCHEME_ALTS: &[&str] = &["bearer", "api-key"];
 /// This is the open-vocabulary dialect name, kept as a closed Rust enum inside this crate only
 /// because every method that switches on it is exhaustive and a fifth dialect is a code change
 /// here regardless; nothing about [`busbar_contract::grammar::Claim`] requires a closed set.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dialect {
     /// OpenAI Realtime (GA) — WebSocket, PCM16, tool calls, full duplex.
@@ -74,6 +61,7 @@ pub enum Dialect {
 
 /// One claim with the dialect it names recorded beside it, the same pairing
 /// `busbar_plane_llm::claims::LadderClaim` uses for its ladder.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DialectClaim {
     /// Which dialect this claim names.
@@ -83,6 +71,7 @@ pub struct DialectClaim {
 }
 
 /// Build one claim over a selector, on a transport, under an alternative set.
+#[cfg(test)]
 const fn claim(
     transport: &'static str,
     selector: Selector,
@@ -101,6 +90,7 @@ const fn claim(
 }
 
 /// The declared claims, dialect-tagged, in the order the boot's overlap check sees them.
+#[cfg(test)]
 pub const DIALECT_CLAIMS: &[DialectClaim] = &[
     DialectClaim {
         dialect: Dialect::OpenaiRealtime,
@@ -143,22 +133,6 @@ pub const DIALECT_CLAIMS: &[DialectClaim] = &[
         ),
     },
 ];
-
-/// The claims, one field narrower, as [`busbar_contract::plane::PlaneMeta::CLAIMS`] wants them.
-///
-/// Written out rather than derived because a declaration is an associated constant, and a constant
-/// cannot run a loop over another constant.
-pub const CLAIMS: &[Claim] = &[
-    DIALECT_CLAIMS[0].claim,
-    DIALECT_CLAIMS[1].claim,
-    DIALECT_CLAIMS[2].claim,
-    DIALECT_CLAIMS[3].claim,
-    DIALECT_CLAIMS[4].claim,
-];
-
-/// The two lists cannot drift: one is the other with a field dropped, and a constant cannot loop
-/// over a constant, so the equality is asserted at compile time instead of trusted.
-const _: () = assert!(CLAIMS.len() == DIALECT_CLAIMS.len());
 
 /// Which dialect a request's target names, by walking the claims in declaration order.
 ///

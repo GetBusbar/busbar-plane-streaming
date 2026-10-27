@@ -201,9 +201,13 @@ fn no_two_lines_tie_and_each_lines_own_witness_reaches_it() {
 
 #[test]
 fn no_line_is_open_and_the_telephony_line_is_signed() {
+    use busbar_contract::abi::plane::CLAIM_OPEN;
     let open: Vec<_> = ROUTES
         .iter()
-        .filter(|r| r.open())
+        .filter(|r| {
+            ![crate::door::KEY_AUTH, SIGNATURE_AUTH].contains(&r.auth)
+                || r.claim().flags & CLAIM_OPEN != 0
+        })
         .map(|r| r.target)
         .collect();
     assert!(

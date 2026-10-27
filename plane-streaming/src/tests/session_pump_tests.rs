@@ -69,7 +69,7 @@ fn a_usage_report_closes_the_turn_with_its_counters_and_the_session_continues() 
         "type":"input_audio_buffer.append","audio": b64
     })));
     assert_eq!(up.upstream.len(), 1, "uplink audio is written through");
-    let out = p.on_server_frame(usage_done(), 0, &mut sink);
+    let out = p.on_server_frame(usage_done(), &mut sink);
     assert!(!out.close);
     assert_eq!(sink.closed.len(), 1);
     let (usage, counters) = sink.closed[0];
@@ -88,7 +88,7 @@ fn a_sink_that_refuses_closes_the_session_and_authors_nothing_upstream() {
         refuse: true,
         ..Turns::default()
     };
-    let out = p.on_server_frame(usage_done(), 0, &mut sink);
+    let out = p.on_server_frame(usage_done(), &mut sink);
     assert!(out.close);
     assert!(out.upstream.is_empty(), "{}", texts(&out.upstream));
 }
@@ -103,7 +103,7 @@ fn a_tool_call_is_relayed_to_the_caller_as_is_and_the_gateway_answers_nothing() 
     let mut sink = Turns::default();
     let (mut down, mut up) = (Vec::new(), Vec::new());
     for f in call_frames("ca", "alpha", "{\"x\":1}") {
-        let out = p.on_server_frame(f, 0, &mut sink);
+        let out = p.on_server_frame(f, &mut sink);
         down.extend(out.downlink);
         up.extend(out.upstream);
     }
@@ -147,7 +147,7 @@ fn p_item_voice_tool_args_streamed_fragments_reach_the_caller_whole_and_once() {
     let mut down = Vec::new();
     let open = wire(serde_json::json!({"type":"response.output_item.added",
         "item":{"type":"function_call","call_id":"cw","name":"weather"}}));
-    let out = p.on_server_frame(open, 0, &mut sink);
+    let out = p.on_server_frame(open, &mut sink);
     assert!(out.upstream.is_empty(), "an announced call is not answered");
     down.extend(out.downlink);
     for fragment in ["{\"lo", "c\":\"S", "F\"}"] {
@@ -155,7 +155,7 @@ fn p_item_voice_tool_args_streamed_fragments_reach_the_caller_whole_and_once() {
             serde_json::json!({"type":"response.function_call_arguments.delta",
             "call_id":"cw","delta":fragment}),
         );
-        let out = p.on_server_frame(delta, 0, &mut sink);
+        let out = p.on_server_frame(delta, &mut sink);
         assert!(
             out.upstream.is_empty(),
             "a fragment of a call's arguments is not answered"
@@ -166,7 +166,7 @@ fn p_item_voice_tool_args_streamed_fragments_reach_the_caller_whole_and_once() {
         serde_json::json!({"type":"response.function_call_arguments.done",
         "call_id":"cw"}),
     );
-    let out = p.on_server_frame(done, 0, &mut sink);
+    let out = p.on_server_frame(done, &mut sink);
     assert!(out.upstream.is_empty(), "a closed call is not answered");
     down.extend(out.downlink);
     let frames: Vec<serde_json::Value> = down
@@ -265,7 +265,6 @@ fn an_error_closes_the_open_turn_before_it_is_relayed() {
     let mut sink = Turns::default();
     let out = p.on_server_frame(
         wire(serde_json::json!({"type":"error","error":{"code":"x","message":"y"}})),
-        0,
         &mut sink,
     );
     assert_eq!(sink.closed.len(), 1);
@@ -281,7 +280,7 @@ fn an_ungoverned_session_relays_a_call_and_never_answers_it() {
     let mut sink = Turns::default();
     let (mut down, mut up) = (Vec::new(), Vec::new());
     for f in call_frames("cu", "unknown_tool", "{\"q\":1}") {
-        let out = p.on_server_frame(f, 0, &mut sink);
+        let out = p.on_server_frame(f, &mut sink);
         down.extend(out.downlink);
         up.extend(out.upstream);
     }
@@ -309,11 +308,10 @@ fn an_upstream_error_still_meters_the_turn_it_ended() {
     for id in ["e1", "e2"] {
         let open = call_frames(id, "t", "{}");
         let [first, ..] = open;
-        let _ = p.on_server_frame(first, 0, &mut sink);
+        let _ = p.on_server_frame(first, &mut sink);
     }
     let _ = p.on_server_frame(
         wire(serde_json::json!({"type":"error","error":{"code":"x","message":"y"}})),
-        0,
         &mut sink,
     );
     assert_eq!(sink.closed.len(), 1);
@@ -327,20 +325,19 @@ fn a_barge_in_bills_what_the_interrupted_turn_served_on_the_turn_that_takes_over
     let mut sink = Turns::default();
     let _ = p.on_client_frame(uplink_ms(1_000));
     let [open, ..] = call_frames("b1", "t", "{}");
-    let _ = p.on_server_frame(open, 0, &mut sink);
+    let _ = p.on_server_frame(open, &mut sink);
     let _ = p.on_server_frame(
         wire(
             serde_json::json!({"type":"input_audio_buffer.speech_started",
             "audio_start_ms":0,"item_id":"it"}),
         ),
-        0,
         &mut sink,
     );
     assert!(
         sink.closed.is_empty(),
         "a barge-in closes no turn and drops no counter"
     );
-    let _ = p.on_server_frame(usage_done(), 0, &mut sink);
+    let _ = p.on_server_frame(usage_done(), &mut sink);
     assert_eq!(sink.closed.len(), 1);
     let closed = sink.closed[0].1;
     assert_eq!((closed.audio_ms_in, closed.tool_calls), (1_000, 1));
@@ -388,7 +385,7 @@ fn twenty_turns_of_1050_ms_bill_21_audio_seconds_not_40() {
         let _ = p.on_client_frame(wire(serde_json::json!({
             "type":"input_audio_buffer.append","audio": b64
         })));
-        let _ = p.on_server_frame(usage_done(), 0, &mut sink);
+        let _ = p.on_server_frame(usage_done(), &mut sink);
     }
     assert_eq!(sink.closed.len(), 20);
     assert_eq!(billed_audio_seconds(&sink), 21);
@@ -407,7 +404,7 @@ fn the_part_of_a_millisecond_a_frame_leaves_over_is_carried_not_floored() {
             "type":"input_audio_buffer.append","audio": b64
         })));
     }
-    let _ = p.on_server_frame(usage_done(), 0, &mut sink);
+    let _ = p.on_server_frame(usage_done(), &mut sink);
     assert_eq!(sink.closed.len(), 1);
     assert_eq!(sink.closed[0].1.audio_ms_in, 1000);
     assert_eq!(billed_audio_seconds(&sink), 1);
@@ -479,11 +476,10 @@ fn a_barge_in_is_relayed_unchanged_and_nothing_goes_upstream() {
     let _ = p.on_server_frame(
         wire(serde_json::json!({"type":"response.output_audio.delta",
             "delta": busbar_contract::media::base64_encode(&[0u8; 96]),"item_id":"i1"})),
-        0,
         &mut sink,
     );
     let frame = r#"{"type":"input_audio_buffer.speech_started","item_id":"i1","audio_start_ms":1234,"event_id":"ev_9"}"#;
-    let out = p.on_server_frame(raw(frame), 0, &mut sink);
+    let out = p.on_server_frame(raw(frame), &mut sink);
     assert!(
         out.upstream.is_empty(),
         "busbar authors nothing upstream on a barge-in: {}",
@@ -513,7 +509,7 @@ fn a_same_dialect_far_end_frame_reaches_the_caller_byte_for_byte() {
         r#"{"type":"response.done","event_id":"ev_4","response":{"id":"r1","status":"completed","usage":{"total_tokens":7,"input_tokens":3,"output_tokens":4,"input_token_details":{"audio_tokens":1,"text_tokens":2},"output_token_details":{"audio_tokens":3,"text_tokens":1}}}}"#.to_string(),
     ];
     for f in &frames {
-        let out = p.on_server_frame(raw(f), 0, &mut sink);
+        let out = p.on_server_frame(raw(f), &mut sink);
         assert!(out.upstream.is_empty(), "{f}");
         assert_eq!(&texts(&out.downlink), f, "relayed byte for byte");
     }
@@ -615,7 +611,7 @@ fn a_gemini_far_end_frame_reaches_the_caller_byte_for_byte() {
         r#"{"goAway":{"timeLeft":"10s"}}"#,
     ];
     for f in frames {
-        let out = p.on_server_frame(raw(f), 0, &mut sink);
+        let out = p.on_server_frame(raw(f), &mut sink);
         assert!(out.upstream.is_empty(), "{f}");
         assert_eq!(texts(&out.downlink), f, "relayed byte for byte");
     }

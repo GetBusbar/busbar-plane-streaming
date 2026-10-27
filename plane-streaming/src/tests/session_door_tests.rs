@@ -82,7 +82,7 @@ fn the_far_ends_usage_reaches_the_caller_and_the_sessions_units() {
     let mut s = sideband();
     s.from_caller(&uplink(2000), false);
     let _ = s.next(true);
-    s.from_far_end(&usage_done(), 0);
+    s.from_far_end(&usage_done());
     assert_eq!(
         s.units(),
         vec![
@@ -108,13 +108,13 @@ fn the_far_ends_usage_reaches_the_caller_and_the_sessions_units() {
 #[test]
 fn a_far_side_answer_carries_only_a_frame_for_the_caller() {
     let mut s = sideband();
-    s.from_far_end(&audio_delta("it1"), 0);
+    s.from_far_end(&audio_delta("it1"));
     while s.next(false).frame.is_some() {}
     let barge = json(
         serde_json::json!({"type":"input_audio_buffer.speech_started",
         "audio_start_ms":420,"item_id":"it1"}),
     );
-    s.from_far_end(&barge, 0);
+    s.from_far_end(&barge);
     let far = s.next(false);
     assert!(
         matches!(&far.frame, Some((Side::Caller, f)) if *f == barge),
@@ -259,7 +259,7 @@ fn the_fee_unit_is_incurred_when_the_far_end_first_answers() {
         "an open that never reached the far end ends with no fee unit"
     );
     let mut s = sideband();
-    s.from_far_end(&audio_delta("it1"), 0);
+    s.from_far_end(&audio_delta("it1"));
     assert_eq!(
         s.units()
             .iter()
@@ -268,7 +268,7 @@ fn the_fee_unit_is_incurred_when_the_far_end_first_answers() {
         vec![&(PER_SESSION_CLASS, 1)],
         "the far end's first answer incurs it once"
     );
-    s.from_far_end(&audio_delta("it2"), 0);
+    s.from_far_end(&audio_delta("it2"));
     assert!(s.units().contains(&(PER_SESSION_CLASS, 1)), "still one");
 }
 
@@ -312,9 +312,17 @@ fn a_session_open_rewrite_patches_the_locked_params_or_refuses() {
 fn a_rewritten_session_open_locks_the_rewritten_params_once() {
     let cfg = StreamsCfg::default();
     assert_eq!(Live::locked(Door::Sideband, &cfg), cfg.session);
+    // The telephony lock is the section's session with µ-law both ways, and nothing else.
+    let telephony = Live::locked(Door::Twilio, &cfg);
+    assert_eq!(telephony.input_audio_format, Some(AudioFormat::G711Ulaw));
+    assert_eq!(telephony.output_audio_format, Some(AudioFormat::G711Ulaw));
     assert_eq!(
-        Live::locked(Door::Twilio, &cfg),
-        crate::session_params::g711_over(&cfg.session)
+        SessionConfig {
+            input_audio_format: cfg.session.input_audio_format,
+            output_audio_format: cfg.session.output_audio_format,
+            ..telephony
+        },
+        cfg.session
     );
     let mut sessions = Sessions::default();
     let rewritten = SessionConfig {
@@ -430,11 +438,10 @@ fn a_session_the_kernel_cancels_mid_turn_has_already_reported_the_open_turn() {
     let cfg = StreamsCfg::default();
     let live = all.get_or_open(7, Door::Sideband, &cfg).expect("open");
     live.from_caller(&uplink(2500), false);
-    live.from_far_end(
-        &json(serde_json::json!({"type":"response.output_item.added",
-            "item":{"type":"function_call","call_id":"c1","name":"weather"}})),
-        0,
-    );
+    live.from_far_end(&json(
+        serde_json::json!({"type":"response.output_item.added",
+            "item":{"type":"function_call","call_id":"c1","name":"weather"}}),
+    ));
     let last_checkpoint = live.units();
     all.crossed(7, t);
     assert!(all.cancel(t), "the kernel's cancel ends the session");
@@ -453,7 +460,7 @@ fn a_turns_close_moves_its_running_counts_and_the_total_never_falls() {
     s.from_caller(&uplink(1500), false);
     let running = s.units();
     assert_eq!(running, vec![(seconds(), 2)]);
-    s.from_far_end(&usage_done(), 0);
+    s.from_far_end(&usage_done());
     let closed = s.units();
     assert!(closed.contains(&(seconds(), 2)), "{closed:?}");
     s.from_caller(&uplink(400), false);
