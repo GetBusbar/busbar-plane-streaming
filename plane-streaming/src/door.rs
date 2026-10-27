@@ -1351,7 +1351,7 @@ fn piece_of(input: Lent<'_, OnPieceIn>) -> Option<Piece> {
     let from = match given.from() {
         FROM_CALLER => request_unit::From::Caller,
         FROM_FAR_END => request_unit::From::FarEnd,
-        FROM_KERNEL => request_unit::From::Kernel(given.attempt_no()),
+        FROM_KERNEL => request_unit::From::Kernel,
         _ => return None,
     };
     Some(Piece {

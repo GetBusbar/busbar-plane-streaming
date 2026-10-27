@@ -23,8 +23,8 @@ pub enum From {
     Caller,
     /// The far end: its answer.
     FarEnd,
-    /// The kernel: an ATTEMPT, numbered from `1`.
-    Kernel(u32),
+    /// The kernel: an ATTEMPT or a collection (a unit that dials nothing reads neither).
+    Kernel,
 }
 
 /// One piece, as the door read it off the crossing: the mint reads no body and no far end, only who
@@ -109,7 +109,7 @@ impl RequestUnit {
                 }
                 Err(reason) => self.answer(mint_failed(&reason)),
             },
-            From::Caller | From::Kernel(_) => Answer::Nothing,
+            From::Caller | From::Kernel => Answer::Nothing,
             From::FarEnd => Answer::Refused,
         }
     }
