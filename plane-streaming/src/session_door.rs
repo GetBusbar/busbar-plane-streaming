@@ -40,10 +40,10 @@ use busbar_contract::abi::mechanism::ticket::Ticket;
 
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
 use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
+use crate::codec::ir::media::AudioFormat;
 use crate::codec::ir::GeminiLiveCodec;
 use crate::config::StreamsCfg;
-use crate::driven::{Door, Steps};
-use crate::session_params::g711_over;
+use crate::driven::Door;
 use crate::session_unit::{CumulativeUnits, Plan, SessionUnit};
 
 /// Nanoseconds per second, on the kernel's tick clock.
@@ -146,11 +146,16 @@ impl Live {
     }
 
     /// The session params `door` locks under `cfg`, as the open's hooks are shown them: the
-    /// section's session, with the carrier's µ-law both ways on the telephony door.
+    /// section's session, with the carrier's 8 kHz µ-law both ways on the telephony door, so it
+    /// passes straight through with no resample.
     #[must_use]
     pub fn locked(door: Door, cfg: &StreamsCfg) -> SessionConfig {
         match door {
-            Door::Twilio => g711_over(&cfg.session),
+            Door::Twilio => SessionConfig {
+                input_audio_format: Some(AudioFormat::G711Ulaw),
+                output_audio_format: Some(AudioFormat::G711Ulaw),
+                ..cfg.session.clone()
+            },
             _ => cfg.session.clone(),
         }
     }
@@ -172,23 +177,11 @@ impl Live {
             cfg,
         );
         let unit = match door {
-            Door::Sideband | Door::Realtime => Unit::Realtime(SessionUnit::open(
-                OpenAiRealtimeCodec,
-                locked,
-                false,
-                0,
-                None,
-            )),
-            Door::Twilio => Unit::Realtime(SessionUnit::open(
-                OpenAiRealtimeCodec,
-                locked,
-                true,
-                0,
-                None,
-            )),
-            Door::Gemini => {
-                Unit::Gemini(SessionUnit::open(GeminiLiveCodec, locked, false, 0, None))
+            Door::Sideband | Door::Realtime => {
+                Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, false))
             }
+            Door::Twilio => Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, true)),
+            Door::Gemini => Unit::Gemini(SessionUnit::open(GeminiLiveCodec, locked, false)),
             Door::Mint | Door::Sdp => return None,
         };
         Some(Live {
@@ -286,11 +279,11 @@ impl Live {
         self.take(plan);
     }
 
-    /// A far-end piece, at `now_ms`. The first one incurs the session's fee unit.
+    /// A far-end piece. The first one incurs the session's fee unit.
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) {
+    pub fn from_far_end(&mut self, bytes: &[u8]) {
         self.answered = true;
-        let plan = each!(&mut self.unit, |u| u.from_far_end(bytes, now_ms));
+        let plan = each!(&mut self.unit, |u| u.from_far_end(bytes));
         self.take(plan);
     }
 
@@ -345,7 +338,7 @@ impl Live {
     #[must_use]
     pub fn units(&self) -> Vec<(u32, u64)> {
         let units: CumulativeUnits = each!(&self.unit, |u| u.units());
-        let mut out = Door::Sideband.meter(&units);
+        let mut out = units.reported();
         if self.answered && self.call_id.is_none() {
             out.push((PER_SESSION_CLASS, 1));
         }
