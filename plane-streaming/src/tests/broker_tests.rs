@@ -6,26 +6,48 @@
 use super::*;
 
 #[test]
-fn a_mint_asks_for_the_requested_lifetime_held_inside_its_bounds() {
-    assert_eq!(clamped_ttl_secs(None), 600);
-    assert_eq!(clamped_ttl_secs(Some(1)), 10);
-    assert_eq!(clamped_ttl_secs(Some(99_999)), 7200);
-    assert_eq!(clamped_ttl_secs(Some(300)), 300);
-}
-
-#[test]
 fn the_mint_body_anchors_the_lifetime_and_carries_the_locked_session() {
     let cfg = SessionConfig {
         instructions: Some("be brief".into()),
         ..SessionConfig::default()
     };
     let body: serde_json::Value =
-        serde_json::from_slice(&mint_request_body(600, &cfg).expect("serializes")).expect("json");
+        serde_json::from_slice(&mint_request_body(&cfg).expect("serializes")).expect("json");
     assert_eq!(
         body["expires_after"],
         serde_json::json!({"anchor": "created_at", "seconds": 600})
     );
     assert_eq!(body["session"]["instructions"], "be brief");
+}
+
+/// RED-BEFORE-GREEN (the GA client-secret endpoint reads the GA `session` object; OpenAI's
+/// beta-to-GA migration: "set `session.type`"): the minted browser session is bound in the GA
+/// shape, `type: realtime`, its formats and turn detection under `audio`, and under the section's
+/// token ceilings once the door applies them. RED: the session went in the pre-GA shape with no
+/// `session.type`.
+#[test]
+fn the_mint_body_binds_the_session_in_the_ga_shape() {
+    let cfg = SessionConfig {
+        input_audio_format: Some(crate::codec::ir::media::AudioFormat::G711Ulaw),
+        max_output_tokens: Some(crate::codec::ir::config::MaxOutputTokens::Limit(1000)),
+        context_window_tokens: Some(16_384),
+        ..SessionConfig::default()
+    };
+    let body: serde_json::Value =
+        serde_json::from_slice(&mint_request_body(&cfg).expect("serializes")).expect("json");
+    let session = &body["session"];
+    assert_eq!(session["type"], "realtime", "{body}");
+    assert!(session.get("input_audio_format").is_none(), "{body}");
+    assert_eq!(
+        session["audio"]["input"]["format"]["type"], "audio/pcmu",
+        "{body}"
+    );
+    assert_eq!(session["max_output_tokens"], 1000, "{body}");
+    assert_eq!(
+        session["truncation"]["token_limits"]["post_instructions"],
+        16_384 - 1000,
+        "{body}"
+    );
 }
 
 /// X-2204: a mint answer that states no expiry for its `ek_` secret is refused, never carried to

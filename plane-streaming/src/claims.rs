@@ -1,27 +1,13 @@
-//! The claims this plane makes over arriving bytes, and the four dialects they name.
+//! The transports the door's routes are carried on ([`WS_TRANSPORT`], [`HTTP_TRANSPORT`]), and a
+//! claim table only the tests (and the voice conformance harness) read.
 //!
-//! `docs/design/BUSBAR-1.6.0.md`'s protocol-inventory table (the row keyed `voice`) names the
-//! dialect roster this plane speaks and the transports it claims them on:
-//!
-//! `openai-realtime, gemini-live, twilio-media-streams, one-shot transcribe/tts` over
-//! `ws, webrtc, twilio-media, http`.
-//!
-//! Two carriers bring those dialects in: the WebSocket carrier (both duplex JSON dialects AND the
-//! Twilio telephony dialect) and the request/response carrier (the two one-shot operations). The
-//! browser media leg is unclaimed (below).
-//!
-//! * **Twilio Media Streams rides the WebSocket carrier.** Its wire is one JSON event per WebSocket
-//!   message (`connected`/`start`/`media`/`mark`/`dtmf`/`stop`): the carrier frames the messages and
-//!   the event envelope is this plane's dialect ([`crate::codec::topology::twilio`]). The design
-//!   lists five transports and no telephony one. Twilio
-//!   cannot present a busbar bearer or API key, so its claim authenticates under the
-//!   `webhook-signature` alternative alone: the `X-Twilio-Signature` HMAC over the request URL,
-//!   verified by the auth kind's inbound verify, never by this plane.
-//! * **`webrtc`** — no codec surface for the RTP media plane exists anywhere in this crate's closure
-//!   (a plane cannot claim a transport it cannot decode frames from without lying about what it
-//!   reads). It is unclaimed: a claim is declared independently, and the boot's own overlap check
-//!   is what proves the claims stay disjoint when it is added.
+//! WHAT THE SHIPPED PLANE PUBLISHES IS ITS DOOR'S ROUTES (`crate::door::ROUTES`). The table below
+//! ([`DIALECT_CLAIMS`]) is not published: no door claims it, and its two one-shot operations
+//! (`/v1/audio/*`) are served by no door, so it is compiled for the tests alone. Twilio Media
+//! Streams rides the WebSocket carrier and authenticates under the `webhook-signature` alternative
+//! alone: Twilio holds no busbar bearer or API key.
 
+#[cfg(test)]
 use busbar_contract::grammar::{one_level_under, Claim, Selector};
 
 /// The transport the three WebSocket dialects (`openai-realtime`, `gemini-live`,
@@ -35,18 +21,22 @@ pub const HTTP_TRANSPORT: &str = "http";
 ///
 /// One scheme with alternatives, not several schemes, the same discipline `busbar-plane-llm` uses:
 /// which alternative a unit narrows to is the authenticate step's answer.
+#[cfg(test)]
 pub(crate) const SCHEME: &str = "streaming-key";
 
 /// The alternatives a duplex-session unit (`ws`) may narrow to: a bearer token or a vendor API-key
 /// header, presented once at session open and cached for the life of the session.
+#[cfg(test)]
 const WS_SCHEME_ALTS: &[&str] = &["bearer", "api-key"];
 
 /// The one alternative a Twilio Media Streams unit may narrow to: the webhook signature Twilio puts
 /// on the WebSocket upgrade (`X-Twilio-Signature`). Twilio holds no busbar credential, so a bearer or
 /// API-key alternative here would be either unusable or unauthenticated.
+#[cfg(test)]
 const TWILIO_SCHEME_ALTS: &[&str] = &["webhook-signature"];
 
 /// The alternatives a one-shot HTTP unit may narrow to — the same two an ordinary API caller uses.
+#[cfg(test)]
 const HTTP_SCHEME_ALTS: &[&str] = &["bearer", "api-key"];
 
 /// The four dialects this plane's declared claims name.
@@ -54,6 +44,7 @@ const HTTP_SCHEME_ALTS: &[&str] = &["bearer", "api-key"];
 /// This is the open-vocabulary dialect name, kept as a closed Rust enum inside this crate only
 /// because every method that switches on it is exhaustive and a fifth dialect is a code change
 /// here regardless; nothing about [`busbar_contract::grammar::Claim`] requires a closed set.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Dialect {
     /// OpenAI Realtime (GA) — WebSocket, PCM16, tool calls, full duplex.
@@ -68,43 +59,9 @@ pub enum Dialect {
     OneShotTts,
 }
 
-impl Dialect {
-    /// The dialect's own name, as recorded in facts and answered by the `dialects` admin verb.
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Dialect::OpenaiRealtime => "openai-realtime",
-            Dialect::GeminiLive => "gemini-live",
-            Dialect::TwilioMediaStreams => "twilio-media-streams",
-            Dialect::OneShotTranscribe => "transcribe",
-            Dialect::OneShotTts => "tts",
-        }
-    }
-
-    /// Whether this dialect is one of the two JSON duplex wires this plane can also DIAL an
-    /// upstream as (the codec-backed dialects, as opposed to the ingress-only Twilio and one-shot
-    /// claims).
-    #[must_use]
-    pub const fn is_duplex_upstream(self) -> bool {
-        matches!(self, Dialect::OpenaiRealtime | Dialect::GeminiLive)
-    }
-
-    /// Whether a unit on this dialect authenticates once at session open and rides the session
-    /// (`CredentialLocator::from_session`), rather than presenting a credential on every unit.
-    ///
-    /// True for the three session-bound dialects; false for the two one-shot HTTP operations, which
-    /// present a credential on the one request they are.
-    #[must_use]
-    pub const fn authenticates_from_session(self) -> bool {
-        matches!(
-            self,
-            Dialect::OpenaiRealtime | Dialect::GeminiLive | Dialect::TwilioMediaStreams
-        )
-    }
-}
-
 /// One claim with the dialect it names recorded beside it, the same pairing
 /// `busbar_plane_llm::claims::LadderClaim` uses for its ladder.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DialectClaim {
     /// Which dialect this claim names.
@@ -114,6 +71,7 @@ pub struct DialectClaim {
 }
 
 /// Build one claim over a selector, on a transport, under an alternative set.
+#[cfg(test)]
 const fn claim(
     transport: &'static str,
     selector: Selector,
@@ -132,6 +90,7 @@ const fn claim(
 }
 
 /// The declared claims, dialect-tagged, in the order the boot's overlap check sees them.
+#[cfg(test)]
 pub const DIALECT_CLAIMS: &[DialectClaim] = &[
     DialectClaim {
         dialect: Dialect::OpenaiRealtime,
@@ -175,27 +134,12 @@ pub const DIALECT_CLAIMS: &[DialectClaim] = &[
     },
 ];
 
-/// The claims, one field narrower, as [`busbar_contract::plane::PlaneMeta::CLAIMS`] wants them.
-///
-/// Written out rather than derived because a declaration is an associated constant, and a constant
-/// cannot run a loop over another constant.
-pub const CLAIMS: &[Claim] = &[
-    DIALECT_CLAIMS[0].claim,
-    DIALECT_CLAIMS[1].claim,
-    DIALECT_CLAIMS[2].claim,
-    DIALECT_CLAIMS[3].claim,
-    DIALECT_CLAIMS[4].claim,
-];
-
-/// The two lists cannot drift: one is the other with a field dropped, and a constant cannot loop
-/// over a constant, so the equality is asserted at compile time instead of trusted.
-const _: () = assert!(CLAIMS.len() == DIALECT_CLAIMS.len());
-
 /// Which dialect a request's target names, by walking the claims in declaration order.
 ///
 /// The same walk the kernel runs itself from the declared claims, exposed here so the decode step
 /// can name the dialect it is about to read without a second, differently-ordered answer existing
 /// anywhere.
+#[cfg(test)]
 #[must_use]
 pub fn dialect_for(path: &str) -> Option<Dialect> {
     DIALECT_CLAIMS
@@ -207,6 +151,7 @@ pub fn dialect_for(path: &str) -> Option<Dialect> {
 /// Whether one selector matches a request path.
 ///
 /// Only the forms this plane's claims actually use are answered.
+#[cfg(test)]
 pub(crate) fn matches_selector(s: &Selector, path: &str) -> bool {
     match s {
         Selector::PathSuffix(suffix) => path.ends_with(suffix),

@@ -15,8 +15,8 @@
 //! that could not be reached is the kernel's route terminal and is not answered here.
 
 use crate::broker::{
-    clamped_ttl_secs, mint_request_body, minted_answer, read_minted, rtc_call_id_of, CALLS_PATH,
-    CLIENT_SECRETS_PATH, SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
+    mint_request_body, minted_answer, read_minted, rtc_call_id_of, CALLS_PATH, CLIENT_SECRETS_PATH,
+    SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
 };
 use crate::codec::ir::config::SessionConfig;
 
@@ -42,6 +42,9 @@ pub enum Door {
     Gemini,
     /// The telephony socket.
     Twilio,
+    /// `GET /v1/realtime`: plain server-to-server OpenAI Realtime over WS, attached to no call
+    /// (ARCHITECT ruling 2026-10-23 on Part 2 #45; the sideband is call-attached only).
+    Realtime,
 }
 
 impl Door {
@@ -54,6 +57,7 @@ impl Door {
             2 => Some(Door::Sideband),
             3 => Some(Door::Gemini),
             4 => Some(Door::Twilio),
+            5 => Some(Door::Realtime),
             _ => None,
         }
     }
@@ -70,16 +74,26 @@ impl Door {
         self.line().dialect
     }
 
-    /// `true` for the door read without a credential.
-    #[must_use]
-    pub const fn is_open(self) -> bool {
-        self.line().open()
-    }
-
     /// `true` for a door that opens a live session rather than answering one request.
     #[must_use]
     pub const fn is_session(self) -> bool {
-        matches!(self, Door::Sideband | Door::Gemini | Door::Twilio)
+        matches!(
+            self,
+            Door::Sideband | Door::Gemini | Door::Twilio | Door::Realtime
+        )
+    }
+
+    /// The outbound need a far request on this door rides (`OnPieceOut::need`): the socket of the
+    /// provider the door's session dials (Gemini Live's for the Gemini door, OpenAI Realtime's for
+    /// the sideband, telephony and plain realtime doors), and OpenAI Realtime's one-shot pass for the mint and the
+    /// SDP offer.
+    #[must_use]
+    pub const fn rides(self) -> u32 {
+        match self {
+            Door::Gemini => crate::door::RIDES_LIVE_SOCKET,
+            Door::Sideband | Door::Twilio | Door::Realtime => crate::door::RIDES_REALTIME_SOCKET,
+            Door::Mint | Door::Sdp => crate::door::RIDES_REALTIME_PASS,
+        }
     }
 }
 
@@ -108,113 +122,59 @@ pub const fn arrive(claim: u32) -> Option<Arrival> {
     }
 }
 
-// ── the plane's answer at each loop step, in the order the kernel's loop runs them ─────────────
-
-/// THE PLANE'S ANSWER AT EACH LOOP STEP for a unit on one of its doors: what the kernel's loop asks
-/// the plane at authenticate, verify, approve, admit, route, meter and audit. The door answers the
-/// driver through these; nothing here reaches the kernel any other way.
-pub trait Steps {
-    /// AUTHENTICATE: whom a unit on this door needs.
-    fn authenticate(&self) -> u32;
-    /// VERIFY: where, inside the plane's section, the destination a session dials is named.
-    fn verify(&self) -> &'static str;
-    /// APPROVE: the grant a key must hold, as (kind, value).
-    fn approve(&self) -> (&'static str, &'static str);
-    /// ADMIT: the units a unit is expected to cost before the far end reports any.
-    fn admit(&self) -> Vec<(u32, u64)>;
-    /// ROUTE: the request an attempt sends the far end; `None` when the door sends nothing.
+impl Door {
+    /// The request an attempt on this door sends the far end: the session doors dial the dialect's
+    /// realtime socket (the credential is the kernel's, never in the target); the mint and SDP
+    /// doors send their one request.
     ///
     /// # Errors
-    /// The request body's serializer text.
-    fn route(
-        &self,
+    /// The mint request body's serializer text.
+    pub fn route(
+        self,
         config: &SessionConfig,
         caller_ref: Option<&str>,
         body: &[u8],
-    ) -> Result<Option<Attempt>, String>;
-    /// METER: a session's units so far, per billable class index, the zero classes left out.
-    fn meter(&self, units: &crate::session_unit::CumulativeUnits) -> Vec<(u32, u64)>;
-    /// AUDIT: the action a unit on this door is audited under.
-    fn audit(&self) -> &'static str;
-}
-
-impl Steps for Door {
-    /// Every keyed door needs a principal; a door read without a credential (none today) answers
-    /// anyone.
-    fn authenticate(&self) -> u32 {
-        if self.is_open() {
-            busbar_contract::abi::plane::PRINCIPAL_NONE
-        } else {
-            busbar_contract::abi::plane::PRINCIPAL_REQUIRED
-        }
-    }
-
-    /// The kernel resolves `streams.session.model` through the root models and judges it.
-    fn verify(&self) -> &'static str {
-        crate::door::EGRESS_TARGET
-    }
-
-    /// The `session` kind, for the one pool every session is served on.
-    fn approve(&self) -> (&'static str, &'static str) {
-        (crate::door::SCOPE, crate::door::SESSION_POOL)
-    }
-
-    /// None: a session is admitted at open and pays for what the far end reports (and its
-    /// per-session fee, which the kernel counts); the one-request doors report nothing.
-    fn admit(&self) -> Vec<(u32, u64)> {
-        match self {
-            Door::Mint | Door::Sdp | Door::Sideband | Door::Gemini | Door::Twilio => Vec::new(),
-        }
-    }
-
-    /// The session doors dial the dialect's realtime socket (the credential is the kernel's, never
-    /// in the target); the mint and SDP doors send their one request.
-    fn route(
-        &self,
-        config: &SessionConfig,
-        caller_ref: Option<&str>,
-        body: &[u8],
-    ) -> Result<Option<Attempt>, String> {
+    ) -> Result<Attempt, String> {
+        let socket = |target| Attempt {
+            verb: "GET",
+            target,
+            fields: Vec::new(),
+            body: Vec::new(),
+        };
         Ok(match self {
-            Door::Mint => Some(mint_attempt(config, caller_ref, None)?),
-            Door::Sdp => Some(sdp_attempt(body)),
-            Door::Sideband | Door::Twilio => Some(Attempt {
-                verb: "GET",
-                target: REALTIME_SOCKET_PATH,
-                fields: Vec::new(),
-                body: Vec::new(),
-            }),
-            Door::Gemini => Some(Attempt {
-                verb: "GET",
-                target: GEMINI_SOCKET_PATH,
-                fields: Vec::new(),
-                body: Vec::new(),
-            }),
+            Door::Mint => mint_attempt(config, caller_ref)?,
+            Door::Sdp => sdp_attempt(body),
+            Door::Sideband | Door::Twilio | Door::Realtime => socket(REALTIME_SOCKET_PATH),
+            Door::Gemini => socket(GEMINI_SOCKET_PATH),
         })
-    }
-
-    /// Counts only; the kernel prices nothing the plane names.
-    fn meter(&self, units: &crate::session_unit::CumulativeUnits) -> Vec<(u32, u64)> {
-        units
-            .0
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| **n != 0)
-            .map(|(i, n)| (i as u32, *n))
-            .collect()
-    }
-
-    /// A session open.
-    fn audit(&self) -> &'static str {
-        SESSION_OPEN_ACTION
     }
 }
 
 /// The action a session open is audited under.
+#[cfg(test)]
 pub const SESSION_OPEN_ACTION: &str = "streaming.session.open";
 
-/// The realtime socket an OpenAI Realtime session dials, under the member's base URL.
+/// The realtime socket an OpenAI Realtime session dials, under the member's base URL. A sideband
+/// session attaches to its provider call there (`?call_id=`, `crate::session_door::Live::dial_target`).
 pub const REALTIME_SOCKET_PATH: &str = "/v1/realtime";
+
+/// The sideband door's path, before its `{call_id}` segment.
+pub const SIDEBAND_PREFIX: &str = "/v1/realtime/sideband/";
+
+/// The provider call a sideband arrival's `target` names: its `{call_id}` segment, less any query
+/// or fragment. `None` for a segment that is empty or holds anything but ASCII letters, digits, `_`
+/// and `-` (the provider's call ids, `rtc_…`): the id is dialled as a query value, so nothing that
+/// could carry another parameter into it is taken.
+#[must_use]
+pub fn sideband_call_id(target: &str) -> Option<&str> {
+    let id = target.strip_prefix(SIDEBAND_PREFIX)?;
+    let id = id.split(['?', '#']).next().unwrap_or(id);
+    let well_formed = !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    well_formed.then_some(id)
+}
 
 /// The socket a Gemini Live session dials, under the member's base URL.
 pub const GEMINI_SOCKET_PATH: &str =
@@ -235,15 +195,11 @@ pub struct Attempt {
 }
 
 /// The mint's ATTEMPT: the locked session params the browser's session is bound to, the secret's
-/// lifetime (the requested one held inside its bounds), and the caller named for attribution.
+/// lifetime, and the caller named for attribution.
 ///
 /// # Errors
 /// The body's serializer text.
-pub fn mint_attempt(
-    config: &SessionConfig,
-    caller: Option<&str>,
-    requested_ttl_secs: Option<u64>,
-) -> Result<Attempt, String> {
+pub fn mint_attempt(config: &SessionConfig, caller: Option<&str>) -> Result<Attempt, String> {
     let mut fields = vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())];
     if let Some(r) = caller.filter(|r| !r.is_empty()) {
         fields.push((SAFETY_IDENTIFIER_HEADER, r.to_string()));
@@ -252,7 +208,7 @@ pub fn mint_attempt(
         verb: "POST",
         target: CLIENT_SECRETS_PATH,
         fields,
-        body: mint_request_body(clamped_ttl_secs(requested_ttl_secs), config)?,
+        body: mint_request_body(config)?,
     })
 }
 
@@ -267,8 +223,9 @@ pub fn sdp_attempt(offer: &[u8]) -> Attempt {
     }
 }
 
-/// What the caller is answered.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What the caller is answered. Its `Debug` prints the body's length, never its bytes: a mint
+/// answer's body is the live `ek_` secret.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Reply {
     /// The status.
     pub status: u16,
@@ -276,8 +233,26 @@ pub struct Reply {
     pub fields: Vec<(&'static str, String)>,
     /// The body.
     pub body: Vec<u8>,
-    /// For an SDP answer that names its call: the provider's `rtc_` call id, for the session record.
+    /// For an SDP answer that names its call: the provider's `rtc_` call id, read off its
+    /// `Location`: the call the caller's own sideband may attach to.
     pub rtc_call_id: Option<String>,
+}
+
+impl std::fmt::Debug for Reply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            status,
+            fields,
+            body,
+            rtc_call_id,
+        } = self;
+        f.debug_struct("Reply")
+            .field("status", status)
+            .field("fields", fields)
+            .field("body", &format_args!("<redacted {} bytes>", body.len()))
+            .field("rtc_call_id", rtc_call_id)
+            .finish()
+    }
 }
 
 /// The status the served plane answers a failed mint with.
@@ -318,11 +293,24 @@ pub fn mint_reply(status: u16, body: &[u8]) -> Reply {
     }
 }
 
-/// The caller's answer to the far end's SDP answer: its status, its body as an SDP answer, and its
-/// `Location` when it named one; the call id in that `Location` goes to the session record.
+/// The caller's answer to the far end's SDP answer: its status and body, and its `Location` when it
+/// named one (the call id in that `Location` is the call the caller's sideband may attach to). A
+/// success is an SDP answer and says so; any other status relays the far end's own `Content-Type`
+/// (`content_type`, a JSON error body is not an SDP answer), and states none where the far end
+/// stated none.
 #[must_use]
-pub fn sdp_reply(status: u16, location: Option<&str>, body: &[u8]) -> Reply {
-    let mut fields = vec![(FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string())];
+pub fn sdp_reply(
+    status: u16,
+    location: Option<&str>,
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Reply {
+    let mut fields = Vec::new();
+    if (200..300).contains(&status) {
+        fields.push((FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string()));
+    } else if let Some(ct) = content_type {
+        fields.push((FIELD_CONTENT_TYPE, ct.to_string()));
+    }
     if let Some(loc) = location {
         fields.push((FIELD_LOCATION, loc.to_string()));
     }

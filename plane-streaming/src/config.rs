@@ -146,6 +146,29 @@ pub struct StreamsCfg {
     /// Output-token ceiling per response. Default 4096.
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
+    /// The wire model a session's provider dial names, when the catalog entry `session.model`
+    /// names sets an `upstream_model` (Part 2 #51: a model entry's override, else its name). Read
+    /// from the `models` section the host hands beside this one ([`crate::door::read_dealt`]), never
+    /// a key of `streams:`.
+    #[serde(skip)]
+    pub upstream_model: Option<String>,
+}
+
+impl StreamsCfg {
+    /// Why the section's two token ceilings cannot both hold, if they cannot: a per-response output
+    /// cap at or above the context window leaves no room for the conversation (the locked session's
+    /// context limit after its output, `context_window_tokens - max_output_tokens`, would be 0), so
+    /// such a section is refused at load, naming both settings and their values.
+    #[must_use]
+    pub fn ceilings_conflict(&self) -> Option<String> {
+        (self.max_output_tokens >= self.context_window_tokens).then(|| {
+            format!(
+                "streams.max_output_tokens ({}) must be below streams.context_window_tokens ({}): \
+                 the output cap leaves no context window for the conversation",
+                self.max_output_tokens, self.context_window_tokens
+            )
+        })
+    }
 }
 
 // MANUAL `Default`, not derived: the serde field defaults above are non-trivial (the three ceilings
@@ -159,7 +182,23 @@ impl Default for StreamsCfg {
             session_max_secs: None,
             context_window_tokens: default_context_window_tokens(),
             max_output_tokens: default_max_output_tokens(),
+            upstream_model: None,
         }
+    }
+}
+
+impl StreamsCfg {
+    /// `session` as a provider is told it: a `model` that is the session model this section names
+    /// carries that model's provider wire name (`upstream_model`; Part 2 #51, ARCHITECT ruling
+    /// 2026-10-23: a catalog alias never reaches a provider). Any other session is unchanged.
+    #[must_use]
+    pub fn wire_session(&self, mut session: SessionConfig) -> SessionConfig {
+        if let (Some(wire), Some(model)) = (&self.upstream_model, &self.session.model) {
+            if session.model.as_ref() == Some(model) {
+                session.model = Some(wire.clone());
+            }
+        }
+        session
     }
 }
 

@@ -11,7 +11,7 @@
 //! ## What the plane states once
 //!
 //! The Statement tail ([`TAIL`]): the `streams:` section it declares (and the `providers:` section
-//! a document must carry when the plane is linked), its dialects, the `session` grant kind, the six
+//! a document must carry when the plane is linked), its dialects, the `session` grant kind, the eight
 //! billable classes a session counts in, the per-session fee, its connection needs per direction
 //! and the config path its egress target is read from.
 //!
@@ -40,9 +40,7 @@
 //! session's unsolicited output named on the instance's driver ticket, and the session's cumulative
 //! units on every answer. A request unit on a session door is refused.
 
-use std::collections::BTreeMap;
-use std::mem::size_of;
-use std::ptr;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Mutex;
 
 use crate::piece::{self, Owed};
@@ -50,12 +48,8 @@ use busbar_contract::abi::hook::REQUEST_STREAM;
 use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_INBOUND, DIRECTION_OUTBOUND, EGRESS_PROVIDER, KEEP_NAMED,
 };
-use busbar_contract::abi::mechanism::call::{
-    AbiStr, Blob, InHead, OutHead, Outcome, Span, BLOB_ABSENT,
-};
-use busbar_contract::abi::mechanism::door::{
-    KindTailHead, Section, Statement, SECTION_CONSUMED, SECTION_DECLARING,
-};
+use busbar_contract::abi::mechanism::call::{AbiStr, Blob, InHead, OutHead, Outcome, Span};
+use busbar_contract::abi::mechanism::door::{Section, SECTION_CONSUMED, SECTION_DECLARING};
 use busbar_contract::abi::mechanism::lifecycle::{
     GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
 };
@@ -66,21 +60,26 @@ use busbar_contract::abi::plane::{
     PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RefusalClass,
     RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, CANCEL_FAILED,
     EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION,
-    INGRESS_REQUEST_RESPONSE, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT, ROUTE_DIRECT,
-    SHAPE_PIECEWISE, SPAN_ABSENT, UNITS_ESTIMATED, UNITS_REPORTED,
+    INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
+    PIECE_REFUSED, PRINCIPAL_REQUIRED, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT,
+    TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
-use busbar_contract::abi::sdk::{Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, Wake};
+use busbar_contract::abi::sdk::{
+    Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, StaticWake, Wake,
+};
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
-use crate::claims::{Dialect, HTTP_TRANSPORT, WS_TRANSPORT};
+use crate::claims::{HTTP_TRANSPORT, WS_TRANSPORT};
 use crate::config::StreamsCfg;
-use crate::driven::{Door, Steps, FIELD_CONTENT_LENGTH};
+use crate::driven::{Door, FIELD_CONTENT_LENGTH};
 use crate::meta;
-use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME};
+use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME, TWILIO_MEDIA_STREAMS};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
-use crate::session_door::{committed_session_config, Live, Sessions, Side, CEILING_TICK_NS};
+use crate::session_door::{
+    committed_session_config, Live, Sessions, Side, CEILING_TICK_NS, PER_SESSION_CLASS,
+};
 
 /// The name the plane's Statement carries.
 pub const NAME: &str = crate::codec::PLANE_KEY;
@@ -96,12 +95,14 @@ pub const SUBJECT_NOUN: &str = "streaming session";
 pub const ADMIN_NOUN: &str = "streaming-session";
 /// The record resource kind a session is audited under.
 pub const AUDIT_KIND: &str = "streaming_session";
-/// The one value a key's `session` grant names to open a live session here: the pool every session
-/// is served on.
-pub const SESSION_POOL: &str = "streaming-server";
 /// The section the plane reads but does not own: the upstream destinations (core's grammar, as the
 /// llm door consumes it).
 pub const PROVIDERS_SECTION: &str = "providers";
+/// The section the plane reads but does not own: the model catalog, whose entry for the session
+/// model names the provider's wire model (`upstream_model`, Part 2 #51).
+pub const MODELS_SECTION: &str = "models";
+/// A model entry's provider wire-model override, inside [`MODELS_SECTION`].
+pub const UPSTREAM_MODEL_KEY: &str = "upstream_model";
 /// Where, inside `streams:`, the upstream a session dials is named.
 pub const EGRESS_TARGET: &str = "session.model";
 /// The inbound auth style of a keyed door.
@@ -115,21 +116,23 @@ pub const MOUNT_PATH: &str = "/v1/realtime";
 pub const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/v1/realtime";
 
 /// An absent string.
-const NONE: AbiStr = AbiStr {
-    ptr: ptr::null(),
-    len: 0,
-};
+const NONE: AbiStr = AbiStr::ABSENT;
 
 const SECTIONS: &[Section] = &[
     Section {
         name: abi_str(SECTION),
         flags: SECTION_DECLARING,
-        _reserved: 0,
+        ..Section::ZERO
     },
     Section {
         name: abi_str(PROVIDERS_SECTION),
         flags: SECTION_CONSUMED,
-        _reserved: 0,
+        ..Section::ZERO
+    },
+    Section {
+        name: abi_str(MODELS_SECTION),
+        flags: SECTION_CONSUMED,
+        ..Section::ZERO
     },
 ];
 
@@ -140,7 +143,7 @@ const SECTIONS: &[Section] = &[
 pub const DIALECTS_BY_NAME: &[&str] = &[
     OPENAI_REALTIME,
     GEMINI_LIVE,
-    Dialect::TwilioMediaStreams.name(),
+    TWILIO_MEDIA_STREAMS,
     OPENAI_PROVIDER,
     GEMINI_PROVIDER,
 ];
@@ -167,9 +170,9 @@ const fn dialect_auth(dialect: u32, style: &'static str) -> DialectAuth {
     DialectAuth {
         dialect,
         // No provider names a realtime dialect, and no caller signs one.
-        flags: 0,
         style: abi_str(style),
         params: Blob::ABSENT,
+        ..DialectAuth::ZERO
     }
 }
 
@@ -197,7 +200,7 @@ const fn class(class: &'static str, family: &'static str) -> BillableClass {
     }
 }
 
-/// The six classes a session counts in (`cached_tokens` is attribution only, never billed), then
+/// The eight classes a session counts in (`cached_tokens` is attribution only, never billed), then
 /// the session's fee unit: `per_session`, reported `1` once the far end first answers the session
 /// and never before, so a session whose open failed refunds its fee (ARCHITECT Q-L5-FEE (A), Q17-6;
 /// the fee unit is a billable class reported as a count of 0 or 1 and never ledgered, Q17-5 (c)).
@@ -208,6 +211,8 @@ const BILLABLE_CLASSES: &[BillableClass] = &[
     class(meta::CLASS_TEXT_TOKENS_OUT.as_str(), TOKEN_FAMILY),
     class(meta::CLASS_AUDIO_SECONDS_IN.as_str(), "duration"),
     class(meta::CLASS_TOOL_CALLS.as_str(), "count"),
+    class(meta::CLASS_IMAGE_TOKENS_IN.as_str(), TOKEN_FAMILY),
+    class(meta::CLASS_VIDEO_TOKENS_IN.as_str(), TOKEN_FAMILY),
     class(PER_SESSION, "count"),
 ];
 
@@ -216,36 +221,35 @@ const FEE_UNITS: &[AbiStr] = &[abi_str(PER_SESSION)];
 const EGRESS_TARGETS: &[AbiStr] = &[abi_str(EGRESS_TARGET)];
 
 const fn need(direction: u32, transport: &'static str, auth: AbiStr, target: AbiStr) -> Need {
-    Need {
-        direction,
-        egress_class: 0,
-        transport: abi_str(transport),
-        auth,
-        target_from: target,
-        trust_from: NONE,
-        details: Blob {
-            ptr: ptr::null(),
-            len: 0,
-            fmt: BLOB_ABSENT,
-            flags: 0,
-        },
-        keep_response_headers: ptr::null(),
-        keep_response_headers_len: 0,
-        timeout_ms: 0,
-        keep_mode: KEEP_NAMED,
-        _reserved: 0,
-        deny_response_headers: ptr::null(),
-        deny_response_headers_len: 0,
-    }
+    let mut n = Need::EMPTY;
+    n.direction = direction;
+    n.transport = abi_str(transport);
+    n.auth = auth;
+    n.target_from = target;
+    n.keep_mode = KEEP_NAMED;
+    n
 }
 
 /// One outbound need: to a configured provider, its dials judged in the provider egress class, its
 /// address the member's own (the `base_url` of the catalog model `streams.session.model` names, sealed
 /// by the kernel's egress), never a config path of the plane's: a model name is no dial target.
 const fn outbound(transport: &'static str, style: &'static str) -> Need {
+    let mut n = need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE);
+    n.egress_class = EGRESS_PROVIDER;
+    n
+}
+
+/// The far end's response head fields the one-shot passes read: where a created call lives (the
+/// SDP answer's `Location`) and what the answer's body is (its `Content-Type`, relayed on an answer
+/// that is not an SDP answer).
+const PASS_KEEPS: &[AbiStr] = &[abi_str("location"), abi_str("content-type")];
+
+/// The one-shot passes' outbound need: [`outbound`], keeping [`PASS_KEEPS`].
+const fn pass(transport: &'static str, style: &'static str) -> Need {
     Need {
-        egress_class: EGRESS_PROVIDER,
-        ..need(DIRECTION_OUTBOUND, transport, abi_str(style), NONE)
+        keep_response_headers: PASS_KEEPS.as_ptr(),
+        keep_response_headers_len: PASS_KEEPS.len(),
+        ..outbound(transport, style)
     }
 }
 
@@ -264,7 +268,7 @@ const NEEDS: &[Need] = &[
         NONE,
     ),
     outbound(WS_TRANSPORT, REALTIME_STYLE),
-    outbound(HTTP_TRANSPORT, REALTIME_STYLE),
+    pass(HTTP_TRANSPORT, REALTIME_STYLE),
     outbound(WS_TRANSPORT, LIVE_STYLE),
 ];
 
@@ -277,63 +281,34 @@ pub const RIDES_REALTIME_PASS: u32 = 5;
 pub const RIDES_LIVE_SOCKET: u32 = 6;
 
 /// THE STATEMENT TAIL.
-pub const TAIL: &PlaneTail = &PlaneTail {
-    head: KindTailHead {
-        size: size_of::<PlaneTail>() as u32,
-        _reserved: 0,
-    },
-    flags: 0,
-    ingress: INGRESS_REQUEST_RESPONSE | INGRESS_DUPLEX_SESSION,
-    dispatch_shape: SHAPE_PIECEWISE,
+pub const TAIL: &PlaneTail = &{
+    let mut t = PlaneTail::EMPTY
+        .with_dialects(DIALECTS)
+        .with_dialect_auth(DIALECT_AUTH)
+        .with_scope_kinds(SCOPE_KINDS)
+        .with_op_classes(OP_CLASSES)
+        .with_billable_classes(BILLABLE_CLASSES)
+        .with_fee_units(FEE_UNITS)
+        .with_egress_targets(EGRESS_TARGETS);
+    t.ingress = INGRESS_REQUEST_RESPONSE | INGRESS_DUPLEX_SESSION;
+    t.dispatch_shape = SHAPE_PIECEWISE;
+    // A request unit's hop holds state from its first piece to its answer: a unit the walk refuses
+    // after it has begun (its member's credential gone, or no member left) is handed to `on_piece`
+    // as the refused piece first, and its state is forgotten there.
+    t.flags = TAIL_REFUSED_PIECE;
     // The layout this plane writes its answers in: the contract's it was built against.
-    answer_layout: ANSWER_LAYOUT,
-    scope: abi_str(SCOPE),
-    label: abi_str(LABEL),
-    subject_noun: abi_str(SUBJECT_NOUN),
-    admin_noun: abi_str(ADMIN_NOUN),
-    audit_kind: abi_str(AUDIT_KIND),
-    signing_domain: NONE,
-    signing_kid_prefix: NONE,
-    cli_help: NONE,
-    dialects: DIALECTS.as_ptr(),
-    dialects_len: DIALECTS.len(),
-    dialect_auth: DIALECT_AUTH.as_ptr(),
-    dialect_auth_len: DIALECT_AUTH.len(),
-    scope_kinds: SCOPE_KINDS.as_ptr(),
-    scope_kinds_len: SCOPE_KINDS.len(),
-    op_classes: OP_CLASSES.as_ptr(),
-    op_classes_len: OP_CLASSES.len(),
-    billable_classes: BILLABLE_CLASSES.as_ptr(),
-    billable_classes_len: BILLABLE_CLASSES.len(),
-    route_cost: ptr::null(),
-    route_cost_len: 0,
-    fee_units: FEE_UNITS.as_ptr(),
-    fee_units_len: FEE_UNITS.len(),
-    record_kinds: ptr::null(),
-    record_kinds_len: 0,
-    egress_targets: EGRESS_TARGETS.as_ptr(),
-    egress_targets_len: EGRESS_TARGETS.len(),
-    record_chains: ptr::null(),
-    record_chains_len: 0,
-    trust_keys: ptr::null(),
-    trust_keys_len: 0,
-    refusal_statuses: ptr::null(),
-    refusal_statuses_len: 0,
-    caller_credential_refusal: NONE,
-    admin_routes: ptr::null(),
-    admin_routes_len: 0,
-    admin_openapi: Blob::ABSENT,
+    t.answer_layout = ANSWER_LAYOUT;
+    t.scope = abi_str(SCOPE);
+    t.label = abi_str(LABEL);
+    t.subject_noun = abi_str(SUBJECT_NOUN);
+    t.admin_noun = abi_str(ADMIN_NOUN);
+    t.audit_kind = abi_str(AUDIT_KIND);
     // No stream ceiling (ARCHITECT STREAM-CEILING, 2026-10-07): a live session runs as long as its
     // caller keeps it open, so the streaming plane states none; a streamed answer's send runs under
     // the deployment's ceiling.
-    stream_ceiling_secs: 0,
     // No lane words of its own: its attempts' counters carry the kernel's own lane.
-    metric_lanes: ptr::null(),
-    metric_lanes_len: 0,
+    t
 };
-
-/// The inbound auth style of a door read without a credential (no door of the plane is, today).
-pub const NO_AUTH: &str = "none";
 
 /// One door a live session is opened through: one line of this plane on a listener's guest list
 /// (`BUSBAR-1.6.0.md` section 6, "Auth points and guest lists", step 3).
@@ -350,7 +325,7 @@ pub struct Route {
     /// upgrade request, then the connection is handed to [`Route::carrier`].
     pub upgrade: bool,
     /// The default inbound auth style: applied only where the operator's config gives the line no
-    /// auth.
+    /// auth. Every door is keyed or signed: none is read without a credential.
     pub auth: &'static str,
     /// The dialect the line's units speak, by its index in the tail's dialects.
     pub dialect: u32,
@@ -359,25 +334,8 @@ pub struct Route {
 }
 
 impl Route {
-    /// Read without a credential.
-    #[must_use]
-    pub const fn open(&self) -> bool {
-        let a = self.auth.as_bytes();
-        let n = NO_AUTH.as_bytes();
-        if a.len() != n.len() {
-            return false;
-        }
-        let mut i = 0;
-        while i < a.len() {
-            if a[i] != n[i] {
-                return false;
-            }
-            i += 1;
-        }
-        true
-    }
-
     /// `true` for an exact path, `false` for a pattern.
+    #[cfg(test)]
     #[must_use]
     pub const fn exact(&self) -> bool {
         let b = self.target.as_bytes();
@@ -393,9 +351,9 @@ impl Route {
 }
 
 /// The doors, in the order a snapshot claims them: the ephemeral-secret mint and the SDP offer (one
-/// request each), the browser's sideband socket, the Gemini Live socket and the telephony socket.
-/// The three sockets are upgrade lines. The protected-resource metadata path a refused caller is
-/// pointed at is NOT claimed (1.5.5 parity, ARCHITECT 2026-10-04: no accepted difference): the
+/// request each), the browser's sideband socket, the Gemini Live socket, the telephony socket and
+/// the plain OpenAI Realtime socket. The four sockets are upgrade lines. The protected-resource
+/// metadata path a refused caller is pointed at is NOT claimed (1.5.5 parity, ARCHITECT 2026-10-04: no accepted difference): the
 /// data listener's fallback answers it as it did.
 pub const ROUTES: &[Route] = &[
     Route {
@@ -443,6 +401,18 @@ pub const ROUTES: &[Route] = &[
         dialect: 2,
         refusal_dialect: 2,
     },
+    // Plain server-to-server OpenAI Realtime over WS, as the provider serves it: a WS upgrade on
+    // `GET /v1/realtime` (the caller's `?model=` rides its query), a session attached to no call.
+    // The sideband above is call-attached only (ARCHITECT ruling 2026-10-23 on Part 2 #45).
+    Route {
+        verb: "GET",
+        target: "/v1/realtime",
+        carrier: WS_TRANSPORT,
+        upgrade: true,
+        auth: KEY_AUTH,
+        dialect: 0,
+        refusal_dialect: 0,
+    },
 ];
 
 impl Route {
@@ -450,15 +420,15 @@ impl Route {
     #[must_use]
     pub fn claim(&self) -> ClaimSpec {
         // The flags are the contract's one spelling of a route's claim: a `{name}` target is a
-        // PATTERN (`CLAIM_PATTERN`), any other exact, an open one adds `CLAIM_OPEN`. Without
-        // `CLAIM_PATTERN` a `{call_id}` target would be claimed as a one-level prefix.
+        // PATTERN (`CLAIM_PATTERN`), any other exact; no door is open. Without `CLAIM_PATTERN` a
+        // `{call_id}` target would be claimed as a one-level prefix.
         ClaimSpec {
             refusal_dialect: self.refusal_dialect as u16,
             ..ServedRoute {
                 verb: self.verb,
                 target: self.target,
                 carrier: self.carrier,
-                open: self.open(),
+                open: false,
             }
             .claim_spec()
         }
@@ -468,30 +438,57 @@ impl Route {
 /// Judge a settings blob with the plane's grammar; an empty blob is the default section.
 ///
 /// # Errors
-/// The grammar's reason when the blob is not a `streams:` section.
+/// The grammar's reason when the blob is not a `streams:` section, or the section's reason when
+/// its token ceilings conflict ([`StreamsCfg::ceilings_conflict`]).
 pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
     if settings.is_empty() {
         return Ok(StreamsCfg::default());
     }
-    serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())
+    let cfg = serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())?;
+    match cfg.ceilings_conflict() {
+        Some(reason) => Err(reason),
+        None => Ok(cfg),
+    }
 }
 
-/// THE SECTION A DEALT `validate` BLOB CARRIES. The boot's stage-3g deal hands a declared-verb
-/// plugin `{<verb>: <section>}` (`config_validate::deal`), where `open` and `refresh` are handed the
-/// section itself; the one verb this plane declares is [`SECTION`], so a blob that is exactly
-/// `{streams: …}` is unwrapped to its section and any other blob is the section already.
-#[must_use]
-pub fn dealt_section(settings: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    match serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(settings) {
-        Ok(map) if map.len() == 1 => match map.get(SECTION) {
-            Some(section) => serde_json::to_vec(section).map_or(
-                std::borrow::Cow::Borrowed(settings),
-                std::borrow::Cow::Owned,
-            ),
-            None => std::borrow::Cow::Borrowed(settings),
-        },
-        _ => std::borrow::Cow::Borrowed(settings),
-    }
+/// THE SETTINGS THE HOST HANDS, read: the plane's grammar over its own `streams:` section, with the
+/// session model's provider wire model resolved from the `models` section beside it. A host hands a
+/// plane that consumes sections ONE object keyed by section (spec Part 1, "a plane's settings
+/// reach it as ONE validated JSON object"; architect ruling R-6, 2026-10-23): `{streams: …}` plus
+/// each consumed section the deployment writes. A blob without a `streams` key is the section itself (a host that hands the bare section, or a test), read as
+/// [`read_settings`] reads it. The section's grammar refuses a `streams` key of its own, so the two
+/// forms never read alike.
+///
+/// # Errors
+/// The grammar's reason when the section is not a `streams:` section.
+pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
+    let Ok(serde_json::Value::Object(mut keyed)) =
+        serde_json::from_slice::<serde_json::Value>(settings)
+    else {
+        return read_settings(settings);
+    };
+    let Some(section) = keyed.remove(SECTION) else {
+        return read_settings(settings);
+    };
+    let mut cfg = if section.is_null() {
+        read_settings(&[])?
+    } else {
+        serde_json::from_value::<StreamsCfg>(section).map_err(|e| e.to_string())?
+    };
+    cfg.upstream_model = cfg
+        .session
+        .model
+        .as_deref()
+        .and_then(|model| {
+            keyed
+                .get(MODELS_SECTION)?
+                .get(model)?
+                .get(UPSTREAM_MODEL_KEY)
+        })
+        .and_then(serde_json::Value::as_str)
+        .filter(|wire| !wire.is_empty())
+        .map(str::to_owned);
+    Ok(cfg)
 }
 
 /// ONE READING of the public base URL: parse it and REPLACE the path wholesale, dropping query and
@@ -532,18 +529,6 @@ impl Generation {
         self.generation
     }
 
-    /// The audience a caller's token must carry; empty = no receiving side.
-    #[must_use]
-    pub fn audience(&self) -> &str {
-        &self.audience
-    }
-
-    /// The metadata URL a refused caller is pointed at; empty = no receiving side.
-    #[must_use]
-    pub fn resource_metadata(&self) -> &str {
-        &self.resource_metadata
-    }
-
     /// Its snapshot as the plane publishes it: every door claimed and the audience and metadata
     /// URL bound, or, with no receiving side, nothing claimed.
     #[must_use]
@@ -564,8 +549,62 @@ impl Generation {
 /// serves it (a 404).
 pub const REFUSAL_NO_DOOR: u32 = 1;
 
-/// The most units an instance keeps state for at once; past it, the oldest is dropped first.
+/// The plane's refusal code for a sideband arrival when [`MAX_PENDING_CALLS`] arrivals already
+/// wait for their sessions: the instance holds as many as it admits (a 429).
+pub const REFUSAL_CALLS_FULL: u32 = 2;
+
+/// The status [`REFUSAL_CALLS_FULL`] wears, and the status an SDP offer refused at
+/// [`MAX_BROKERED_CALLS`] is answered with.
+pub const STATUS_CALLS_FULL: u32 = 429;
+
+/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`] is answered with.
+pub const CALLS_FULL_TEXT: &str =
+    "busbar is holding as many realtime calls as it admits at once; retry once one has ended";
+
+/// The most request units an instance keeps state for at once; past it, a new unit is refused (a
+/// unit in flight is never dropped to make room).
 pub const MAX_UNITS: usize = 4096;
+
+/// The most sideband arrivals whose call is kept until their session opens; past it, a new
+/// sideband arrival is refused ([`REFUSAL_CALLS_FULL`]): no pending call is dropped to make room.
+pub const MAX_PENDING_CALLS: usize = 4096;
+
+/// The most live calls the SDP door has brokered that an instance keeps the owner of; at it, with
+/// every row unexpired ([`REALTIME_CALL_MAX_MS`]), a new SDP offer is refused
+/// ([`STATUS_CALLS_FULL`]). No other caller's live call is dropped to make room (THE DESIGN:
+/// retention bounds only settled handles); a call leaves when the far end ends it, when it is past
+/// its dialect's maximum lifetime, or when its own caller's next offer displaces it
+/// ([`MAX_CALLS_PER_CALLER`]). Offers checked against the bound at once are each recorded when their
+/// far end answers, so the instance may hold past it by at most the units in flight
+/// ([`MAX_UNITS`]). PROVISIONAL: awaiting the owner's ratification.
+pub const MAX_BROKERED_CALLS: usize = 4096;
+
+/// The most live brokered calls one caller (one `caller_ref`) keeps at once. At it, that caller's
+/// next SDP offer proceeds and displaces that caller's own oldest row (a sideband to that call is
+/// then refused); no other caller's row is ever displaced. `MAX_BROKERED_CALLS / 64`, so at least
+/// 64 callers each hold their whole allowance before the instance's bound is met. PROVISIONAL:
+/// awaiting the owner's ratification.
+pub const MAX_CALLS_PER_CALLER: usize = MAX_BROKERED_CALLS / 64;
+
+/// THE LONGEST AN OPENAI REALTIME CALL LIVES, in milliseconds: OpenAI's published limit, "The
+/// maximum duration of a Realtime session is 60 minutes."
+/// (<https://developers.openai.com/api/docs/guides/realtime-conversations>). Azure OpenAI documents
+/// 30 minutes for its Realtime sessions; 60 is the longer bound, so it is the safe one: a row never
+/// expires while its call may still be live on either. A call the SDP door brokered has certainly
+/// ended once it is older than this, so its row is settled and expires. The SDP door brokers OpenAI
+/// Realtime calls only and no Gemini Live call, so no Gemini Live lifetime is stated (its published
+/// session limits also lift under the context-window compression this plane always asks for).
+/// PROVISIONAL: awaiting the owner's ratification.
+pub const REALTIME_CALL_MAX_MS: u64 = 60 * 60 * 1000;
+
+/// While a brokered row waits for its age to start (no tick has run since it was recorded), the
+/// longest the door waits for its next tick, in milliseconds: a row's age starts at most this late,
+/// so it expires at most this much after its lifetime, never before it. A row is recorded with a
+/// wake of the driver ticket, so its tick normally follows at once; should a host keep only the
+/// tick it was last asked for, a row recorded behind an older row whose age has started is stamped
+/// at that older row's deadline, so its lifetime can stretch to about twice
+/// [`REALTIME_CALL_MAX_MS`]: late, the conservative direction, never early.
+pub const BROKERED_TICK_MS: u64 = 60 * 1000;
 
 /// One unit on a one-request door, kept from its first piece to the caller's answer.
 struct Held {
@@ -578,6 +617,204 @@ struct Held {
     short: Option<Answer>,
 }
 
+/// The request units in flight, by the kernel's unit key, and the tickets their pieces crossed on,
+/// so a cancel on a unit's ticket forgets it.
+#[derive(Default)]
+struct Units {
+    held: BTreeMap<u64, Held>,
+    tickets: std::collections::HashMap<Ticket, u64>,
+}
+
+impl Units {
+    /// Hold `held` for unit `unit`. Answers `false`, holding nothing, at [`MAX_UNITS`]: no unit in
+    /// flight is dropped to make room (THE DESIGN: admission bounds live work, nothing evicts it);
+    /// a unit leaves when it ends.
+    fn hold(&mut self, unit: u64, held: Held) -> bool {
+        if !self.held.contains_key(&unit) && self.held.len() >= MAX_UNITS {
+            return false;
+        }
+        self.held.insert(unit, held);
+        true
+    }
+
+    /// A piece of unit `unit` crossed on `ticket`.
+    fn crossed(&mut self, unit: u64, ticket: Ticket) {
+        if ticket != Ticket::NONE {
+            self.tickets.insert(ticket, unit);
+        }
+    }
+
+    /// The op on `ticket` is cancelled, or the kernel cancels unit `unit` itself (`0` = none
+    /// named, [`PlaneCancelIn::unit`]): the unit either names is forgotten. Answers whether one
+    /// was.
+    fn cancel(&mut self, ticket: Ticket, unit: u64) -> bool {
+        let by_ticket = self.tickets.get(&ticket).copied();
+        let mut forgot = false;
+        for u in by_ticket.into_iter().chain((unit != 0).then_some(unit)) {
+            forgot |= self.forget(u);
+        }
+        forgot
+    }
+
+    /// Unit `unit` is over: it and its tickets are forgotten. Answers whether it was held.
+    fn forget(&mut self, unit: u64) -> bool {
+        let held = self.held.remove(&unit).is_some();
+        self.tickets.retain(|_, u| *u != unit);
+        held
+    }
+}
+
+/// The provider call each sideband arrival names, by the kernel's unit key, kept until the unit's
+/// session opens, or the unit ends (refused, cancelled).
+#[derive(Default)]
+struct PendingCalls {
+    pending: BTreeMap<u64, String>,
+}
+
+impl PendingCalls {
+    /// Keep `call` for unit `unit`. Answers `false`, keeping nothing, when [`MAX_PENDING_CALLS`]
+    /// calls wait: no pending call is dropped to make room; the arrival is refused instead.
+    fn pend(&mut self, unit: u64, call: String) -> bool {
+        if self.pending.len() >= MAX_PENDING_CALLS && !self.pending.contains_key(&unit) {
+            return false;
+        }
+        self.pending.insert(unit, call);
+        true
+    }
+
+    /// Unit `unit`'s session opens: its call, taken.
+    fn take(&mut self, unit: u64) -> Option<String> {
+        self.pending.remove(&unit)
+    }
+
+    /// Unit `unit` ended before its session opened: its call is forgotten. Answers whether one
+    /// was kept.
+    fn forget(&mut self, unit: u64) -> bool {
+        self.pending.remove(&unit).is_some()
+    }
+}
+
+/// THE LIVE CALLS THE SDP DOOR BROKERED, each with the caller reference of the unit whose offer
+/// created it (a sideband attaches only to its own caller's call, and may attach again after its
+/// sideband closes), and each caller's calls, oldest first. A call leaves when the far end ends it
+/// (seen through its sideband), when it is older than [`REALTIME_CALL_MAX_MS`] (it has certainly
+/// ended), or when its own caller's next call displaces it at [`MAX_CALLS_PER_CALLER`]; never to
+/// make room for another caller. At [`MAX_BROKERED_CALLS`] unexpired rows a new offer is refused
+/// instead. Expiry is read at each tick, offer and attach, on the door's tick clock.
+#[derive(Default)]
+struct Brokered {
+    owners: HashMap<String, BrokeredRow>,
+    per_caller: HashMap<String, VecDeque<String>>,
+}
+
+/// One brokered call's row.
+struct BrokeredRow {
+    /// The caller reference of the unit whose offer created the call.
+    owner: String,
+    /// The tick clock's reading (milliseconds) when the call was recorded: the last tick before it.
+    recorded: u64,
+    /// The first tick clock reading greater than `recorded`, stamped by the first `tick` (or offer,
+    /// or attach) that reads the clock after the call was recorded: that tick ran after the call
+    /// was created, so the call's age, counted from it, is never more than its true age. `None`
+    /// until the clock moves past `recorded`.
+    since: Option<u64>,
+}
+
+impl Brokered {
+    /// Every row older than [`REALTIME_CALL_MAX_MS`] at `now_ms` (the tick clock) is freed: its call
+    /// has certainly ended.
+    fn expire(&mut self, now_ms: u64) {
+        let mut expired = Vec::new();
+        for (call, row) in &mut self.owners {
+            if row.since.is_none() && now_ms > row.recorded {
+                row.since = Some(now_ms);
+            }
+            if row
+                .since
+                .is_some_and(|since| now_ms.saturating_sub(since) >= REALTIME_CALL_MAX_MS)
+            {
+                expired.push(call.clone());
+            }
+        }
+        for call in expired {
+            self.end(&call);
+        }
+    }
+
+    /// When the door next needs its clock read (milliseconds on the tick clock), while it holds a
+    /// row: the earliest moment a row whose age has started expires, or, for a row whose age has
+    /// not started, [`BROKERED_TICK_MS`] from `now_ms`. `None` while it holds none.
+    fn next_tick_ms(&self, now_ms: u64) -> Option<u64> {
+        self.owners
+            .values()
+            .map(|row| match row.since {
+                Some(since) => since.saturating_add(REALTIME_CALL_MAX_MS),
+                None => now_ms.saturating_add(BROKERED_TICK_MS),
+            })
+            .min()
+    }
+
+    /// Whether a new call may be brokered at `now_ms`: the instance holds fewer than
+    /// [`MAX_BROKERED_CALLS`] unexpired rows.
+    fn admits(&mut self, now_ms: u64) -> bool {
+        self.expire(now_ms);
+        self.owners.len() < MAX_BROKERED_CALLS
+    }
+
+    /// The far end created `call` for `caller` at `now_ms`. A caller already holding
+    /// [`MAX_CALLS_PER_CALLER`] calls gives up its own oldest; no other caller's row is touched.
+    /// Recorded whatever the instance bound reads now: the call is live at the far end (see
+    /// [`MAX_BROKERED_CALLS`] for the bounded overshoot).
+    fn record(&mut self, call: String, caller: String, now_ms: u64) {
+        self.expire(now_ms);
+        let row = BrokeredRow {
+            owner: caller.clone(),
+            recorded: now_ms,
+            since: None,
+        };
+        if let Some(previous) = self.owners.insert(call.clone(), row) {
+            self.release(&previous.owner, &call);
+        }
+        let rows = self.per_caller.entry(caller).or_default();
+        while rows.len() >= MAX_CALLS_PER_CALLER {
+            match rows.pop_front() {
+                Some(oldest) => {
+                    self.owners.remove(&oldest);
+                }
+                None => break,
+            }
+        }
+        rows.push_back(call);
+    }
+
+    /// Whether `call` is live at `now_ms` and `caller`'s.
+    fn owns(&mut self, call: &str, caller: &str, now_ms: u64) -> bool {
+        self.expire(now_ms);
+        self.owners.get(call).is_some_and(|row| row.owner == caller)
+    }
+
+    /// `call` ended: its row is freed. Answers whether it was held.
+    fn end(&mut self, call: &str) -> bool {
+        match self.owners.remove(call) {
+            Some(row) => {
+                self.release(&row.owner, call);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// `call` is no longer `caller`'s.
+    fn release(&mut self, caller: &str, call: &str) {
+        if let Some(rows) = self.per_caller.get_mut(caller) {
+            rows.retain(|c| c != call);
+            if rows.is_empty() {
+                self.per_caller.remove(caller);
+            }
+        }
+    }
+}
+
 /// One open plane instance.
 pub struct Plane {
     /// The deployment's public base URL, as `open` read it; a refresh keeps it.
@@ -586,12 +823,18 @@ pub struct Plane {
     generations: Mutex<Vec<(StreamsCfg, Generation)>>,
     /// The published snapshots, held by the SDK until their generation's `retire`.
     snapshots: Generations<PlaneSnapshot>,
-    /// The request units in flight, by the kernel's unit key.
-    units: Mutex<BTreeMap<u64, Held>>,
+    /// The request units in flight.
+    units: Mutex<Units>,
+    /// The provider call each sideband arrival names, by the kernel's unit key, until the unit's
+    /// session opens or the unit ends.
+    calls: Mutex<PendingCalls>,
+    /// The live calls the SDP door brokered, by owner: a sideband attaches only to its own
+    /// caller's call.
+    brokered: Mutex<Brokered>,
     /// The live sessions, by the kernel's stream.
     sessions: Mutex<Sessions>,
     /// The host's wake, as `open` handed it; `None` = no session output can be named.
-    wake: Option<Wake>,
+    wake: Option<StaticWake>,
     /// The instance's driver ticket, as its last `tick` was handed it, and that tick's clock
     /// reading in milliseconds.
     driver: Mutex<(Ticket, u64)>,
@@ -605,12 +848,43 @@ impl Plane {
         let door = Door::of(claim)?;
         let generations = lock(&self.generations);
         let (cfg, _) = generations.last()?;
-        let unit = RequestUnit::open(door, cfg.session.clone(), caller_ref)?;
+        // The mint binds the browser's session to the section's session under its two token
+        // ceilings, as a socket session is locked, and names the session model by its wire name.
+        let locked = crate::session_door::with_ceilings(cfg.wire_session(cfg.session.clone()), cfg);
+        let unit = RequestUnit::open(door, locked, caller_ref)?;
         Some(Held {
             unit,
             owed: Owed::default(),
             short: None,
         })
+    }
+
+    /// Unit `unit` is over (refused, or its refusal is about to be told): what the door holds for
+    /// it as a request unit, a pending sideband call or a session (whose stream is its unit) is
+    /// forgotten.
+    fn end_unit(&self, unit: u64) {
+        lock(&self.units).forget(unit);
+        lock(&self.calls).forget(unit);
+        lock(&self.sessions).close(unit);
+    }
+
+    /// The tick clock: the instance's last tick's reading, in milliseconds.
+    fn now_ms(&self) -> u64 {
+        lock(&self.driver).1
+    }
+
+    /// A far-end piece with `flags` reached a session on `door` attached to `call`, whose far end
+    /// has (`accepted`) or has not accepted the sideband's upgrade: a sideband whose accepted far
+    /// end ended its answer whole ([`PIECE_LAST`] without [`PIECE_CUT`]) has seen the provider end
+    /// the call, and the call's row is freed. A refused upgrade, a sideband the caller closes, or
+    /// one whose connection was cut frees nothing: the call lives on, and a sideband may attach to
+    /// it again.
+    fn far_end_ended(&self, door: Door, flags: u32, call: Option<&str>, accepted: bool) {
+        let ended =
+            door == Door::Sideband && accepted && flags & PIECE_LAST != 0 && flags & PIECE_CUT == 0;
+        if let (true, Some(call)) = (ended, call) {
+            lock(&self.brokered).end(call);
+        }
     }
 
     /// The newest live generation's section; `None` before the first publish.
@@ -671,33 +945,35 @@ macro_rules! slot {
 }
 
 slot!(Validate, ValidateIn, OutHead, |_, input, out| {
-    match read_settings(&dealt_section(input.field(|i| &i.settings).bytes())) {
+    match read_dealt(input.settings().bytes()) {
         Ok(_) => Outcome::Ready,
         Err(words) => out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words)),
     }
 });
 
 slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
-    let Ok(cfg) = read_settings(input.field(|i| &i.open.settings).bytes()) else {
+    let Ok(cfg) = read_dealt(input.open().settings().bytes()) else {
         return Outcome::Refused;
     };
     let public_url = input
-        .field(|i| &i.public_url)
+        .public_url()
         .as_str()
         .ok()
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let wake = input.field(|i| &i.open).host().and_then(|h| Wake::of(&h));
+    let wake = input.open().host().and_then(|h| Wake::of(&h));
     let p = Plane {
         public_url,
         generations: Mutex::new(Vec::new()),
         snapshots: Generations::new(),
-        units: Mutex::new(BTreeMap::new()),
+        units: Mutex::new(Units::default()),
+        calls: Mutex::new(PendingCalls::default()),
+        brokered: Mutex::new(Brokered::default()),
         sessions: Mutex::new(Sessions::default()),
         wake,
         driver: Mutex::new((Ticket::NONE, 0)),
     };
-    p.publish(&mut out, |o| &o.snapshot, input.open.generation, cfg);
+    p.publish(&mut out, |o| &o.snapshot, input.open().generation(), cfg);
     instance.open(p);
     Outcome::Ready
 });
@@ -710,37 +986,52 @@ slot!(
         let Some(p) = instance.get() else {
             return Outcome::Failed;
         };
-        let Ok(cfg) = read_settings(input.field(|i| &i.settings).bytes()) else {
+        let Ok(cfg) = read_dealt(input.settings().bytes()) else {
             return Outcome::Refused;
         };
-        p.publish(&mut out, |o| &o.snapshot, input.generation, cfg);
+        p.publish(&mut out, |o| &o.snapshot, input.generation(), cfg);
         Outcome::Ready
     }
 );
 
 slot!(Retire, GenIn, OutHead, |instance, input, _out| {
     if let Some(p) = instance.get() {
-        lock(&p.generations).retain(|(_, g)| g.generation() != input.generation);
-        p.snapshots.retire(input.generation);
+        lock(&p.generations).retain(|(_, g)| g.generation() != input.generation());
+        p.snapshots.retire(input.generation());
     }
     Outcome::Ready
 });
 
 // The tick: the instance's driver ticket is noted, every live session's clock and ceiling read on
 // the tick clock, and a session that now owes its end names the driver ticket. While a live
-// generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`.
+// generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`. The brokered
+// rows' clock is read here too: a row's age starts at the first tick after it was recorded, an
+// expired row is freed, and while any row is held the door asks to be ticked when the next one
+// expires (or within `BROKERED_TICK_MS` for a row whose age has not started); the earliest ask wins.
 slot!(Tick, TickIn, TickOut, |instance, input, out| {
-    let given = input.get();
+    let given = input;
     let next = match instance.get() {
         Some(p) => {
-            *lock(&p.driver) = (given.head.ticket, given.now_ns / 1_000_000);
-            if lock(&p.sessions).tick(given.now_ns) {
+            *lock(&p.driver) = (given.head().ticket(), given.now_ns() / 1_000_000);
+            if lock(&p.sessions).tick(given.now_ns()) {
                 p.wake_driver();
             }
-            if p.any_ceiling() {
-                given.now_ns.saturating_add(CEILING_TICK_NS)
+            let ceiling = if p.any_ceiling() {
+                Some(given.now_ns().saturating_add(CEILING_TICK_NS))
             } else {
-                0
+                None
+            };
+            let now_ms = given.now_ns() / 1_000_000;
+            let brokered = {
+                let mut brokered = lock(&p.brokered);
+                brokered.expire(now_ms);
+                brokered
+                    .next_tick_ms(now_ms)
+                    .map(|ms| ms.saturating_mul(1_000_000))
+            };
+            match (ceiling, brokered) {
+                (Some(a), Some(b)) => a.min(b),
+                (a, b) => a.or(b).unwrap_or(0),
             }
         }
         None => 0,
@@ -772,15 +1063,25 @@ slot!(
     }
 );
 
-// `cancel`: an op on a session's ticket ends the session (each side tells the other); a request
-// unit's cancel is declined. It writes no record.
+// `cancel`: an op on a session's ticket ends the session (each side tells the other); an op on a
+// request unit's ticket, or the kernel's own cancel of a unit (`PlaneCancelIn::unit`, a unit whose
+// ticket no piece may ever have carried), forgets the unit's state, its pending sideband call and
+// the session its unit names.
+// Either way it bills nothing of its own and writes no record.
 slot!(
     Cancel,
     PlaneCancelIn,
     PlaneCancelOut,
     |instance, input, out| {
         if let Some(p) = instance.get() {
-            lock(&p.sessions).cancel(input.get().cancel.ticket);
+            let ticket = input.cancel().ticket();
+            let unit = input.unit();
+            lock(&p.sessions).cancel(ticket);
+            lock(&p.units).cancel(ticket, unit);
+            if unit != 0 {
+                lock(&p.calls).forget(unit);
+                lock(&p.sessions).close(unit);
+            }
         }
         out.set(|o| &o.cancel.disposition, CANCEL_FAILED);
         Outcome::Ready
@@ -797,30 +1098,37 @@ slot!(Close, InHead, OutHead, |_, _, _out| { Outcome::Ready });
 // folds that top-level catalog model into the plane's route table, so the kernel's door steps resolve
 // it as any section entry). The metadata door reaches none and names none.
 slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
-    let Some(a) = crate::driven::arrive(input.claim) else {
+    let Some(a) = crate::driven::arrive(input.claim()) else {
         out.set(|o| &o.refusal, REFUSAL_NO_DOOR);
         out.set(|o| &o.refusal_status, 404);
         return Outcome::Refused;
     };
-    let mut units = input.units_buf();
-    for (class, amount) in a.door.admit() {
-        units.push(UnitCount {
-            class,
-            source: UNITS_ESTIMATED,
-            amount,
-        });
+    // A sideband arrival's call is kept until its session opens. At the bound the arrival is
+    // refused: no pending call is dropped to make room (THE DESIGN: admission bounds live work,
+    // nothing evicts it).
+    if a.door == Door::Sideband {
+        let call = input
+            .target()
+            .as_str()
+            .ok()
+            .and_then(crate::driven::sideband_call_id);
+        if let (Some(p), Some(call)) = (instance.get(), call) {
+            if !lock(&p.calls).pend(input.unit(), call.to_string()) {
+                out.set(|o| &o.refusal, REFUSAL_CALLS_FULL);
+                out.set(|o| &o.refusal_status, STATUS_CALLS_FULL);
+                return Outcome::Refused;
+            }
+        }
     }
-    if !units.fits() {
-        out.set(|o| &o.units_needed, units.needed() as u32);
-        return Outcome::Failed;
-    }
-    out.set(|o| &o.units_written, units.written() as u32);
+    // No admission estimate: a session pays for what the far end reports, so no unit is written.
+    out.set(|o| &o.units_written, 0);
     out.set(|o| &o.op_class, a.op_class);
     out.set(|o| &o.dialect, a.dialect);
-    out.set(|o| &o.principal_need, a.door.authenticate());
-    let model = (!a.door.is_open())
-        .then(|| instance.get().and_then(Plane::newest))
-        .flatten()
+    // Every door is keyed or signed: a unit on it needs a principal.
+    out.set(|o| &o.principal_need, PRINCIPAL_REQUIRED);
+    let model = instance
+        .get()
+        .and_then(Plane::newest)
         .and_then(|cfg| cfg.session.model);
     if let Some(model) = model {
         out.route(ROUTE_DIRECT, &model);
@@ -834,12 +1142,12 @@ fn piece_of<'h, 'a: 'h>(
     input: Lent<'a, OnPieceIn>,
     head: &'h mut Vec<(&'a [u8], &'a [u8])>,
 ) -> Option<Piece<'h>> {
-    let given = input.get();
-    let has_status = given.flags & PIECE_HAS_STATUS != 0;
-    let from = match given.from {
+    let given = input;
+    let has_status = given.flags() & PIECE_HAS_STATUS != 0;
+    let from = match given.from() {
         FROM_CALLER => request_unit::From::Caller,
         FROM_FAR_END => request_unit::From::FarEnd,
-        FROM_KERNEL => request_unit::From::Kernel(given.attempt_no),
+        FROM_KERNEL => request_unit::From::Kernel(given.attempt_no()),
         _ => return None,
     };
     if has_status {
@@ -847,14 +1155,14 @@ fn piece_of<'h, 'a: 'h>(
             input
                 .head_fields()
                 .iter()
-                .map(|f| (f.field(|f| &f.name).bytes(), f.field(|f| &f.value).bytes())),
+                .map(|f| (f.name().bytes(), f.value().bytes())),
         );
     }
     Some(Piece {
         from,
-        bytes: input.field(|i| &i.bytes).bytes(),
-        status: has_status.then(|| u16::try_from(given.status_code).unwrap_or(0)),
-        last: given.flags & PIECE_LAST != 0,
+        bytes: input.bytes().bytes(),
+        status: has_status.then(|| u16::try_from(given.status_code()).unwrap_or(0)),
+        last: given.flags() & PIECE_LAST != 0,
         head: head.as_slice(),
     })
 }
@@ -905,8 +1213,18 @@ fn answer_piece(
             (Outcome::Ready, false)
         }
         Answer::ToCaller(reply) => {
-            let (mut fields, units, mut arena) =
+            let (mut fields, mut units, mut arena) =
                 (input.fields_buf(), input.units_buf(), input.arena_buf());
+            // A far end that answered the mint or the SDP offer has brokered a session on the
+            // operator's account: its fee unit is incurred, as a socket session's is once its far
+            // end answers. A failed pass brokered nothing and reports none.
+            if (200..300).contains(&reply.status) {
+                units.push(UnitCount {
+                    class: PER_SESSION_CLASS,
+                    source: UNITS_REPORTED,
+                    amount: 1,
+                });
+            }
             // A one-request door's answer is WHOLE: its head states its length, so the caller is
             // answered under it, never chunked (1.6.0-pre's bytes; the serve path sends a whole
             // answer under the length its head states).
@@ -930,8 +1248,8 @@ fn answer_piece(
 /// turn's request is the caller side's answer). Every answer reports the session's cumulative
 /// units and writes at most one frame; a session still owing output names the driver ticket.
 fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPieceOut>) -> Outcome {
-    let given = input.get();
-    let Some(door) = Door::of(given.claim).filter(|d| d.is_session()) else {
+    let given = input;
+    let Some(door) = Door::of(given.claim()).filter(|d| d.is_session()) else {
         return Outcome::Refused;
     };
     let Some(cfg) = p.newest() else {
@@ -939,21 +1257,41 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     };
     let now_ms = lock(&p.driver).1;
     let mut sessions = lock(&p.sessions);
+    // A sideband session attaches to the provider call its arrival named, and only to a call the
+    // SDP door brokered for this same caller; any other is refused, never dialled as a fresh
+    // session and never attached to another caller's call.
+    let opening = given.from() == FROM_CALLER && sessions.get(given.stream()).is_none();
+    let call = if opening && door == Door::Sideband {
+        let Some(call) = lock(&p.calls).take(given.unit()) else {
+            return Outcome::Refused;
+        };
+        let caller = input.caller_ref().as_str().unwrap_or_default();
+        let owned = !caller.is_empty() && lock(&p.brokered).owns(&call, caller, now_ms);
+        if !owned {
+            return Outcome::Refused;
+        }
+        Some(call)
+    } else {
+        None
+    };
     // Only the caller's piece opens a session: a far-end piece or a collection for a stream the
     // door holds nothing for (an ended or cancelled session) is refused, never a fresh session.
-    let live = if given.from == FROM_CALLER {
-        sessions.get_or_open(given.stream, door, &cfg)
+    let live = if given.from() == FROM_CALLER {
+        sessions.get_or_open(given.stream(), door, &cfg)
     } else {
-        sessions.get(given.stream)
+        sessions.get(given.stream())
     };
-    if live.is_none() {
+    let Some(live) = live else {
         return Outcome::Refused;
+    };
+    if let Some(call) = call {
+        live.attach(call);
     }
-    sessions.crossed(given.stream, given.head.ticket);
-    let Some(live) = sessions.get(given.stream) else {
+    sessions.crossed(given.stream(), given.head().ticket());
+    let Some(live) = sessions.get(given.stream()) else {
         return Outcome::Refused;
     };
-    let near = given.from != FROM_FAR_END;
+    let near = given.from() != FROM_FAR_END;
     // A re-call after a `more = 1` answer pays what that side's frame still owes.
     let owed = if near { &mut live.near } else { &mut live.far };
     if piece::is_recall(input) && owed.pending() {
@@ -968,11 +1306,21 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     let emit = match short {
         Some(emit) => emit,
         None => {
-            let caller_last = given.from == FROM_CALLER && given.flags & PIECE_LAST != 0;
-            let bytes = input.field(|i| &i.bytes).bytes();
-            match given.from {
+            let caller_last = given.from() == FROM_CALLER && given.flags() & PIECE_LAST != 0;
+            let bytes = input.bytes().bytes();
+            match given.from() {
                 FROM_CALLER => live.from_caller(bytes, caller_last),
-                FROM_FAR_END => live.from_far_end(bytes, now_ms),
+                FROM_FAR_END => {
+                    // The far end's status (its first piece) says whether it accepted the
+                    // upgrade: a switch, or a success.
+                    if given.flags() & PIECE_HAS_STATUS != 0
+                        && (101..300).contains(&given.status_code())
+                    {
+                        live.accept();
+                    }
+                    live.from_far_end(bytes);
+                    p.far_end_ended(door, given.flags(), live.call_id(), live.accepted());
+                }
                 FROM_KERNEL => {}
                 _ => return Outcome::Refused,
             }
@@ -983,7 +1331,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                     frame: None,
                     done: true,
                 }
-            } else if given.from == FROM_KERNEL && given.attempt_no > 0 {
+            } else if given.from() == FROM_KERNEL && given.attempt_no() > 0 {
                 crate::session_door::Emit::default()
             } else {
                 live.next(near)
@@ -999,11 +1347,14 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         });
     }
     let target = match emit.frame {
-        Some((Side::FarEnd, _)) => door.route(&cfg.session, None, &[]).ok().flatten(),
+        Some((Side::FarEnd, _)) => door
+            .route(&cfg.session, None, &[])
+            .ok()
+            .map(|a| (a.verb, live.dial_target(a.target))),
         _ => None,
     };
-    let verb = target.as_ref().map(|a| arena.span(a.verb.as_bytes()));
-    let path = target.as_ref().map(|a| arena.span(a.target.as_bytes()));
+    let verb = target.as_ref().map(|(verb, _)| arena.span(verb.as_bytes()));
+    let path = target.as_ref().map(|(_, path)| arena.span(path.as_bytes()));
     if piece::settle(out, &fields, &units, &arena) {
         // Short as a whole: the re-call carries the same piece, answered from here.
         if near {
@@ -1019,14 +1370,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                 out.set(|o| &o.verb, verb);
                 out.set(|o| &o.target, path);
             }
-            out.set(
-                |o| &o.need,
-                if door == Door::Gemini {
-                    RIDES_LIVE_SOCKET
-                } else {
-                    RIDES_REALTIME_SOCKET
-                },
-            );
+            out.set(|o| &o.need, door.rides());
             // A realtime dialect's frame is a JSON text message on its socket.
             live.near
                 .owe(&frame, EMIT_TO_FAR_END | PIECE_OUT_TEXT, input, out);
@@ -1043,9 +1387,14 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         }
         None => false,
     };
+    // A session that ended on a usage report it could not read is reported to the kernel once,
+    // as the reader's refusal of the far end's body.
+    if live.take_unmetered() {
+        out.set(|o| &o.tap_fault, TAP_FAULT_DECODE);
+    }
     let owes = live.ready();
     if done {
-        sessions.close(given.stream);
+        sessions.close(given.stream());
     } else if owes {
         drop(sessions);
         p.wake_driver();
@@ -1061,43 +1410,63 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     let Some(p) = instance.get() else {
         return Outcome::Failed;
     };
-    let given = input.get();
-    if given.stream != 0 {
+    let given = input;
+    // THE REFUSED PIECE (`TAIL_REFUSED_PIECE`): the kernel is about to refuse the unit (its
+    // member's credential is gone, or no member is left). What the door holds for it is
+    // forgotten; nothing it would emit reaches anyone, so it answers nothing.
+    if given.from() == FROM_KERNEL && given.flags() & PIECE_REFUSED != 0 {
+        p.end_unit(given.unit());
+        if given.stream() != 0 {
+            lock(&p.sessions).close(given.stream());
+        }
+        return Outcome::Ready;
+    }
+    if given.stream() != 0 {
         return session_piece(p, input, &mut out);
     }
+    let now_ms = p.now_ms();
     let mut units = lock(&p.units);
     if piece::is_recall(input) {
-        if let Some(held) = units.get_mut(&given.unit) {
+        if let Some(held) = units.held.get_mut(&given.unit()) {
             if held.owed.pending() {
                 if held.owed.pay(input, &mut out) {
-                    units.remove(&given.unit);
+                    units.forget(given.unit());
                 }
                 return Outcome::Ready;
             }
         }
     }
-    if !units.contains_key(&given.unit) {
+    if !units.held.contains_key(&given.unit()) {
         let caller_ref = input
-            .field(|i| &i.caller_ref)
+            .caller_ref()
             .as_str()
             .ok()
             .filter(|r| !r.is_empty())
             .map(str::to_owned);
-        let Some(held) = p.held(given.claim, caller_ref) else {
+        let Some(held) = p.held(given.claim(), caller_ref) else {
             return Outcome::Refused;
         };
-        while units.len() >= MAX_UNITS {
-            if units.pop_first().is_none() {
-                break;
-            }
+        // At the bound a new unit is refused: no unit in flight is dropped to make room.
+        if !units.hold(given.unit(), held) {
+            return Outcome::Refused;
         }
-        units.insert(given.unit, held);
     }
-    let Some(held) = units.get_mut(&given.unit) else {
+    units.crossed(given.unit(), given.head().ticket());
+    let Some(held) = units.held.get_mut(&given.unit()) else {
         return Outcome::Failed;
     };
+    let caller = input.caller_ref().as_str().ok().filter(|r| !r.is_empty());
     let answer = match held.short.take() {
         Some(answer) => answer,
+        // An SDP offer's ATTEMPT on an instance holding as many live calls as it keeps is
+        // answered before anything is dialled: no other caller's live call is dropped for it.
+        None if Door::of(given.claim()) == Some(Door::Sdp)
+            && given.from() == FROM_KERNEL
+            && given.attempt_no() > 0
+            && !lock(&p.brokered).admits(now_ms) =>
+        {
+            Answer::ToCaller(calls_full_reply())
+        }
         None => {
             let mut head = Vec::new();
             let Some(piece) = piece_of(input, &mut head) else {
@@ -1106,9 +1475,22 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
             held.unit.on_piece(piece)
         }
     };
+    // An SDP answer that created a call names it: the call is this caller's, the one their own
+    // sideband may attach to.
+    let brokered = match &answer {
+        Answer::ToCaller(reply) if (200..300).contains(&reply.status) => reply.rtc_call_id.clone(),
+        _ => None,
+    };
+    if let (Some(call), Some(caller)) = (brokered, caller) {
+        lock(&p.brokered).record(call, caller.to_string(), now_ms);
+        // The row needs the clock read: the driver ticket is named, so the host drives the
+        // instance and polls `tick`, which starts the row's age and asks for the tick it expires at
+        // (an idle instance with no ceiling is otherwise never ticked again).
+        p.wake_driver();
+    }
     let (outcome, done) = answer_piece(held, answer, input, &mut out);
-    if done {
-        units.remove(&given.unit);
+    if done || outcome == Outcome::Refused {
+        units.forget(given.unit());
     }
     outcome
 });
@@ -1122,6 +1504,18 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
 #[must_use]
 pub fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     error_envelope(status, text, None)
+}
+
+/// The answer to an SDP offer refused at [`MAX_BROKERED_CALLS`]: [`STATUS_CALLS_FULL`] with
+/// [`CALLS_FULL_TEXT`] in the dialects' error shape.
+fn calls_full_reply() -> crate::driven::Reply {
+    let status = STATUS_CALLS_FULL as u16;
+    crate::driven::Reply {
+        status,
+        fields: vec![(FIELD_CONTENT_TYPE, CONTENT_TYPE_JSON.to_string())],
+        body: refusal_body(status, CALLS_FULL_TEXT),
+        rtc_call_id: None,
+    }
 }
 
 /// The message the realtime dialects answer a bad or missing credential with: the vendor's own copy,
@@ -1196,20 +1590,25 @@ pub fn session_cut_render(dialect: u32, text: &str) -> Vec<u8> {
 }
 
 // `refusal`: the kernel's status and text (a hook's veto, an admission's refusal) in the dialects'
-// error shape, as JSON, before any upgrade; a live session's budget cut in its own stream.
+// error shape, as JSON, before any upgrade; a live session's budget cut in its own stream. The
+// refusal ends its unit: what the door holds for it as a request unit, a pending sideband call or a
+// session is forgotten.
 slot!(Refusal, RefusalIn, RefusalOut, |instance, input, out| {
-    let given = input.get();
-    let status = u16::try_from(given.status).unwrap_or(0);
-    let text = input.field(|i| &i.text).as_str().unwrap_or_default();
-    let cut = given.reason == RefusalCode::OverBudget as u32
-        && given.unit != 0
+    let given = input;
+    let status = u16::try_from(given.status()).unwrap_or(0);
+    let text = input.text().as_str().unwrap_or_default();
+    let cut = given.reason() == RefusalCode::OverBudget as u32
+        && given.unit() != 0
         && instance
             .get()
-            .is_some_and(|p| lock(&p.sessions).served(given.unit));
+            .is_some_and(|p| lock(&p.sessions).served(given.unit()));
+    if let (Some(p), true) = (instance.get(), given.unit() != 0) {
+        p.end_unit(given.unit());
+    }
     let body = if cut {
-        session_cut_render(given.dialect, text)
+        session_cut_render(given.dialect(), text)
     } else {
-        refusal_render(status, given.reason, text)
+        refusal_render(status, given.reason(), text)
     };
     let (mut reply, mut fields, mut arena) =
         (input.reply_buf(), input.fields_buf(), input.arena_buf());
@@ -1251,14 +1650,14 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
     let Some(p) = instance.get() else {
         return Outcome::Failed;
     };
-    let given = input.get();
-    let Some(door) = Door::of(given.claim) else {
+    let given = input;
+    let Some(door) = Door::of(given.claim()) else {
         return Outcome::Refused;
     };
     let Some(cfg) = p.newest() else {
         return Outcome::Refused;
     };
-    let rewrite = input.field(|i| &i.rewrite).bytes();
+    let rewrite = input.rewrite().bytes();
     let (body, rewritten) = if door.is_session() {
         let locked = Live::locked(door, &cfg);
         let params = if rewrite.is_empty() {
@@ -1266,7 +1665,7 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         } else {
             match committed_session_config(&locked, rewrite) {
                 Ok(params) => {
-                    lock(&p.sessions).rewrite(given.unit, params.clone());
+                    lock(&p.sessions).rewrite(given.unit(), params.clone());
                     params
                 }
                 Err(_) => return Outcome::Refused,
@@ -1335,15 +1734,23 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
     Outcome::Ready
 });
 
+busbar_contract::statement_extensions!(
+    /// The Statement's extensions: this plugin's whole `declares` document (BUSBAR-1.6.0.md l.246).
+    EXTENSIONS: [(
+        busbar_contract::abi::mechanism::extensions::EXT_DECLARES,
+        include_bytes!("../declares.json")
+    )]
+);
+
 busbar_contract::plugin_door! {
     ops: busbar_contract::abi::plane::Ops,
-    statement: Statement {
-        kind_tail: ptr::from_ref(TAIL).cast::<KindTailHead>(),
-        sections: SECTIONS.as_ptr(),
-        sections_len: SECTIONS.len(),
-        needs: NEEDS.as_ptr(),
-        needs_len: NEEDS.len(),
-        ..statement(NAME, env!("CARGO_PKG_VERSION"), 64)
+    statement: {
+        let mut s = statement(NAME, env!("CARGO_PKG_VERSION"), 64)
+            .with_sections(SECTIONS)
+            .with_needs(NEEDS)
+            .with_kind_tail(TAIL);
+        s.extensions = EXTENSIONS;
+        s
     },
     lifecycle: {
         validate: Safe<Validate>, open: Safe<Open>, refresh: Safe<Refresh>, retire: Safe<Retire>,
@@ -1359,6 +1766,10 @@ busbar_contract::plugin_door! {
 #[cfg(test)]
 #[path = "tests/ladder_tests.rs"]
 mod ladder_tests;
+
+#[cfg(test)]
+#[path = "tests/door_tests.rs"]
+mod door_tests;
 
 const _: () = {
     // The ride constants name the needs they say they name.

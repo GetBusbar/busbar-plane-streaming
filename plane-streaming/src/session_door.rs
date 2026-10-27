@@ -19,7 +19,7 @@
 //!   the session's unsolicited output: the door wakes the instance's driver ticket, `drive` names
 //!   the session, and each collection (`FROM_KERNEL`, no bytes, no attempt) answers the next queued
 //!   frame, toward the side it is bound for.
-//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the six classes the plane counts over its
+//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the eight classes the plane counts over its
 //!   closed turns and its open turn's running counts (so a cancel or a cut, which reports nothing
 //!   of its own, bills what streamed from the last answer), and, once the far end has first
 //!   answered the session, its fee unit ([`PER_SESSION_CLASS`], `1`): a session whose far end never
@@ -39,11 +39,11 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use busbar_contract::abi::mechanism::ticket::Ticket;
 
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
-use crate::codec::ir::config::SessionConfig;
+use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
+use crate::codec::ir::media::AudioFormat;
 use crate::codec::ir::GeminiLiveCodec;
 use crate::config::StreamsCfg;
-use crate::driven::{Door, Steps};
-use crate::session_params::g711_over;
+use crate::driven::Door;
 use crate::session_unit::{CumulativeUnits, Plan, SessionUnit};
 
 /// Nanoseconds per second, on the kernel's tick clock.
@@ -56,7 +56,7 @@ const NS_PER_SEC: u64 = 1_000_000_000;
 /// reading on the tick clock, and a ceiling compared across two clocks is no ceiling.
 pub const CEILING_TICK_NS: u64 = NS_PER_SEC;
 
-/// The tail's class index of the session's fee unit (`per_session`), after the six counted
+/// The tail's class index of the session's fee unit (`per_session`), after the eight counted
 /// classes ([`crate::session_unit::CLASSES`]).
 pub const PER_SESSION_CLASS: u32 = crate::session_unit::CLASSES.len() as u32;
 
@@ -75,7 +75,7 @@ pub enum Side {
 /// The session over its door's codec.
 #[derive(Debug)]
 enum Unit {
-    /// The OpenAI Realtime far end (the sideband socket and the telephony socket).
+    /// The OpenAI Realtime far end (the sideband, telephony and plain realtime sockets).
     Realtime(SessionUnit<OpenAiRealtimeCodec>),
     /// The Gemini Live far end.
     Gemini(SessionUnit<GeminiLiveCodec>),
@@ -113,6 +113,17 @@ pub struct Live {
     started_ns: Option<u64>,
     /// The far end has answered the session: its fee unit was incurred.
     answered: bool,
+    /// The far end accepted the session's upgrade (its status a switch or a success).
+    accepted: bool,
+    /// The provider's call a sideband session attaches to, as its arrival named it. The call's
+    /// fee unit was reported by the SDP offer that brokered it, so an attached session reports
+    /// none of its own: one fee per call.
+    call_id: Option<String>,
+    /// The model a session attached to no call names on its dial (`?model=`): the provider's wire
+    /// name for the session model its route was named for (the catalog entry's `upstream_model`,
+    /// else its name; Part 2 #51), on the plain realtime and telephony doors; `None` on the sideband
+    /// (it names its call) and on the Gemini Live socket (its model rides the setup frame).
+    dial_model: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
     pub(crate) near: crate::piece::Owed,
     /// What the frame a far-side answer is writing still owes the reply buffer.
@@ -128,23 +139,30 @@ impl Live {
     /// The session a stream's first piece on `door` opens, under `cfg`; `None` for a door that
     /// answers one request. The telephony door locks the carrier's µ-law on both legs; the other
     /// doors lock the section's session.
+    #[cfg(test)]
     #[must_use]
     pub fn open(door: Door, cfg: &StreamsCfg) -> Option<Live> {
         Self::open_locked(door, cfg, None)
     }
 
     /// The session params `door` locks under `cfg`, as the open's hooks are shown them: the
-    /// section's session, with the carrier's µ-law both ways on the telephony door.
+    /// section's session, with the carrier's 8 kHz µ-law both ways on the telephony door, so it
+    /// passes straight through with no resample.
     #[must_use]
     pub fn locked(door: Door, cfg: &StreamsCfg) -> SessionConfig {
         match door {
-            Door::Twilio => g711_over(&cfg.session),
+            Door::Twilio => SessionConfig {
+                input_audio_format: Some(AudioFormat::G711Ulaw),
+                output_audio_format: Some(AudioFormat::G711Ulaw),
+                ..cfg.session.clone()
+            },
             _ => cfg.session.clone(),
         }
     }
 
     /// [`Self::open`], locked to `rewritten` where a session-open hook rewrote the params
-    /// ([`Self::locked`]) this session opens under.
+    /// ([`Self::locked`]) this session opens under, with the section's two token ceilings applied
+    /// ([`with_ceilings`]).
     #[must_use]
     pub fn open_locked(
         door: Door,
@@ -152,25 +170,18 @@ impl Live {
         rewritten: Option<SessionConfig>,
     ) -> Option<Live> {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
-        let locked = rewritten.unwrap_or_else(|| Self::locked(door, cfg));
+        // The locked session as the provider is told it: under the section's token ceilings, the
+        // session model by its wire name.
+        let locked = with_ceilings(
+            cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg))),
+            cfg,
+        );
         let unit = match door {
-            Door::Sideband => Unit::Realtime(SessionUnit::open(
-                OpenAiRealtimeCodec,
-                locked,
-                false,
-                0,
-                None,
-            )),
-            Door::Twilio => Unit::Realtime(SessionUnit::open(
-                OpenAiRealtimeCodec,
-                locked,
-                true,
-                0,
-                None,
-            )),
-            Door::Gemini => {
-                Unit::Gemini(SessionUnit::open(GeminiLiveCodec, locked, false, 0, None))
+            Door::Sideband | Door::Realtime => {
+                Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, false))
             }
+            Door::Twilio => Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, true)),
+            Door::Gemini => Unit::Gemini(SessionUnit::open(GeminiLiveCodec, locked, false)),
             Door::Mint | Door::Sdp => return None,
         };
         Some(Live {
@@ -180,11 +191,65 @@ impl Live {
             ceiling_secs: ceiling,
             started_ns: None,
             answered: false,
+            accepted: false,
+            call_id: None,
+            dial_model: match door {
+                Door::Realtime | Door::Twilio => cfg
+                    .upstream_model
+                    .clone()
+                    .or_else(|| cfg.session.model.clone()),
+                _ => None,
+            },
             near: crate::piece::Owed::default(),
             far: crate::piece::Owed::default(),
             short_near: None,
             short_far: None,
         })
+    }
+
+    /// The provider's call this session attaches to (the sideband door's `{call_id}`).
+    pub fn attach(&mut self, call_id: String) {
+        self.call_id = Some(call_id);
+    }
+
+    /// The far end accepted the session's upgrade.
+    pub fn accept(&mut self) {
+        self.accepted = true;
+    }
+
+    /// Whether the far end accepted the session's upgrade.
+    #[must_use]
+    pub fn accepted(&self) -> bool {
+        self.accepted
+    }
+
+    /// The provider's call this session is attached to, if any.
+    #[must_use]
+    pub fn call_id(&self) -> Option<&str> {
+        self.call_id.as_deref()
+    }
+
+    /// The target the session dials under the member's base URL: the dialect's socket `path`; for
+    /// a session attached to a provider's call, that call only (`?call_id=`, the provider's
+    /// sideband connection to the call's own session); for a plain or telephony session, the
+    /// session's model (`?model=`, form-escaped, as OpenAI's own WS surface takes it; ARCHITECT
+    /// ruling 2026-10-23 on Part 2 #45).
+    #[must_use]
+    pub fn dial_target(&self, path: &str) -> String {
+        match (&self.call_id, &self.dial_model) {
+            (Some(id), _) => format!("{path}?call_id={id}"),
+            (None, Some(model)) => format!(
+                "{path}?model={}",
+                url::form_urlencoded::byte_serialize(model.as_bytes()).collect::<String>()
+            ),
+            (None, None) => path.to_string(),
+        }
+    }
+
+    /// Whether the session ended on a far-end usage report it could not read and the kernel has
+    /// not been told; telling clears it.
+    pub fn take_unmetered(&mut self) -> bool {
+        each!(&mut self.unit, |u| u.take_unmetered())
     }
 
     /// Queue what `plan` owes either side, the far end's frames first.
@@ -197,6 +262,7 @@ impl Live {
     }
 
     /// A caller piece; `last` = the caller's side ended.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8], last: bool) {
         let plan = each!(&mut self.unit, |u| {
             let mut plan = if bytes.is_empty() {
@@ -213,10 +279,11 @@ impl Live {
         self.take(plan);
     }
 
-    /// A far-end piece, at `now_ms`. The first one incurs the session's fee unit.
-    pub fn from_far_end(&mut self, bytes: &[u8], now_ms: u64) {
+    /// A far-end piece. The first one incurs the session's fee unit.
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_far_end(&mut self, bytes: &[u8]) {
         self.answered = true;
-        let plan = each!(&mut self.unit, |u| u.from_far_end(bytes, now_ms));
+        let plan = each!(&mut self.unit, |u| u.from_far_end(bytes));
         self.take(plan);
     }
 
@@ -266,16 +333,33 @@ impl Live {
     }
 
     /// The session's cumulative units, as the door reports them: (class index, amount), the zero
-    /// classes left out; the fee unit is `1` once the far end has answered.
+    /// classes left out; the fee unit is `1` once the far end has answered, unless the session is
+    /// attached to a call whose SDP offer already reported the call's fee.
     #[must_use]
     pub fn units(&self) -> Vec<(u32, u64)> {
         let units: CumulativeUnits = each!(&self.unit, |u| u.units());
-        let mut out = Door::Sideband.meter(&units);
-        if self.answered {
+        let mut out = units.reported();
+        if self.answered && self.call_id.is_none() {
             out.push((PER_SESSION_CLASS, 1));
         }
         out
     }
+}
+
+/// THE SECTION'S TOKEN CEILINGS over the session params `locked`: the per-response output cap is
+/// `streams.max_output_tokens`, or the session's own where that is lower, and the context window is
+/// `streams.context_window_tokens`. Each dialect states them in its own keys when the session is
+/// locked (`max_output_tokens` and `truncation` on OpenAI Realtime, `generationConfig.maxOutputTokens`
+/// and `contextWindowCompression` on Gemini Live).
+#[must_use]
+pub fn with_ceilings(mut locked: SessionConfig, cfg: &StreamsCfg) -> SessionConfig {
+    let cap = match locked.max_output_tokens {
+        Some(MaxOutputTokens::Limit(n)) => n.min(cfg.max_output_tokens),
+        _ => cfg.max_output_tokens,
+    };
+    locked.max_output_tokens = Some(MaxOutputTokens::Limit(cap));
+    locked.context_window_tokens = Some(cfg.context_window_tokens);
+    locked
 }
 
 /// THE SESSION-OPEN PARAMS A COMMITTED HOOK REWRITE PRODUCED (the session-open hook projection the
@@ -324,10 +408,12 @@ pub struct Sessions {
 
 impl Sessions {
     /// Stream `stream`'s session, opened on `door` under `cfg` at its first piece. `None` for a
-    /// door that answers one request, or a stream past [`MAX_SESSIONS`].
+    /// door that answers one request, a stream past [`MAX_SESSIONS`], or a stream whose session
+    /// ended: a caller's piece after its call ended (a second Twilio `stop`) is refused, as 1.5.5
+    /// refused it, never opened as a fresh session that ends and settles a second time.
     pub fn get_or_open(&mut self, stream: u64, door: Door, cfg: &StreamsCfg) -> Option<&mut Live> {
         if !self.live.contains_key(&stream) {
-            if self.live.len() >= MAX_SESSIONS {
+            if self.live.len() >= MAX_SESSIONS || self.ended.contains(&stream) {
                 return None;
             }
             let rewritten = self.rewritten.remove(&stream);
@@ -406,6 +492,7 @@ impl Sessions {
     }
 
     /// How many streams' sessions owe an answer of their own.
+    #[cfg(test)]
     #[must_use]
     pub fn ready_count(&self) -> usize {
         self.live.values().filter(|l| l.ready()).count()
@@ -419,15 +506,10 @@ impl Sessions {
     }
 
     /// How many sessions are live.
+    #[cfg(test)]
     #[must_use]
     pub fn len(&self) -> usize {
         self.live.len()
-    }
-
-    /// Whether none is.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.live.is_empty()
     }
 }
 

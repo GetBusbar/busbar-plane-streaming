@@ -217,6 +217,8 @@ fn usage_metadata_totals_saturate_rather_than_wrap() {
         audio_out: u64::MAX,
         text_in: 1,
         text_out: 1,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let meta = usage_to_metadata(&u);
@@ -258,11 +260,6 @@ fn an_undecodable_gemini_audio_payload_emits_no_frame() {
             .iter()
             .any(|e| matches!(e, IrServerEvent::AudioFrame(_))),
         "expected no downlink audio frame, got {down:?}"
-    );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "a payload that never decoded must not advance the barge-in playback clock"
     );
 }
 
@@ -715,7 +712,7 @@ fn the_uplink_verbs_gemini_has_no_word_for_frame_nothing() {
 // ── serverContent (downlink audio, turn/interrupt) ───────────────────────────────────────────────
 
 #[test]
-fn server_content_audio_frames_down_tracks_playback() {
+fn server_content_audio_frames_down() {
     let codec = GeminiLiveCodec;
     let mut st = DecodeState::default();
     st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
@@ -732,7 +729,6 @@ fn server_content_audio_frames_down_tracks_playback() {
     assert_eq!(f.dir, UpDown::Down);
     assert_eq!(f.seq, 0);
     assert_eq!(f.media.len(), 96);
-    assert_eq!(st.played_ms(), 2, "96 bytes of pcm16 @24kHz is 2 ms");
 }
 
 #[test]
@@ -779,33 +775,6 @@ fn server_content_audio_then_turn_complete_is_multi_event() {
 }
 
 #[test]
-fn the_gemini_turn_boundary_resets_the_playback_position() {
-    // `turnComplete` IS Gemini's item boundary; the next turn's barge-in must truncate at the audio of
-    // THAT turn, not at the session's running total.
-    let codec = GeminiLiveCodec;
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
-    let turn = |ms: usize| {
-        json!({
-            "serverContent": {
-                "modelTurn": { "parts": [ { "inlineData": {
-                    "mimeType": "audio/pcm;rate=24000", "data": b64(&vec![0u8; 48 * ms])
-                } } ] }
-            }
-        })
-        .to_string()
-    };
-    let _ = codec.read_down(wire(&turn(1000)), &mut st);
-    let _ = codec.read_down(
-        wire(&json!({ "serverContent": { "turnComplete": true } }).to_string()),
-        &mut st,
-    );
-    assert_eq!(st.played_ms(), 0, "turnComplete zeroes the played position");
-    let _ = codec.read_down(wire(&turn(240)), &mut st);
-    assert_eq!(st.flush_playback(), 240, "this turn's audio only");
-}
-
-#[test]
 fn a_downlink_blob_at_the_uplink_rate_is_not_counted_as_playback() {
     // The playback position is BYTES ÷ the negotiated format's bytes-per-ms, and `pcm16` means
     // 24 kHz (48 B/ms). A downlink blob tagged 16 kHz is not that format: counted at 48 B/ms it
@@ -822,11 +791,6 @@ fn a_downlink_blob_at_the_uplink_rate_is_not_counted_as_playback() {
         ir.is_empty(),
         "a downlink blob at a rate this dialect does not synthesize has no frame: {ir:?}"
     );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "and nothing it carried was accounted as played"
-    );
     // The 24 kHz downlink the dialect DOES synthesize still counts.
     let ok = json!({
         "serverContent": { "modelTurn": { "parts": [
@@ -834,7 +798,6 @@ fn a_downlink_blob_at_the_uplink_rate_is_not_counted_as_playback() {
         ] } }
     });
     assert_eq!(codec.read_down(wire(&ok.to_string()), &mut st).len(), 1);
-    assert_eq!(st.played_ms(), 10, "480 bytes at 48 B/ms");
 }
 
 // ── setupComplete ↔ SessionCreated ────────────────────────────────────────────────────────────────
@@ -1148,6 +1111,109 @@ fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
         50,
         "the output classes bill the stated total, never zero"
     );
+}
+
+/// The usage a Gemini `usageMetadata` object reads as.
+fn usage_of(meta: Value) -> IrDuplexUsage {
+    let src = json!({ "usageMetadata": meta });
+    let ir = GeminiLiveCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    ir.iter()
+        .find_map(|e| match e {
+            IrServerEvent::Usage(u) => Some(*u),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected a Usage: {ir:?}"))
+}
+
+/// RED-BEFORE-GREEN (MONEY; the `Modality` enum names TEXT, IMAGE, VIDEO, AUDIO and DOCUMENT): a
+/// turn whose prompt carried camera frames bills its IMAGE and VIDEO tokens, each under its own
+/// class, and the input classes sum to the prompt. RED: only the AUDIO and TEXT entries were read,
+/// so the image and video tokens billed zero.
+#[test]
+fn image_and_video_prompt_tokens_are_billed() {
+    let u = usage_of(json!({
+        "promptTokenCount": 160,
+        "responseTokenCount": 50,
+        "totalTokenCount": 210,
+        "promptTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 80 },
+            { "modality": "TEXT", "tokenCount": 15 },
+            { "modality": "IMAGE", "tokenCount": 25 },
+            { "modality": "VIDEO", "tokenCount": 40 }
+        ],
+        "responseTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 40 },
+            { "modality": "TEXT", "tokenCount": 10 }
+        ]
+    }));
+    assert_eq!(
+        (u.audio_in, u.text_in, u.image_in, u.video_in),
+        (80, 15, 25, 40),
+        "{u:?}"
+    );
+    assert_eq!((u.audio_out, u.text_out), (40, 10), "{u:?}");
+    let billed = crate::session::class_counts(Some(&u), crate::session::TurnCounters::default());
+    for (class, n) in [
+        (crate::meta::CLASS_IMAGE_TOKENS_IN, 25),
+        (crate::meta::CLASS_VIDEO_TOKENS_IN, 40),
+    ] {
+        assert!(billed.contains(&(class, n)), "{class:?}: {billed:?}");
+    }
+}
+
+/// RED-BEFORE-GREEN (MONEY; the owner's gemini-tool-use-billing ruling: "a grounded Gemini turn
+/// bills Google's total, tool-use prompt tokens included"; `toolUsePromptTokenCount` is the "Number
+/// of tokens present in tool-use prompt(s)"): the tool-use prompt bills as input. RED: the field was
+/// never read and billed zero.
+#[test]
+fn tool_use_prompt_tokens_are_billed() {
+    let u = usage_of(json!({
+        "promptTokenCount": 95,
+        "toolUsePromptTokenCount": 30,
+        "responseTokenCount": 50,
+        "totalTokenCount": 175,
+        "promptTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 80 },
+            { "modality": "TEXT", "tokenCount": 15 }
+        ],
+        "toolUsePromptTokensDetails": [ { "modality": "TEXT", "tokenCount": 30 } ]
+    }));
+    assert_eq!((u.audio_in, u.text_in), (80, 45), "{u:?}");
+    assert_eq!(u.audio_out + u.text_out, 50, "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY; `thoughtsTokenCount` is the "Number of tokens of thoughts for thinking
+/// models", and Google's price list states "Output price (including thinking tokens)"): a thinking
+/// model's thought tokens bill as output. RED: the field was never read and billed zero.
+#[test]
+fn thought_tokens_are_billed_as_output() {
+    let u = usage_of(json!({
+        "promptTokenCount": 95,
+        "responseTokenCount": 50,
+        "thoughtsTokenCount": 120,
+        "totalTokenCount": 265,
+        "responseTokensDetails": [
+            { "modality": "AUDIO", "tokenCount": 40 },
+            { "modality": "TEXT", "tokenCount": 10 }
+        ]
+    }));
+    assert_eq!(u.audio_in + u.text_in, 95, "{u:?}");
+    assert_eq!((u.audio_out, u.text_out), (40, 130), "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY; the owner's ruling bills "Google's total"): where `totalTokenCount`
+/// states more than the prompt, tool-use prompt, response and thoughts it breaks into, the
+/// remainder bills as input, so the turn's classes sum to Google's total. RED: the total was never
+/// read and the remainder billed zero.
+#[test]
+fn googles_total_is_billed_when_it_exceeds_its_parts() {
+    let u = usage_of(json!({
+        "promptTokenCount": 95,
+        "responseTokenCount": 50,
+        "totalTokenCount": 160
+    }));
+    assert_eq!(u.audio_in + u.text_in, 110, "{u:?}");
+    assert_eq!(u.audio_out + u.text_out, 50, "{u:?}");
 }
 
 #[test]
