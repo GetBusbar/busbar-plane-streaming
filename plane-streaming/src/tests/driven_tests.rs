@@ -35,7 +35,7 @@ fn the_mint_attempt_names_the_caller_and_carries_the_locked_session() {
         instructions: Some("locked".into()),
         ..SessionConfig::default()
     };
-    let a = mint_attempt(&cfg, Some("vk-1"), None).expect("serializes");
+    let a = mint_attempt(&cfg, Some("vk-1")).expect("serializes");
     assert_eq!((a.verb, a.target), ("POST", "/v1/realtime/client_secrets"));
     assert_eq!(
         a.fields,
@@ -53,7 +53,7 @@ fn the_mint_attempt_names_the_caller_and_carries_the_locked_session() {
             .all(|(n, _)| !n.eq_ignore_ascii_case("authorization")),
         "the plane never writes the credential; the kernel adds it"
     );
-    let anonymous = mint_attempt(&cfg, None, None).expect("serializes");
+    let anonymous = mint_attempt(&cfg, None).expect("serializes");
     assert_eq!(
         anonymous.fields,
         vec![("content-type", "application/json".to_string())],
@@ -166,20 +166,10 @@ fn a_status_prints_with_its_reason_phrase_when_it_has_one() {
 }
 
 #[test]
-fn each_loop_step_has_the_planes_answer() {
-    use busbar_contract::abi::plane::PRINCIPAL_REQUIRED;
-    assert_eq!(Door::Mint.authenticate(), PRINCIPAL_REQUIRED);
-    assert_eq!(Door::Twilio.authenticate(), PRINCIPAL_REQUIRED);
-    assert_eq!(Door::Sideband.verify(), "session.model");
-    assert_eq!(Door::Sideband.approve(), ("session", "streaming-server"));
-    assert!(
-        Door::Sideband.admit().is_empty(),
-        "a session pays for what the far end reports"
-    );
+fn each_door_routes_and_meters_as_the_plane_answers() {
     let cfg = SessionConfig::default();
     let sock = Door::Gemini
         .route(&cfg, None, b"")
-        .expect("routes")
         .expect("a session dials");
     assert_eq!(sock.verb, "GET");
     assert!(
@@ -188,13 +178,13 @@ fn each_loop_step_has_the_planes_answer() {
     );
     assert_eq!(
         Door::Sdp.route(&cfg, None, b"v=0").expect("routes"),
-        Some(sdp_attempt(b"v=0"))
+        sdp_attempt(b"v=0")
     );
     let mut units = crate::session_unit::CumulativeUnits::default();
     units.0[1] = 20;
     units.0[4] = 2;
-    assert_eq!(Door::Sideband.meter(&units), vec![(1, 20), (4, 2)]);
-    assert_eq!(Door::Mint.audit(), "streaming.session.open");
+    assert_eq!(units.reported(), vec![(1, 20), (4, 2)]);
+    assert_eq!(SESSION_OPEN_ACTION, crate::meta::OP_SESSION_OPEN.as_str());
 }
 
 /// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on `BUSBAR-1.6.0.md` Part 2 #45,
@@ -220,7 +210,6 @@ fn plain_openai_realtime_over_ws_is_its_own_session_door() {
     let dial = a
         .door
         .route(&SessionConfig::default(), None, b"")
-        .expect("routes")
         .expect("a session door dials");
     assert_eq!(
         (dial.verb, dial.target),

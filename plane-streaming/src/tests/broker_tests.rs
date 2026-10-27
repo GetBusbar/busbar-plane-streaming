@@ -6,21 +6,13 @@
 use super::*;
 
 #[test]
-fn a_mint_asks_for_the_requested_lifetime_held_inside_its_bounds() {
-    assert_eq!(clamped_ttl_secs(None), 600);
-    assert_eq!(clamped_ttl_secs(Some(1)), 10);
-    assert_eq!(clamped_ttl_secs(Some(99_999)), 7200);
-    assert_eq!(clamped_ttl_secs(Some(300)), 300);
-}
-
-#[test]
 fn the_mint_body_anchors_the_lifetime_and_carries_the_locked_session() {
     let cfg = SessionConfig {
         instructions: Some("be brief".into()),
         ..SessionConfig::default()
     };
     let body: serde_json::Value =
-        serde_json::from_slice(&mint_request_body(600, &cfg).expect("serializes")).expect("json");
+        serde_json::from_slice(&mint_request_body(&cfg).expect("serializes")).expect("json");
     assert_eq!(
         body["expires_after"],
         serde_json::json!({"anchor": "created_at", "seconds": 600})
@@ -42,7 +34,7 @@ fn the_mint_body_binds_the_session_in_the_ga_shape() {
         ..SessionConfig::default()
     };
     let body: serde_json::Value =
-        serde_json::from_slice(&mint_request_body(600, &cfg).expect("serializes")).expect("json");
+        serde_json::from_slice(&mint_request_body(&cfg).expect("serializes")).expect("json");
     let session = &body["session"];
     assert_eq!(session["type"], "realtime", "{body}");
     assert!(session.get("input_audio_format").is_none(), "{body}");
