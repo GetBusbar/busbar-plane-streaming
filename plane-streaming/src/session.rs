@@ -118,6 +118,8 @@ pub fn class_counts(
         (meta::CLASS_TEXT_TOKENS_OUT, reported.text_out),
         (meta::CLASS_AUDIO_SECONDS_IN, counters.audio_seconds_in()),
         (meta::CLASS_TOOL_CALLS, counters.tool_calls),
+        (meta::CLASS_IMAGE_TOKENS_IN, reported.image_in),
+        (meta::CLASS_VIDEO_TOKENS_IN, reported.video_in),
     ]
     .into_iter()
     .filter(|(_, n)| *n != 0)

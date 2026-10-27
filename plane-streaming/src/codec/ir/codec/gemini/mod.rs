@@ -64,7 +64,6 @@ mod wire {
     pub const SETUP_COMPLETE: &str = "setupComplete";
     pub const SERVER_CONTENT: &str = "serverContent";
     pub const TOOL_CALL: &str = "toolCall";
-    pub const TOOL_CALL_CANCELLATION: &str = "toolCallCancellation";
     pub const USAGE_METADATA: &str = "usageMetadata";
 }
 
@@ -275,6 +274,7 @@ fn session_config_from_setup(setup: &Value, st: &mut DecodeState) -> SessionConf
             .unwrap_or_default(),
         tool_choice: None,
         max_output_tokens,
+        context_window_tokens: None,
     }
 }
 
@@ -331,6 +331,14 @@ fn setup_from_session_config(cfg: &SessionConfig) -> Value {
     if !cfg.tools.is_empty() {
         setup.insert("tools".into(), Value::Array(cfg.tools.clone()));
     }
+    if let Some(trigger) = cfg.context_window_tokens {
+        // The plane's context-window ceiling: the far end compresses the context, on its sliding
+        // window, once it reaches it.
+        setup.insert(
+            "contextWindowCompression".into(),
+            json!({ "triggerTokens": trigger, "slidingWindow": {} }),
+        );
+    }
     // Three-state (see `SessionConfig::turn_detection`): an ABSENT turn_detection names no setting,
     // so no `realtimeInputConfig` is written at all and the session keeps what it had. Only an
     // explicit `null` writes Gemini's own disable marker.
@@ -368,61 +376,81 @@ fn setup_from_session_config(cfg: &SessionConfig) -> Value {
 
 // ── usage ↔ usageMetadata ─────────────────────────────────────────────────────────────────────────
 
-/// Pull a per-modality token count out of a Gemini `*TokensDetails` array (`[{modality, tokenCount}]`).
-/// A BILLED COUNT, read through [`billed_count`]: an absent modality or count is zero, a present but
-/// unreadable one is an `Err` the caller turns into a refusal (#42).
-fn modality_tokens(details: Option<&Value>, modality: &str) -> Result<u64, String> {
-    let entry = details
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|d| {
-            d.get("modality")
-                .and_then(Value::as_str)
-                .map(str::to_ascii_uppercase)
-                == Some(modality.to_string())
-        });
-    billed_count(entry, "tokenCount")
+/// The modality split of a Gemini `*TokensDetails` array (`[{modality, tokenCount}]`): its AUDIO,
+/// IMAGE and VIDEO entries, and the sum of every entry. BILLED COUNTS, read through
+/// [`billed_count`]: an absent array, modality or count is zero, a present but unreadable count is
+/// an `Err` the caller turns into a refusal (#42).
+#[derive(Default)]
+struct Split {
+    audio: u64,
+    image: u64,
+    video: u64,
+    all: u64,
+}
+
+fn modality_split(details: Option<&Value>) -> Result<Split, String> {
+    let mut split = Split::default();
+    for d in details.and_then(Value::as_array).into_iter().flatten() {
+        let n = billed_count(Some(d), "tokenCount")?;
+        split.all = split.all.saturating_add(n);
+        let modality = d
+            .get("modality")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let class = if modality.eq_ignore_ascii_case("AUDIO") {
+            &mut split.audio
+        } else if modality.eq_ignore_ascii_case("IMAGE") {
+            &mut split.image
+        } else if modality.eq_ignore_ascii_case("VIDEO") {
+            &mut split.video
+        } else {
+            continue;
+        };
+        *class = class.saturating_add(n);
+    }
+    Ok(split)
 }
 
 /// Extract the split token classes from a Gemini `usageMetadata` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
 /// SEPARATE classes; extraction-only, never client-translated).
 ///
-/// The per-modality breakdown (`promptTokensDetails`/`responseTokensDetails`) is a REFINEMENT of the
-/// stated `promptTokenCount`/`responseTokenCount` totals, never their sole source — Gemini can omit
-/// the breakdown while still stating the totals. Reading a missing breakdown as zero tokens metered a
-/// real turn at zero (silent under-billing, the one outcome #42 forbids outside billing being off);
-/// when the breakdown yields nothing, the stated total is billed instead (attributed to `text`, the
-/// conservative default when the split is unknown — this only changes the audio/text LABEL, never the
-/// input/output lane the billing fold sums onto, and it is an integer passthrough of the wire figure,
-/// no rate lookup or multiply).
+/// GOOGLE'S TOTAL IS BILLED (the owner's gemini-tool-use-billing ruling, `BUSBAR-1.6.0.md`: "a
+/// grounded Gemini turn bills Google's total, tool-use prompt tokens included"). Input is the
+/// prompt (the larger of `promptTokenCount` and the sum of every `promptTokensDetails` entry, so
+/// IMAGE, VIDEO and DOCUMENT tokens bill beside AUDIO and TEXT) plus the tool-use prompt (the larger
+/// of `toolUsePromptTokenCount` and its `toolUsePromptTokensDetails`); output is the response (the
+/// larger of `responseTokenCount` and its `responseTokensDetails`) plus `thoughtsTokenCount`, which
+/// Google prices as output ("Output price (including thinking tokens)"). Where `totalTokenCount`
+/// states more than that sum, the remainder bills as input text. AUDIO, IMAGE and VIDEO entries bill
+/// as their own declared classes; every other token is attributed to `text`. It is an integer
+/// passthrough of the wire figures, no rate lookup or multiply.
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
 /// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
 fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
-    let pd = u.get("promptTokensDetails");
-    let rd = u.get("responseTokensDetails");
-    let (audio_in, text_in) = {
-        let (a, t) = (modality_tokens(pd, "AUDIO")?, modality_tokens(pd, "TEXT")?);
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "promptTokenCount")?)
-        } else {
-            (a, t)
-        }
-    };
-    let (audio_out, text_out) = {
-        let (a, t) = (modality_tokens(rd, "AUDIO")?, modality_tokens(rd, "TEXT")?);
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "responseTokenCount")?)
-        } else {
-            (a, t)
-        }
-    };
+    let prompt = modality_split(u.get("promptTokensDetails"))?;
+    let tool = modality_split(u.get("toolUsePromptTokensDetails"))?;
+    let response = modality_split(u.get("responseTokensDetails"))?;
+    let audio_in = prompt.audio.saturating_add(tool.audio);
+    let image_in = prompt.image.saturating_add(tool.image);
+    let video_in = prompt.video.saturating_add(tool.video);
+    let input = billed_count(Some(u), "promptTokenCount")?
+        .max(prompt.all)
+        .saturating_add(billed_count(Some(u), "toolUsePromptTokenCount")?.max(tool.all));
+    let output = billed_count(Some(u), "responseTokenCount")?
+        .max(response.all)
+        .saturating_add(billed_count(Some(u), "thoughtsTokenCount")?);
+    let input = input.max(billed_count(Some(u), "totalTokenCount")?.saturating_sub(output));
     Ok(IrDuplexUsage {
         audio_in,
-        text_in,
-        audio_out,
-        text_out,
+        text_in: input
+            .saturating_sub(audio_in)
+            .saturating_sub(image_in)
+            .saturating_sub(video_in),
+        audio_out: response.audio,
+        text_out: output.saturating_sub(response.audio),
+        image_in,
+        video_in,
         cached: billed_count(Some(u), "cachedContentTokenCount")?,
     })
 }
@@ -432,11 +460,15 @@ fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
 /// The sums SATURATE for the same reason the OpenAI re-frame's do: these counts came off an
 /// upstream `usageMetadata` object, and a wrapped total is a small number that is false.
 fn usage_to_metadata(u: &IrDuplexUsage) -> Value {
-    json!({
-        "promptTokenCount": u.audio_in.saturating_add(u.text_in),
+    let prompt = u
+        .audio_in
+        .saturating_add(u.text_in)
+        .saturating_add(u.image_in)
+        .saturating_add(u.video_in);
+    let mut meta = json!({
+        "promptTokenCount": prompt,
         "responseTokenCount": u.audio_out.saturating_add(u.text_out),
-        "totalTokenCount": u.audio_in
-            .saturating_add(u.text_in)
+        "totalTokenCount": prompt
             .saturating_add(u.audio_out)
             .saturating_add(u.text_out),
         "cachedContentTokenCount": u.cached,
@@ -448,7 +480,15 @@ fn usage_to_metadata(u: &IrDuplexUsage) -> Value {
             { "modality": "AUDIO", "tokenCount": u.audio_out },
             { "modality": "TEXT", "tokenCount": u.text_out },
         ],
-    })
+    });
+    if let Some(details) = meta["promptTokensDetails"].as_array_mut() {
+        for (modality, n) in [("IMAGE", u.image_in), ("VIDEO", u.video_in)] {
+            if n != 0 {
+                details.push(json!({ "modality": modality, "tokenCount": n }));
+            }
+        }
+    }
+    meta
 }
 
 // ── reader ──────────────────────────────────────────────────────────────────────────────────────
@@ -596,7 +636,6 @@ impl DuplexReader for GeminiLiveCodec {
                         let Some(media) = decode_audio(str_at(inline, "data")) else {
                             continue; // a payload that is not base64 is not silence — emit no frame.
                         };
-                        st.record_played(media.len() as u64);
                         out.push(IrServerEvent::AudioFrame(IrAudioFrame {
                             dir: UpDown::Down,
                             seq: st.next_down_seq(),
@@ -619,9 +658,6 @@ impl DuplexReader for GeminiLiveCodec {
                 });
             }
             if sc.get("turnComplete").and_then(Value::as_bool) == Some(true) {
-                // THE GEMINI ITEM BOUNDARY: the turn's audio is complete, so the played-out position
-                // starts over — the next turn's barge-in truncates at ITS audio, not the running total.
-                st.reset_playback();
                 out.push(IrServerEvent::AudioDone {
                     item_id: String::new(),
                 });
@@ -662,7 +698,6 @@ impl DuplexReader for GeminiLiveCodec {
         } else {
             // `toolCallCancellation`, `goAway`, `sessionResumptionUpdate` and any unknown frame have no
             // shared IR home — degrade to empty (drop+warn).
-            let _ = wire::TOOL_CALL_CANCELLATION;
             Vec::new()
         };
 
@@ -678,6 +713,34 @@ impl DuplexReader for GeminiLiveCodec {
 }
 
 // ── writer ──────────────────────────────────────────────────────────────────────────────────────
+
+/// One tool event framed for either direction: `None` while a call's arguments are still
+/// accumulating (or a close finds no accumulation to frame).
+fn tool_event(t: IrDuplexTool, st: &mut DecodeState) -> Option<Value> {
+    Some(match t {
+        IrDuplexTool::CallOpen { call_id, name, .. } => {
+            // The announcement names the tool; the ARGUMENTS follow as fragments and the call
+            // is framed whole at its close, so the name is remembered for that frame.
+            st.remember_call_name(&call_id, &name);
+            tool_call_frame(json!({ "id": call_id, "name": name }))
+        }
+        IrDuplexTool::CallArgs {
+            call_ref,
+            json_delta,
+            ..
+        } => {
+            st.push_call_args(call_ref, &json_delta);
+            return None;
+        }
+        IrDuplexTool::CallClose { call_ref, call_id } => atomic_tool_call(call_ref, &call_id, st)?,
+        IrDuplexTool::CallResult {
+            call_id,
+            name,
+            output,
+            ..
+        } => tool_response_frame(&call_id, &name, &output),
+    })
+}
 
 /// Frame one Gemini `toolCall` around a single `functionCall` object.
 fn tool_call_frame(fc: Value) -> Value {
@@ -776,37 +839,9 @@ impl DuplexWriter for GeminiLiveCodec {
                 | IrDuplexControl::ItemDelete { .. }
                 | IrDuplexControl::ItemTruncate { .. } => return None,
             },
-            IrClientEvent::Tool(t) => match t {
-                IrDuplexTool::CallResult {
-                    call_id,
-                    name,
-                    output,
-                    ..
-                } => tool_response_frame(&call_id, &name, &output),
-                // The other tool variants are server→client; a client-side writer never authors them,
-                // but frame them symmetrically (through the same accumulate-then-frame-at-close seam)
-                // rather than panic.
-                IrDuplexTool::CallOpen {
-                    call_ref,
-                    call_id,
-                    name,
-                } => {
-                    st.remember_call_name(&call_id, &name);
-                    let _ = call_ref;
-                    tool_call_frame(json!({ "id": call_id, "name": name }))
-                }
-                IrDuplexTool::CallArgs {
-                    call_ref,
-                    json_delta,
-                    ..
-                } => {
-                    st.push_call_args(call_ref, &json_delta);
-                    return None;
-                }
-                IrDuplexTool::CallClose { call_ref, call_id } => {
-                    atomic_tool_call(call_ref, &call_id, st)?
-                }
-            },
+            // The server→client tool variants are framed symmetrically (through the same
+            // accumulate-then-frame-at-close seam) rather than panic.
+            IrClientEvent::Tool(t) => tool_event(t, st)?,
         };
         Some(wire_of(&v))
     }
@@ -814,36 +849,7 @@ impl DuplexWriter for GeminiLiveCodec {
     fn write_down(&self, ev: IrServerEvent, st: &mut DecodeState) -> Option<WireEvent> {
         let v = match ev {
             IrServerEvent::SessionCreated { session } => json!({ wire::SETUP_COMPLETE: session }),
-            IrServerEvent::Tool(t) => match t {
-                IrDuplexTool::CallOpen {
-                    call_ref,
-                    call_id,
-                    name,
-                } => {
-                    // The announcement names the tool; the ARGUMENTS follow as fragments and the call
-                    // is framed whole at its close, so the name is remembered for that frame.
-                    st.remember_call_name(&call_id, &name);
-                    let _ = call_ref;
-                    tool_call_frame(json!({ "id": call_id, "name": name }))
-                }
-                IrDuplexTool::CallArgs {
-                    call_ref,
-                    json_delta,
-                    ..
-                } => {
-                    st.push_call_args(call_ref, &json_delta);
-                    return None;
-                }
-                IrDuplexTool::CallClose { call_ref, call_id } => {
-                    atomic_tool_call(call_ref, &call_id, st)?
-                }
-                IrDuplexTool::CallResult {
-                    call_id,
-                    name,
-                    output,
-                    ..
-                } => tool_response_frame(&call_id, &name, &output),
-            },
+            IrServerEvent::Tool(t) => tool_event(t, st)?,
             // Gemini's barge-in signal is `serverContent.interrupted`; the shared SpeechStarted maps
             // onto it. SpeechStopped has no Gemini wire event → an empty serverContent (dropped).
             IrServerEvent::SpeechStarted { .. } => json!({

@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 
 use crate::codec::ir::codec::gemini::{setup_locked, GeminiLiveCodec};
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
-use crate::codec::ir::config::SessionConfig;
+use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
 use crate::codec::ir::media::AudioFormat;
 
 /// Where in a dialect's caller frame the governed object sits, and what is done to it.
@@ -34,6 +34,30 @@ pub struct Rule {
     /// The locked members put in, each over the caller's own (an object over an object is merged
     /// member by member).
     pub set: Map<String, Value>,
+    /// The far end reads the object as protobuf JSON, which takes a field under its original
+    /// snake_case name as well as its lowerCamelCase JSON name (`system_instruction` is
+    /// `systemInstruction`): every key is compared under the lowerCamelCase name, so each spelling
+    /// of a governed field is governed.
+    pub proto_names: bool,
+    /// The numeric members capped at the session's ceiling ([`Cap`]).
+    pub caps: Vec<Cap>,
+}
+
+/// A numeric member a rule caps: written once, as the lower of the caller's own value and
+/// `ceiling`, and as `ceiling` where the caller wrote one that is not a whole number (`"inf"`) or
+/// one above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cap {
+    /// The objects, from the governed one down, the member sits in (`[]`: the governed object's
+    /// own member).
+    pub path: &'static [&'static str],
+    /// The member's key.
+    pub key: &'static str,
+    /// The ceiling.
+    pub ceiling: u64,
+    /// Whether the member is written at `ceiling` where the caller wrote none; otherwise a frame
+    /// that does not name the key is left without it.
+    pub when_absent: bool,
 }
 
 /// THE DIALECT'S GOVERNED KEYS: which caller frames a session's lock splices, and how. Every rule
@@ -44,9 +68,13 @@ pub trait LockedKeys {
     /// The rule for the object that configures the session (`session.update`'s `session`, `setup`),
     /// locked to `locked`.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule;
-    /// The rule for the object that asks for one response under its own settings; `None` for a
-    /// dialect with no such object.
-    fn response_rule(&self) -> Option<Rule>;
+    /// The rule for the object that asks for one response under its own settings, capped at the
+    /// output ceiling `locked` states; `None` for a dialect with no such object.
+    fn response_rule(&self, locked: &SessionConfig) -> Option<Rule>;
+    /// The frame that tells the far end the session is locked to `locked`, in the shape its
+    /// socket reads, for a caller-side envelope that configures nothing itself (the telephony
+    /// carrier); `None` for a dialect whose writer frames it.
+    fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>>;
     /// Whether `frame` carries an item the caller may never author: a conversation item, or a
     /// per-response input item, in a role that instructs the model (`system`, `developer`). Such a
     /// frame goes nowhere. A frame whose bytes cannot be read here is answered `true`.
@@ -58,6 +86,26 @@ pub trait LockedKeys {
     fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable>;
 }
 
+/// The OpenAI Realtime member a response's output ceiling is written in.
+const MAX_OUTPUT_TOKENS: &str = "max_output_tokens";
+/// The pre-GA spelling of a session's per-response output ceiling, which a far end may still read.
+const MAX_RESPONSE_OUTPUT_TOKENS: &str = "max_response_output_tokens";
+
+/// Gemini Live's `setup` member holding the output ceiling.
+const GENERATION_CONFIG: &str = "generationConfig";
+/// The path to Gemini Live's output ceiling under `setup`.
+const GENERATION_CONFIG_PATH: &[&str] = &[GENERATION_CONFIG];
+/// Gemini Live's output ceiling, under `setup.generationConfig`.
+const MAX_OUTPUT_TOKENS_LIVE: &str = "maxOutputTokens";
+
+/// The output ceiling `locked` states, as a whole number; `None` for none (or `"inf"`).
+fn output_ceiling(locked: &SessionConfig) -> Option<u64> {
+    match locked.max_output_tokens {
+        Some(MaxOutputTokens::Limit(n)) => Some(u64::from(n)),
+        _ => None,
+    }
+}
+
 /// OpenAI Realtime: `session.update`'s `session`, and `response.create`'s `response`. A stored
 /// `prompt` is instructions by reference, so it is the caller's to author no more than they are.
 const REALTIME_CUT: &[&str] = &["instructions", "tools", "prompt"];
@@ -67,23 +115,72 @@ const LIVE_CUT: &[&str] = &["systemInstruction", "tools"];
 const INSTRUCTING_ROLES: &[&str] = &["system", "developer"];
 
 impl LockedKeys for OpenAiRealtimeCodec {
+    /// The locked keys in the GA `session` shape the GA socket reads
+    /// ([`SessionConfig::ga_session`]): a caller's GA members are merged with them member by
+    /// member (`audio.input`, `audio.output`).
+    ///
+    /// The output ceiling is not set over the caller's: the caller's GA `max_output_tokens` is
+    /// held to the lower of its value and the ceiling, and is the ceiling where it names none; a
+    /// pre-GA `max_response_output_tokens` the caller writes is held the same way, and is never
+    /// added (the GA session object reads the GA key, which carries the ceiling).
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
+        let mut set = locked.ga_session();
+        set.remove(MAX_OUTPUT_TOKENS);
+        let caps = output_ceiling(locked)
+            .map(|ceiling| {
+                vec![
+                    Cap {
+                        path: &[],
+                        key: MAX_OUTPUT_TOKENS,
+                        ceiling,
+                        when_absent: true,
+                    },
+                    Cap {
+                        path: &[],
+                        key: MAX_RESPONSE_OUTPUT_TOKENS,
+                        ceiling,
+                        when_absent: false,
+                    },
+                ]
+            })
+            .unwrap_or_default();
         Rule {
             at: "session",
             cut: REALTIME_CUT,
-            set: match serde_json::to_value(locked) {
-                Ok(Value::Object(m)) => m,
-                _ => Map::new(),
-            },
+            set,
+            proto_names: false,
+            caps,
         }
     }
 
-    fn response_rule(&self) -> Option<Rule> {
+    /// `response.create`'s `response`: a caller's own `max_output_tokens` never lifts the
+    /// session's output ceiling ([`crate::session_door::with_ceilings`]); the response asks for
+    /// the lower of the two, and for the ceiling where the caller names none.
+    fn response_rule(&self, locked: &SessionConfig) -> Option<Rule> {
         Some(Rule {
             at: "response",
             cut: REALTIME_CUT,
             set: Map::new(),
+            proto_names: false,
+            caps: output_ceiling(locked)
+                .map(|ceiling| Cap {
+                    path: &[],
+                    key: MAX_OUTPUT_TOKENS,
+                    ceiling,
+                    when_absent: true,
+                })
+                .into_iter()
+                .collect(),
         })
+    }
+
+    /// A GA `session.update` carrying the locked session ([`SessionConfig::ga_session`]).
+    fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "session.update",
+            "session": Value::Object(locked.ga_session()),
+        }))
+        .ok()
     }
 
     /// `conversation.item.create`'s `item`, and `response.create`'s `response.input` items, read
@@ -276,15 +373,43 @@ fn elements(b: &[u8], open: usize) -> Option<Vec<usize>> {
 }
 
 impl LockedKeys for GeminiLiveCodec {
+    /// `setup`, locked to `locked`. The output ceiling is not set over the caller's: the
+    /// caller's `generationConfig.maxOutputTokens` is held to the lower of its value and the
+    /// ceiling, and is the ceiling where it names none.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
+        let mut set = setup_locked(locked);
+        let emptied = match set.get_mut(GENERATION_CONFIG) {
+            Some(Value::Object(config)) => {
+                config.remove(MAX_OUTPUT_TOKENS_LIVE);
+                config.is_empty()
+            }
+            _ => false,
+        };
+        if emptied {
+            set.remove(GENERATION_CONFIG);
+        }
         Rule {
             at: "setup",
             cut: LIVE_CUT,
-            set: setup_locked(locked),
+            set,
+            proto_names: true,
+            caps: output_ceiling(locked)
+                .map(|ceiling| Cap {
+                    path: GENERATION_CONFIG_PATH,
+                    key: MAX_OUTPUT_TOKENS_LIVE,
+                    ceiling,
+                    when_absent: true,
+                })
+                .into_iter()
+                .collect(),
         }
     }
 
-    fn response_rule(&self) -> Option<Rule> {
+    fn response_rule(&self, _locked: &SessionConfig) -> Option<Rule> {
+        None
+    }
+
+    fn locked_frame(&self, _locked: &SessionConfig) -> Option<Vec<u8>> {
         None
     }
 
@@ -315,7 +440,14 @@ pub fn splice(frame: &[u8], rule: &Rule) -> Option<Vec<u8>> {
         if frame.get(m.value.0) != Some(&b'{') {
             continue;
         }
-        let edited = object(frame, m.value.0, rule.cut, &rule.set)?;
+        let edited = object(
+            frame,
+            m.value.0,
+            rule.cut,
+            &rule.set,
+            rule.proto_names,
+            &rule.caps,
+        )?;
         out.extend_from_slice(&frame[at..m.value.0]);
         out.extend_from_slice(&edited);
         at = m.value.1;
@@ -331,10 +463,64 @@ struct JsonMember {
     value: (usize, usize),
 }
 
-/// The object at `b[open]`, rebuilt: the caller's members not cut and not set, in order and byte
-/// for byte, then each `set` member (merged into the caller's when both are objects).
-fn object(b: &[u8], open: usize, cut: &[&str], set: &Map<String, Value>) -> Option<Vec<u8>> {
+/// `key` as a protobuf JSON reader resolves it when `proto` (its lowerCamelCase JSON name: an
+/// underscore is dropped and the letter after it raised), else as written.
+fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
+    if !proto || !key.contains('_') {
+        return std::borrow::Cow::Borrowed(key);
+    }
+    let mut out = String::with_capacity(key.len());
+    let mut raise = false;
+    for c in key.chars() {
+        if c == '_' {
+            raise = true;
+        } else if raise {
+            out.extend(c.to_uppercase());
+            raise = false;
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// The object at `b[open]`, rebuilt: the caller's members not cut, not set and not capped, in order
+/// and byte for byte; then each `set` member (merged into the caller's when both are objects); then
+/// each object a cap reaches into that no `set` member names (the caller's object, rebuilt under
+/// its caps, or a new one in place of whatever else the caller wrote there, `null` included, or
+/// where a cap is written in the caller's absence); then each cap on this object's own
+/// members ([`Cap`]). Keys are compared under [`field_name`].
+fn object(
+    b: &[u8],
+    open: usize,
+    cut: &[&str],
+    set: &Map<String, Value>,
+    proto: bool,
+    caps: &[Cap],
+) -> Option<Vec<u8>> {
     let (members, _) = members(b, open)?;
+    let here: Vec<Cap> = caps.iter().filter(|c| c.path.is_empty()).copied().collect();
+    let mut under: Vec<&str> = caps
+        .iter()
+        .filter_map(|c| c.path.first().copied())
+        .collect();
+    under.sort_unstable();
+    under.dedup();
+    let below = |parent: &str| -> Vec<Cap> {
+        caps.iter()
+            .filter(|c| c.path.first() == Some(&parent))
+            .map(|c| {
+                let path: &'static [&'static str] = c.path;
+                Cap {
+                    path: &path[1..],
+                    ..*c
+                }
+            })
+            .collect()
+    };
+    let capped = |name: &str| here.iter().any(|c| c.key == name);
+    let reaches = |name: &str| under.contains(&name);
+    let is_object = |m: &JsonMember| b.get(m.value.0) == Some(&b'{');
     let mut out = vec![b'{'];
     let mut first = true;
     let mut sep = |out: &mut Vec<u8>| {
@@ -343,29 +529,99 @@ fn object(b: &[u8], open: usize, cut: &[&str], set: &Map<String, Value>) -> Opti
         }
     };
     for m in &members {
-        if cut.contains(&m.key.as_str()) || set.contains_key(&m.key) {
+        let name = field_name(&m.key, proto);
+        if cut.contains(&&*name) || set.contains_key(&*name) || capped(&name) || reaches(&name) {
             continue;
         }
         sep(&mut out);
         out.extend_from_slice(&b[m.start..m.value.1]);
     }
+    // The caller's last object under `key`, as the far end reads the last of a repeated key.
+    let theirs = |key: &str| {
+        members
+            .iter()
+            .rev()
+            .find(|m| field_name(&m.key, proto) == key && is_object(m))
+    };
     for (key, value) in set {
         sep(&mut out);
         out.extend_from_slice(&serde_json::to_vec(key).ok()?);
         out.push(b':');
-        let theirs = members
-            .iter()
-            .rev()
-            .find(|m| &m.key == key && b.get(m.value.0) == Some(&b'{'));
-        match (value, theirs) {
+        let sub = below(key);
+        match (value, theirs(key)) {
             (Value::Object(locked), Some(m)) => {
-                out.extend_from_slice(&object(b, m.value.0, &[], locked)?);
+                out.extend_from_slice(&object(b, m.value.0, &[], locked, proto, &sub)?);
+            }
+            (Value::Object(locked), None) => {
+                out.extend_from_slice(&serde_json::to_vec(&fresh(locked, &sub)).ok()?);
             }
             _ => out.extend_from_slice(&serde_json::to_vec(value).ok()?),
         }
     }
+    for parent in under.iter().copied().filter(|p| !set.contains_key(*p)) {
+        let sub = below(parent);
+        let rebuilt = match theirs(parent) {
+            Some(m) => object(b, m.value.0, &[], &Map::new(), proto, &sub)?,
+            // The caller wrote no object here: none at all, or a value that is not one (`null`, which
+            // a protobuf JSON reader takes as the field unset). Either way the caps are written.
+            None if sub.iter().any(|c| c.when_absent)
+                || members.iter().any(|m| field_name(&m.key, proto) == parent) =>
+            {
+                serde_json::to_vec(&fresh(&Map::new(), &sub)).ok()?
+            }
+            None => continue,
+        };
+        sep(&mut out);
+        out.extend_from_slice(&serde_json::to_vec(parent).ok()?);
+        out.push(b':');
+        out.extend_from_slice(&rebuilt);
+    }
+    for Cap {
+        key,
+        ceiling,
+        when_absent,
+        ..
+    } in here
+    {
+        // Every value the caller wrote under the key is read; one that is not a whole number
+        // (`"inf"`, a fraction, a string) asks for no ceiling of its own, so the cap stands.
+        let written: Vec<&JsonMember> = members
+            .iter()
+            .filter(|m| field_name(&m.key, proto) == key)
+            .collect();
+        if when_absent || !written.is_empty() {
+            let asked = written
+                .iter()
+                .map(|m| serde_json::from_slice::<u64>(&b[m.value.0..m.value.1]).unwrap_or(ceiling))
+                .fold(ceiling, u64::min);
+            sep(&mut out);
+            out.extend_from_slice(&serde_json::to_vec(key).ok()?);
+            out.push(b':');
+            out.extend_from_slice(asked.to_string().as_bytes());
+        }
+    }
     out.push(b'}');
     Some(out)
+}
+
+/// `locked` as a new object where the caller wrote none, with each cap that is written in the
+/// caller's absence ([`Cap::when_absent`]) at its ceiling.
+fn fresh(locked: &Map<String, Value>, caps: &[Cap]) -> Value {
+    let mut m = locked.clone();
+    'caps: for c in caps.iter().filter(|c| c.when_absent) {
+        let mut at = &mut m;
+        for p in c.path {
+            let next = at
+                .entry((*p).to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+            let Value::Object(o) = next else {
+                continue 'caps;
+            };
+            at = o;
+        }
+        at.insert(c.key.to_string(), Value::from(c.ceiling));
+    }
+    Value::Object(m)
 }
 
 /// The index of the first byte at or after `i` that is not JSON whitespace.

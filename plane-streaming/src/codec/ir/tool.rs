@@ -32,6 +32,7 @@ pub struct CallRef(pub u64);
 /// `response.function_call_arguments.delta` → `…done`; the caller runs the tool and returns
 /// `conversation.item.create{ function_call_output }` then `response.create`. A tool-call turn
 /// often produces NO audio until the result is fed back.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrDuplexTool {
     /// A function call was ANNOUNCED by the model (server→client). Carries the tool name.
@@ -79,6 +80,7 @@ pub enum IrDuplexTool {
 
 impl IrDuplexTool {
     /// The correlation handle common to every variant.
+    #[cfg(test)]
     #[must_use]
     pub fn call_ref(&self) -> CallRef {
         match self {
@@ -86,17 +88,6 @@ impl IrDuplexTool {
             | IrDuplexTool::CallArgs { call_ref, .. }
             | IrDuplexTool::CallClose { call_ref, .. }
             | IrDuplexTool::CallResult { call_ref, .. } => *call_ref,
-        }
-    }
-
-    /// The raw dialect `call_id` common to every variant.
-    #[must_use]
-    pub fn call_id(&self) -> &str {
-        match self {
-            IrDuplexTool::CallOpen { call_id, .. }
-            | IrDuplexTool::CallArgs { call_id, .. }
-            | IrDuplexTool::CallClose { call_id, .. }
-            | IrDuplexTool::CallResult { call_id, .. } => call_id,
         }
     }
 }

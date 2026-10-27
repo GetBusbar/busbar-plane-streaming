@@ -40,6 +40,10 @@
       [
         "GET",
         "/twilio/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime"
       ]
     ],
     "refresh_claims": [
@@ -62,6 +66,10 @@
       [
         "GET",
         "/twilio/{call_id}"
+      ],
+      [
+        "GET",
+        "/v1/realtime"
       ]
     ],
     "member": "m-cap",
@@ -91,7 +99,12 @@
       ],
       "answer": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
       "answer_out": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
-      "units": []
+      "units": [
+        [
+          8,
+          1
+        ]
+      ]
     },
     "narrow": {
       "unit": 9,
@@ -111,6 +124,16 @@
         "reply_cap": 262144,
         "steps": [
           {
+            "label": "arrive",
+            "arrive": {
+              "method": "GET",
+              "target": "/v1/realtime/sideband/rtc_oracle0001"
+            },
+            "want": {
+              "outcome": "Ready"
+            }
+          },
+          {
             "label": "caller audio",
             "piece": {
               "from": "caller",
@@ -125,7 +148,9 @@
             },
             "want": {
               "outcome": "Ready",
-              "to_far_end": true
+              "to_far_end": true,
+              "verb": "GET",
+              "target": "/v1/realtime?call_id=rtc_oracle0001"
             }
           },
           {
@@ -153,10 +178,69 @@
             "label": "far usage",
             "piece": {
               "from": "far_end",
-              "bytes": "{\"type\":\"response.done\",\"response\":{\"usage\":{\"input_token_details\":{\"audio_tokens\":10,\"text_tokens\":3},\"output_token_details\":{\"audio_tokens\":20,\"text_tokens\":4}}}}"
+              "bytes": "{\"type\":\"response.done\",\"response\":{\"usage\":{\"input_token_details\":{\"audio_tokens\":10,\"text_tokens\":3,\"image_tokens\":2},\"output_token_details\":{\"audio_tokens\":20,\"text_tokens\":4}}}}"
             },
             "want": {
               "outcome": "Ready"
+            }
+          },
+          {
+            "label": "caller end",
+            "piece": {
+              "from": "caller",
+              "last": true
+            },
+            "want": {
+              "outcome": "Ready",
+              "done": true
+            }
+          }
+        ]
+      },
+      {
+        "name": "gemini",
+        "unit": 21,
+        "claim": 3,
+        "stream": 21,
+        "reply_cap": 65536,
+        "steps": [
+          {
+            "label": "caller audio end",
+            "piece": {
+              "from": "caller",
+              "bytes": "{\"realtimeInput\":{\"audioStreamEnd\":true}}"
+            },
+            "want": {
+              "outcome": "Ready"
+            }
+          },
+          {
+            "label": "far usage",
+            "piece": {
+              "from": "far_end",
+              "status": 101,
+              "bytes": "{\"usageMetadata\":{\"promptTokenCount\":30,\"responseTokenCount\":5,\"promptTokensDetails\":[{\"modality\":\"VIDEO\",\"tokenCount\":20},{\"modality\":\"TEXT\",\"tokenCount\":10}]}}"
+            },
+            "want": {
+              "outcome": "Ready",
+              "units": [
+                [
+                  2,
+                  10
+                ],
+                [
+                  3,
+                  5
+                ],
+                [
+                  7,
+                  20
+                ],
+                [
+                  8,
+                  1
+                ]
+              ]
             }
           },
           {

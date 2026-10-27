@@ -152,12 +152,6 @@ pub struct DecodeState {
     /// from `call_ids` and then sighted again mints a fresh handle — orphaning the entry the old
     /// handle keyed, which nothing can ever reach to remove.
     call_args_order: VecDeque<CallRef>,
-    /// Downlink audio bytes RELAYED for the CURRENT item — reset when the item ends (its audio is
-    /// done, a new audio-bearing item begins) and on a barge-in flush.
-    played_bytes: u64,
-    /// The latest clock reading the runtime has fed for the current item (ms of playback elapsed),
-    /// `None` while nobody feeds one. This crate owns no time source; it bounds, never invents.
-    played_clock_ms: Option<u64>,
     /// Negotiated OUTPUT format the truncate math measures against.
     output_fmt: AudioFormat,
     /// Negotiated INPUT format — what the bytes the CLIENT sends are in.
@@ -181,8 +175,6 @@ impl Default for DecodeState {
             dropped_fields: VecDeque::new(),
             call_args: HashMap::new(),
             call_args_order: VecDeque::new(),
-            played_bytes: 0,
-            played_clock_ms: None,
             output_fmt: AudioFormat::Pcm16,
             input_fmt: AudioFormat::Pcm16,
         }
@@ -335,6 +327,7 @@ impl DecodeState {
     }
 
     /// The wire fields dropped as unmodelled so far this session, newest last.
+    #[cfg(test)]
     #[must_use]
     pub fn dropped_fields(&self) -> Vec<&str> {
         self.dropped_fields.iter().map(String::as_str).collect()
@@ -363,65 +356,6 @@ impl DecodeState {
     pub fn set_input_format(&mut self, fmt: AudioFormat) {
         self.input_fmt = fmt;
     }
-
-    /// Account `n` bytes of downlink audio as RELAYED for the current item.
-    ///
-    /// WHAT THIS COUNTS, PLAINLY: bytes that went out, not audio that came back. The upstream emits a
-    /// turn's audio far faster than it plays, so immediately after a burst this counter already holds
-    /// the whole turn while the user has heard a fraction of it. It is therefore an UPPER BOUND on the
-    /// audio heard — the right shape for a truncate point (never cut BEFORE what was heard), and not a
-    /// measurement of playback. [`Self::record_played_at`] is the seam a real clock narrows it through.
-    pub fn record_played(&mut self, n: u64) {
-        self.record_played_at(n, None);
-    }
-
-    /// The same accounting WITH A CLOCK: `at_ms` is how long this item's audio has actually been
-    /// playing when these bytes were relayed.
-    ///
-    /// This is the seam the runtime feeds a clock through — it owns the wall clock, this crate owns no
-    /// time source and invents none. While `None` is passed the position is the bytes relayed, exactly
-    /// as before; once a reading arrives the position cannot exceed the time there has been to hear it
-    /// in, which is the difference between "audio handed over" and "audio heard".
-    pub fn record_played_at(&mut self, n: u64, at_ms: Option<u64>) {
-        self.played_bytes += n;
-        if let Some(ms) = at_ms {
-            self.played_clock_ms = Some(self.played_clock_ms.map_or(ms, |prev| prev.max(ms)));
-        }
-    }
-
-    /// The audio the user can have heard so far, in ms — the barge-in truncate point.
-    ///
-    /// The bytes relayed for this item, converted at the negotiated format's rate, and bounded by the
-    /// clock when the runtime has fed one (no clock: the bytes stand alone, an upper bound).
-    #[must_use]
-    pub fn played_ms(&self) -> u64 {
-        let by_bytes =
-            crate::codec::ir::media::truncate_point_ms(self.played_bytes, self.output_fmt);
-        match self.played_clock_ms {
-            Some(elapsed) => by_bytes.min(elapsed),
-            None => by_bytes,
-        }
-    }
-
-    /// FLUSH the queued/played downlink audio on `speech_started` (barge-in): returns the just-heard
-    /// duration (ms) — the value an [`IrDuplexControl::ItemTruncate`] carries — and zeroes the
-    /// playback counter for the next item. This is the DATA move; the runtime that cancels the
-    /// in-flight response and emits the truncate is the next layer.
-    pub fn flush_playback(&mut self) -> u64 {
-        let ms = self.played_ms();
-        self.played_bytes = 0;
-        self.played_clock_ms = None;
-        ms
-    }
-
-    /// THE ITEM BOUNDARY — the played-out position belongs to ONE item, so it starts over when that
-    /// item's audio ends (or the next audio-bearing item begins). Without this the barge-in truncate
-    /// point would be the running total since the session opened, and turn two would be truncated at
-    /// turn one plus turn two.
-    pub fn reset_playback(&mut self) {
-        self.played_bytes = 0;
-        self.played_clock_ms = None;
-    }
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────────────────────────
@@ -444,7 +378,7 @@ fn u64_at(v: &Value, key: &str) -> u64 {
 }
 
 /// The wire error code a present-but-unreadable BILLED count surfaces as on the session.
-const USAGE_UNREADABLE: &str = "usage_unreadable";
+pub(crate) const USAGE_UNREADABLE: &str = "usage_unreadable";
 
 /// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity
 /// was reported), a readable count is the count (through the crate's one seam,
@@ -572,11 +506,13 @@ pub trait DuplexReader {
     fn read_down_ref(&self, wire: WireRef<'_>, st: &mut DecodeState) -> Vec<IrServerEvent>;
 
     /// The uplink read, over bytes the caller owns.
+    #[cfg(test)]
     fn read_up(&self, evt: WireEvent, st: &mut DecodeState) -> Vec<IrClientEvent> {
         self.read_up_ref(WireRef::from(&evt), st)
     }
 
     /// The downlink read, over bytes the caller owns.
+    #[cfg(test)]
     fn read_down(&self, evt: WireEvent, st: &mut DecodeState) -> Vec<IrServerEvent> {
         self.read_down_ref(WireRef::from(&evt), st)
     }
@@ -730,7 +666,6 @@ impl DuplexReader for OpenAiRealtimeCodec {
                 let Some(media) = decode_audio(str_at(&v, "delta")) else {
                     return Vec::new();
                 };
-                st.record_played(media.len() as u64);
                 vec![IrServerEvent::AudioFrame(IrAudioFrame {
                     dir: UpDown::Down,
                     seq: st.next_down_seq(),
@@ -740,9 +675,6 @@ impl DuplexReader for OpenAiRealtimeCodec {
                 })]
             }
             wire::OUTPUT_AUDIO_DONE | wire::OUTPUT_AUDIO_DONE_LEGACY => {
-                // THE ITEM BOUNDARY: this item's audio is complete, so the played-out position starts
-                // over. Carrying it forward would truncate the NEXT turn at the running session total.
-                st.reset_playback();
                 vec![IrServerEvent::AudioDone {
                     item_id: str_at(&v, "item_id").to_string(),
                 }]
@@ -756,17 +688,12 @@ impl DuplexReader for OpenAiRealtimeCodec {
                     // Remember the name for the RESULT leg: OpenAI's `function_call_output` carries
                     // none, and a Gemini `functionResponse` requires one.
                     st.remember_call_name(call_id, &name);
-                    // A tool-call item is NOT the playing audio item's boundary — it can be added
-                    // while that item is still playing — so the playback position stands.
                     vec![IrServerEvent::Tool(IrDuplexTool::CallOpen {
                         call_ref,
                         call_id: call_id.to_string(),
                         name,
                     })]
                 } else {
-                    // A new AUDIO-BEARING output item begins: its playback starts at zero, even if the
-                    // previous item's `…audio.done` never arrived.
-                    st.reset_playback();
                     Vec::new()
                 }
             }
@@ -831,51 +758,40 @@ impl DuplexReader for OpenAiRealtimeCodec {
 /// Extract the split token classes from a `response.done.usage` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
 /// SEPARATE classes; extraction-only, never client-translated).
 ///
-/// The per-modality breakdown (`input_token_details`/`output_token_details`) is a REFINEMENT of the
-/// stated `input_tokens`/`output_tokens` totals, never their sole source — OpenAI Realtime can state
-/// the totals while omitting the breakdown. Reading a missing breakdown as zero tokens metered a
-/// real turn at ZERO (silent under-billing, the one outcome #42 forbids outside billing being off);
-/// when the breakdown yields nothing, the stated total is billed instead, attributed to `text` (the
-/// conservative default when the split is unknown — this only changes the audio/text LABEL, never
-/// the input/output lane the billing fold sums onto, and it is an integer passthrough of the wire
-/// figure, no rate lookup or multiply, so #71's hot-path rule is untouched).
+/// The stated `input_tokens`/`output_tokens` totals are what the far end bills ("Usage statistics
+/// for the Response, this will correspond to billing", the Realtime API reference), and the
+/// per-modality breakdown (`input_token_details`/`output_token_details`) only SPLITS them. So each
+/// side bills the larger of its stated total and the sum of every entry its breakdown carries
+/// (`audio_tokens`, `text_tokens`, and on input `image_tokens`), never the audio and text entries
+/// alone: a turn that also carried image input billed its audio and text and dropped the rest.
+/// Audio bills as audio and image tokens as image tokens (each its own declared class); every
+/// other token the side bills is attributed to `text`. It is an integer passthrough of the wire
+/// figures, no rate lookup or multiply, so #71's hot-path rule is untouched.
 ///
-/// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` fallback (D26, in
-/// `gemini/mod.rs`): the same defect was fixed there and left standing here, so one session metered
-/// at zero on this dialect and correctly on the other.
+/// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` (`gemini/mod.rs`).
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
 /// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     let ind = u.get("input_token_details");
     let outd = u.get("output_token_details");
-    let (audio_in, text_in) = {
-        let (a, t) = (
-            billed_count(ind, "audio_tokens")?,
-            billed_count(ind, "text_tokens")?,
-        );
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "input_tokens")?)
-        } else {
-            (a, t)
-        }
-    };
-    let (audio_out, text_out) = {
-        let (a, t) = (
-            billed_count(outd, "audio_tokens")?,
-            billed_count(outd, "text_tokens")?,
-        );
-        if a.saturating_add(t) == 0 {
-            (0, billed_count(Some(u), "output_tokens")?)
-        } else {
-            (a, t)
-        }
-    };
+    let audio_in = billed_count(ind, "audio_tokens")?;
+    let image_in = billed_count(ind, "image_tokens")?;
+    let input = billed_count(Some(u), "input_tokens")?.max(
+        audio_in
+            .saturating_add(billed_count(ind, "text_tokens")?)
+            .saturating_add(image_in),
+    );
+    let audio_out = billed_count(outd, "audio_tokens")?;
+    let output = billed_count(Some(u), "output_tokens")?
+        .max(audio_out.saturating_add(billed_count(outd, "text_tokens")?));
     Ok(IrDuplexUsage {
         audio_in,
         audio_out,
-        text_in,
-        text_out,
+        text_in: input - audio_in - image_in,
+        text_out: output - audio_out,
+        image_in,
+        video_in: 0,
         cached: billed_count(ind, "cached_tokens")?,
     })
 }
@@ -1064,11 +980,13 @@ impl DuplexWriter for OpenAiRealtimeCodec {
 /// turn pins the count, never wraps small"): these counts came off an upstream `usage` object, and
 /// a wrapped total is a small, believable number that is false.
 fn usage_to_wire(u: &IrDuplexUsage) -> Value {
-    json!({
+    let mut wire = json!({
         "total_tokens": u.audio_in
             .saturating_add(u.audio_out)
             .saturating_add(u.text_in)
-            .saturating_add(u.text_out),
+            .saturating_add(u.text_out)
+            .saturating_add(u.image_in)
+            .saturating_add(u.video_in),
         "input_token_details": {
             "audio_tokens": u.audio_in,
             "text_tokens": u.text_in,
@@ -1078,7 +996,12 @@ fn usage_to_wire(u: &IrDuplexUsage) -> Value {
             "audio_tokens": u.audio_out,
             "text_tokens": u.text_out,
         },
-    })
+    });
+    // The dialect names image input and no video input: video tokens stay in the total only.
+    if u.image_in != 0 {
+        wire["input_token_details"]["image_tokens"] = json!(u.image_in);
+    }
+    wire
 }
 
 /// THE SECOND DIALECT — Gemini Live (`BidiGenerateContent`). Its codec maps the Gemini wire to/from

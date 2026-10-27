@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE TWILIO MEDIA STREAMS ENVELOPE for the telephony topology (behind the `runtime` feature).
+//! THE TWILIO MEDIA STREAMS ENVELOPE for the telephony topology.
 //!
 //! Twilio speaks a JSON-over-WS protocol on its Media Streams leg: lifecycle events (`connected`,
 //! `start`, `mark`, `dtmf`, `stop` — the whole set Twilio sends TO the socket, because an event
 //! this codec does not model is a decode REFUSAL to everything downstream) plus per-frame `media`
-//! events whose `payload` is base64 8 kHz µ-law. The
-//! generic telephony bridge (`TelephonyProxy`, in the runtime half) already carries raw `Vec<u8>` on its
-//! `client_in`/`client_out` halves, so the only carrier-specific work is this thin, stateless codec
-//! that:
+//! events whose `payload` is base64 8 kHz µ-law. The telephony session ([`TwilioBridge`], driven by
+//! `crate::session_unit::SessionUnit`) rewrites only this envelope, so the carrier-specific work is
+//! this thin codec that:
 //!
 //! * DECODES an inbound Twilio WS frame into a [`TwilioEvent`], base64-decoding a `media` payload to
-//!   the raw µ-law bytes the proxy's `client_in` stream consumes.
-//! * ENCODES raw µ-law bytes back into the Twilio outbound `media` envelope for the proxy's
-//!   `client_out` sink.
-//! * Renders the inbound-webhook TwiML that tells Twilio which WS URL to dial.
+//!   the raw µ-law bytes the far end's uplink append carries.
+//! * ENCODES the far end's µ-law audio back into the Twilio outbound `media` envelope, and relays a
+//!   tool call the model makes down the session as the far end wrote it (Law 11).
+//! * Renders the inbound-webhook TwiML that tells Twilio which WS URL to dial (the crate's tests').
 //! * REFUSES a `start` whose negotiated media format is not `g711_ulaw` / 8000 Hz — a silent format
 //!   mismatch would corrupt the barge-in truncate arithmetic without erroring, so it fails closed.
 //! * Guards a WS connection's `streamSid` against the value bound at admission, so a forged or replayed
@@ -59,14 +58,6 @@ pub enum TwilioError {
         /// The channel count Twilio actually negotiated.
         channels: u64,
     },
-    /// The connection presented a `streamSid` that does not match the one bound at admission — a forged
-    /// or replayed connection, refused before any byte is admitted.
-    Forged {
-        /// The `streamSid` bound to this call at admission.
-        expected: String,
-        /// The `streamSid` the inbound frame actually presented.
-        actual: String,
-    },
 }
 
 impl std::fmt::Display for TwilioError {
@@ -83,9 +74,6 @@ impl std::fmt::Display for TwilioError {
                 f,
                 "Twilio media format refused: {encoding} {sample_rate}Hz {channels}ch is not g711_ulaw/8000Hz/mono"
             ),
-            TwilioError::Forged { expected, actual } => {
-                write!(f, "Twilio streamSid mismatch: expected {expected}, got {actual}")
-            }
         }
     }
 }
@@ -363,94 +351,6 @@ pub fn assert_g711_ulaw(fmt: &MediaFormat) -> Result<(), TwilioError> {
     }
 }
 
-/// THE PRE-ADMISSION FORGERY GUARD — the binding a Twilio Media Streams connection is checked against
-/// before any of its bytes are admitted into the session. `call_id` is minted at the TwiML webhook and
-/// embedded in the `<Stream>` URL; `stream_sid` is the value Twilio declares at `start` and repeats on
-/// every later frame. The proxy/session engine do not authenticate the caller — this guard does, so a
-/// replayed or forged WS connection cannot inject audio into a call it does not own.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AdmissionGuard {
-    call_id: String,
-    stream_sid: String,
-}
-
-impl AdmissionGuard {
-    /// Bind the guard from the webhook-minted `call_id` and the `stream_sid` the `start` event
-    /// declared. The route calls this once, after [`assert_g711_ulaw`] clears the `start` format.
-    #[must_use]
-    pub fn bind(call_id: impl Into<String>, stream_sid: impl Into<String>) -> Self {
-        Self {
-            call_id: call_id.into(),
-            stream_sid: stream_sid.into(),
-        }
-    }
-
-    /// The webhook-minted call id this guard is bound to.
-    #[must_use]
-    pub fn call_id(&self) -> &str {
-        &self.call_id
-    }
-
-    /// The `streamSid` bound at admission.
-    #[must_use]
-    pub fn stream_sid(&self) -> &str {
-        &self.stream_sid
-    }
-
-    /// ADMIT an inbound frame's `stream_sid`. A mismatch is a forged/replayed connection and is REFUSED
-    /// — the caller must not hand the frame's bytes to `client_in`.
-    pub fn admit(&self, stream_sid: &str) -> Result<(), TwilioError> {
-        if stream_sid == self.stream_sid {
-            Ok(())
-        } else {
-            Err(TwilioError::Forged {
-                expected: self.stream_sid.clone(),
-                actual: stream_sid.to_string(),
-            })
-        }
-    }
-}
-
-/// Build the `wss://…/twilio/{call_id}` URL Twilio dials, from a WS base and the webhook-minted
-/// `call_id`. Kept next to the TwiML renderer so the URL the webhook advertises and the route the WS
-/// accepts are derived the one way.
-#[must_use]
-pub fn stream_url(ws_base: &str, call_id: &str) -> String {
-    format!("{}/twilio/{}", ws_base.trim_end_matches('/'), call_id)
-}
-
-/// Render the inbound-webhook TwiML that tells Twilio to open a Media Streams WS to `ws_url`. Pure: it
-/// carries no audio and no provider secret, exactly one variable (the URL, XML-escaped).
-#[must_use]
-pub fn render_connect_stream(ws_url: &str) -> String {
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Connect><Stream url=\"{}\"/></Connect></Response>",
-        xml_escape(ws_url)
-    )
-}
-
-/// Render the webhook TwiML directly from a WS base and the minted `call_id` — the composition the
-/// webhook handler uses.
-#[must_use]
-pub fn render_twiml_for_call(ws_base: &str, call_id: &str) -> String {
-    render_connect_stream(&stream_url(ws_base, call_id))
-}
-
-fn xml_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 /// THE TELEPHONY CARRIER'S ENVELOPE around a session: the caller speaks Twilio Media Streams, the
 /// far end the realtime dialect locked to `g711_ulaw` both ways, so the audio passes through
 /// unchanged and only the envelope is rewritten.
@@ -485,6 +385,7 @@ impl TwilioBridge {
     /// is a frame that is not Twilio's shape or carries a payload that is not clean base64 (data
     /// resuming after padding is never billed as a longer payload). An event this reader does not
     /// model is dropped.
+    #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, frame: &[u8]) -> CallerStep {
         match TwilioEnvelope::decode(frame) {
             Ok(TwilioEvent::Start(start)) => {
@@ -518,12 +419,18 @@ impl TwilioBridge {
 
     /// Rewrite one frame bound for the caller into the carrier's envelope: model audio becomes a
     /// `media` frame on the call's stream, and a barge-in clears the audio the carrier has queued.
-    /// `None` for a frame the carrier has no event for.
+    /// A tool call the model makes is relayed down the session as the far end wrote it (Law 11: "a
+    /// tool call on any session, Twilio included, is relayed down that session as-is"; busbar
+    /// neither drops nor answers it). `None` for any other frame: the carrier has no event for it.
     #[must_use]
     pub fn to_caller(&self, frame: &[u8]) -> Option<Vec<u8>> {
-        let sid = self.stream_sid.as_deref()?;
         let v: serde_json::Value = serde_json::from_slice(frame).ok()?;
-        match v.get("type").and_then(serde_json::Value::as_str)? {
+        let kind = v.get("type").and_then(serde_json::Value::as_str)?;
+        if is_tool_call(kind, &v) {
+            return Some(frame.to_vec());
+        }
+        let sid = self.stream_sid.as_deref()?;
+        match kind {
             "response.output_audio.delta" | "response.audio.delta" => {
                 let audio = base64_decode(v.get("delta")?.as_str()?)?;
                 Some(TwilioEnvelope::encode_media(sid, &audio))
@@ -536,6 +443,27 @@ impl TwilioBridge {
             _ => None,
         }
     }
+}
+
+/// Whether the far end's event `kind` (the frame `v`) carries a tool call the model made: its
+/// arguments as they stream (`response.function_call_arguments.*`), or the `function_call` item
+/// itself as the response and the conversation state it.
+fn is_tool_call(kind: &str, v: &serde_json::Value) -> bool {
+    if kind.starts_with("response.function_call_arguments.") {
+        return true;
+    }
+    matches!(
+        kind,
+        "response.output_item.added"
+            | "response.output_item.done"
+            | "conversation.item.created"
+            | "conversation.item.added"
+            | "conversation.item.done"
+    ) && v
+        .get("item")
+        .and_then(|i| i.get("type"))
+        .and_then(serde_json::Value::as_str)
+        == Some("function_call")
 }
 
 #[cfg(test)]

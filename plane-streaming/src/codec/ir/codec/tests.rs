@@ -357,7 +357,7 @@ fn uplink_seq_is_monotonic_across_frames() {
 }
 
 #[test]
-fn downlink_audio_delta_frames_down_tracks_playback_and_bumps_seq() {
+fn downlink_audio_delta_frames_down_and_bumps_seq() {
     let codec = OpenAiRealtimeCodec;
     let mut st = DecodeState::default();
     st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
@@ -370,15 +370,13 @@ fn downlink_audio_delta_frames_down_tracks_playback_and_bumps_seq() {
     assert_eq!(f.dir, UpDown::Down);
     assert_eq!(f.seq, 0);
     assert_eq!(f.media.len(), 96);
-    assert_eq!(st.played_ms(), 2, "96 bytes of pcm16 @ 24kHz is 2 ms");
 
-    // A second delta advances the downlink seq and accumulates playback.
+    // A second delta advances the downlink seq.
     let ir2 = codec.read_down(wire(&src.to_string()), &mut st);
     let IrServerEvent::AudioFrame(f2) = &ir2[0] else {
         panic!()
     };
     assert_eq!(f2.seq, 1);
-    assert_eq!(st.played_ms(), 4);
 }
 
 #[test]
@@ -434,131 +432,12 @@ fn downlink_audio_delta_legacy_alias_decodes() {
     assert!(matches!(&ir[0], IrServerEvent::AudioFrame(f) if f.dir == UpDown::Down));
 }
 
-#[test]
-fn a_faster_than_realtime_burst_reports_the_audio_relayed_not_the_audio_heard() {
-    // WHAT THE COUNTER MEANS. The upstream emits a whole turn's audio in one burst, far faster than
-    // it plays. The position is derived from BYTES RELAYED, so after the burst it reads the whole
-    // turn — an UPPER BOUND on what the user heard, not a measurement of it.
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16); // 48 B/ms
-    st.record_played(48 * 10_000); // ten seconds of audio, handed over at once
-    assert_eq!(
-        st.played_ms(),
-        10_000,
-        "the bytes relayed for this item, in ms"
-    );
-
-    // THE SEAM A CLOCK GOES THROUGH. Fed how long the item has actually been playing, the position
-    // is bounded by it: no more audio can have been heard than there has been time to hear it in.
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    st.record_played_at(48 * 10_000, Some(1_200));
-    assert_eq!(
-        st.played_ms(),
-        1_200,
-        "1.2 s of wall clock cannot have played 10 s of audio"
-    );
-    // And a clock that has run longer than the audio relayed does not invent audio.
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    st.record_played_at(48 * 100, Some(9_000));
-    assert_eq!(st.played_ms(), 100, "only the audio actually handed over");
-}
-
 // ── barge-in truncate math ───────────────────────────────────────────────────────────────────────
 
 #[test]
 fn audio_format_math() {
     assert_eq!(AudioFormat::Pcm16.bytes_per_ms(), 48);
     assert_eq!(AudioFormat::G711Ulaw.bytes_per_ms(), 8);
-    assert_eq!(AudioFormat::Pcm16.bytes_to_ms(480), 10);
-    assert_eq!(AudioFormat::Pcm16.ms_to_bytes(10), 480);
-    assert_eq!(AudioFormat::G711Ulaw.bytes_to_ms(80), 10);
-    assert_eq!(
-        crate::codec::ir::media::truncate_point_ms(480, AudioFormat::Pcm16),
-        10
-    );
-}
-
-#[test]
-fn flush_playback_returns_heard_ms_and_resets() {
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    st.record_played(48 * 500); // 500 ms played
-    assert_eq!(st.played_ms(), 500);
-    let heard = st.flush_playback();
-    assert_eq!(heard, 500);
-    assert_eq!(st.played_ms(), 0, "flush zeroes the playback counter");
-}
-
-#[test]
-fn playback_position_resets_at_the_item_boundary_so_turns_do_not_accumulate() {
-    // Two model turns, the second barged into: the truncate point must be the position within the
-    // CURRENT item, not the running total since the session opened.
-    let codec = OpenAiRealtimeCodec;
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16); // 48 bytes/ms
-    let delta = |ms: usize| {
-        json!({ "type": "response.output_audio.delta", "delta": b64(&vec![0u8; 48 * ms]) })
-            .to_string()
-    };
-
-    // Turn 1: a full second of audio, then the item ends.
-    let _ = codec.read_down(wire(&delta(1000)), &mut st);
-    let _ = codec.read_down(
-        wire(&json!({ "type": "response.output_audio.done", "item_id": "item_1" }).to_string()),
-        &mut st,
-    );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "the item boundary zeroes the playback position"
-    );
-
-    // Turn 2: a new item, barged into after 240 ms.
-    let _ = codec.read_down(
-        wire(
-            &json!({
-                "type": "response.output_item.added",
-                "item": { "type": "message", "id": "item_2", "role": "assistant" }
-            })
-            .to_string(),
-        ),
-        &mut st,
-    );
-    let _ = codec.read_down(wire(&delta(240)), &mut st);
-    assert_eq!(
-        st.flush_playback(),
-        240,
-        "the truncate point is this item's audio, not turn 1 plus turn 2"
-    );
-}
-
-#[test]
-fn a_new_function_call_item_does_not_zero_the_playing_item() {
-    // A `function_call` output item can be added WHILE an audio item is still playing; it is not the
-    // audio item's boundary, so it must not move the truncate point.
-    let codec = OpenAiRealtimeCodec;
-    let mut st = DecodeState::default();
-    st.set_output_format(AudioFormat::Pcm16);
-    let _ = codec.read_down(
-        wire(
-            &json!({ "type": "response.output_audio.delta", "delta": b64(&vec![0u8; 48 * 120]) })
-                .to_string(),
-        ),
-        &mut st,
-    );
-    let _ = codec.read_down(
-        wire(
-            &json!({
-                "type": "response.output_item.added",
-                "item": { "type": "function_call", "call_id": "call_1", "name": "get_weather" }
-            })
-            .to_string(),
-        ),
-        &mut st,
-    );
-    assert_eq!(st.played_ms(), 120);
 }
 
 #[test]
@@ -633,6 +512,8 @@ fn usage_totals_saturate_rather_than_wrap() {
         audio_out: 1,
         text_in: 1,
         text_out: 1,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let wire = usage_to_wire(&u);
@@ -669,11 +550,6 @@ fn an_undecodable_audio_payload_emits_no_frame() {
     assert!(
         down.is_empty(),
         "a downlink audio delta that is not base64 must yield no IR frame, got {down:?}"
-    );
-    assert_eq!(
-        st.played_ms(),
-        0,
-        "a payload that never decoded must not advance the barge-in playback clock"
     );
     // Well-formed audio still flows, in both directions.
     assert_eq!(
@@ -831,6 +707,85 @@ fn ordinary_streaming_fragments_decode_byte_identically() {
     );
 }
 
+/// P-ITEM: VOICE TOOL-ARGS at the codec seam (spec DONE item 2, "All P-item behaviours match
+/// 1.5.5"; the drive log's P5, commit 470351a480: "streamed tool-call arguments are discarded").
+/// The OpenAI Realtime far end streams a call's arguments ONLY as fragments, and its close
+/// (`function_call_arguments.done`) states none of its own, so nothing but accumulation can deliver
+/// them. Read by the OpenAI Realtime reader and framed by the writer of a dialect that dispatches a
+/// call whole (Gemini Live's `toolCall`), no fragment frames a call on its own, and the one
+/// dispatched call carries the fragments concatenated in order, parsed as one whole: never `null`,
+/// never the first fragment alone. The session relay's sibling pin
+/// (`p_item_voice_tool_args_streamed_fragments_reach_the_caller_whole_and_once`) holds what the
+/// caller receives on a same-dialect session; this one holds the codec's accumulate-then-frame
+/// seam a translated call is dispatched through.
+///
+/// The 1.5.5 behaviour matched is the llm surface's streamed tool call (owner correction
+/// 2026-09-28): every argument fragment of an open tool block accumulated, the call emitted once on
+/// its block stop with the fully reassembled arguments (v1.5.5
+/// `crates/busbar/src/proto/gemini/writer.rs:734-780`).
+#[test]
+fn p_item_voice_tool_args_fragments_alone_reach_the_dispatched_call_whole() {
+    let reader = OpenAiRealtimeCodec;
+    let writer = crate::codec::ir::GeminiLiveCodec;
+    let mut read_st = DecodeState::default();
+    let mut write_st = DecodeState::default();
+    let mut frame = |event: Value| -> Vec<Value> {
+        reader
+            .read_down(wire(&event.to_string()), &mut read_st)
+            .into_iter()
+            .filter_map(|ir| writer.write_down(ir, &mut write_st))
+            .map(|w| as_value(&w))
+            .collect()
+    };
+    // A dispatched call: one Gemini `functionCall` carrying its arguments.
+    let dispatched = |frames: &[Value]| -> Vec<Value> {
+        frames
+            .iter()
+            .filter_map(|f| f["toolCall"]["functionCalls"].as_array())
+            .flatten()
+            .filter(|fc| fc.get("args").is_some())
+            .cloned()
+            .collect()
+    };
+
+    let opened = frame(json!({
+        "type": "response.output_item.added",
+        "item": { "type": "function_call", "call_id": "call_9", "name": "weather" },
+    }));
+    assert!(
+        dispatched(&opened).is_empty(),
+        "an announcement dispatches no call with arguments of its own: {opened:?}"
+    );
+    for fragment in ["{\"lo", "c\":\"S", "F\"}"] {
+        let framed = frame(json!({
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call_9",
+            "delta": fragment,
+        }));
+        assert!(
+            framed.is_empty(),
+            "a fragment of a call's arguments frames nothing on its own: {framed:?}"
+        );
+    }
+    let closed = frame(json!({
+        "type": "response.function_call_arguments.done",
+        "call_id": "call_9",
+    }));
+    let calls = dispatched(&closed);
+    assert_eq!(
+        calls.len(),
+        1,
+        "the close dispatches the call once: {closed:?}"
+    );
+    assert_eq!(calls[0]["id"], "call_9");
+    assert_eq!(calls[0]["name"], "weather");
+    assert_eq!(
+        calls[0]["args"],
+        json!({ "loc": "SF" }),
+        "the fragments alone reach the dispatched call, whole and in order"
+    );
+}
+
 // ── tools: correlation across the call loop ──────────────────────────────────────────────────────
 
 #[test]
@@ -965,8 +920,8 @@ fn response_done_usage_extracts_split_token_classes() {
         "type": "response.done",
         "response": {
             "usage": {
-                "total_tokens": 150,
-                "input_tokens": 100,
+                "total_tokens": 145,
+                "input_tokens": 95,
                 "output_tokens": 50,
                 "input_token_details": { "audio_tokens": 80, "text_tokens": 15, "cached_tokens": 5 },
                 "output_token_details": { "audio_tokens": 40, "text_tokens": 10 }
@@ -982,6 +937,55 @@ fn response_done_usage_extracts_split_token_classes() {
     assert_eq!(u.cached, 5);
     assert_eq!(u.audio_out, 40);
     assert_eq!(u.text_out, 10);
+}
+
+/// RED-BEFORE-GREEN (MONEY; the Realtime API reference: `usage` "will correspond to billing", and
+/// `input_token_details.image_tokens` is "The number of image tokens used as input for the
+/// Response"): a turn whose input carried an image bills its image tokens under their own class,
+/// and the input classes sum to the stated `input_tokens`. RED: only the audio and text entries
+/// were read, so the 10 image tokens billed zero.
+#[test]
+fn image_input_tokens_are_billed() {
+    let src = json!({
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "total_tokens": 230,
+                "input_tokens": 150,
+                "output_tokens": 80,
+                "input_token_details": { "text_tokens": 40, "audio_tokens": 100, "image_tokens": 10 },
+                "output_token_details": { "text_tokens": 20, "audio_tokens": 60 }
+            }
+        }
+    });
+    let ir = OpenAiRealtimeCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    let IrServerEvent::Usage(u) = &ir[0] else {
+        panic!("expected Usage")
+    };
+    assert_eq!((u.audio_in, u.text_in, u.image_in), (100, 40, 10), "{u:?}");
+    let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
+    assert!(
+        billed.contains(&(crate::meta::CLASS_IMAGE_TOKENS_IN, 10)),
+        "the image tokens bill as their own class: {billed:?}"
+    );
+    assert_eq!((u.audio_out, u.text_out), (60, 20), "{u:?}");
+}
+
+/// RED-BEFORE-GREEN (MONEY): the image tokens bill even when the stated total is absent: each side
+/// bills the sum of every entry of its breakdown. RED: the image entry was never read.
+#[test]
+fn image_input_tokens_are_billed_without_a_stated_total() {
+    let src = json!({
+        "type": "response.done",
+        "response": { "usage": {
+            "input_token_details": { "text_tokens": 4, "audio_tokens": 0, "image_tokens": 300 }
+        } }
+    });
+    let ir = OpenAiRealtimeCodec.read_down(wire(&src.to_string()), &mut DecodeState::default());
+    let IrServerEvent::Usage(u) = &ir[0] else {
+        panic!("expected Usage")
+    };
+    assert_eq!((u.audio_in, u.text_in, u.image_in), (0, 4, 300), "{u:?}");
 }
 
 #[test]
@@ -1236,6 +1240,8 @@ fn usage_extraction_survives_reencode() {
         audio_out: 4,
         text_in: 1,
         text_out: 2,
+        image_in: 0,
+        video_in: 0,
         cached: 0,
     };
     let w = down(&codec, IrServerEvent::Usage(u));

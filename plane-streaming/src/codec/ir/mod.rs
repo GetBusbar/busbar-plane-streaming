@@ -35,10 +35,9 @@ pub mod tool;
 pub mod usage;
 
 pub use codec::gemini::GeminiLiveCodec;
-pub use codec::{DecodeState, DuplexReader, DuplexWriter, OpenAiRealtimeCodec, WireEvent, WireRef};
-pub use config::{MaxOutputTokens, SessionConfig};
-pub use control::{Eagerness, IrDuplexControl, IrVad};
-pub use event::{IrClientEvent, IrServerEvent};
-pub use media::{truncate_point_ms, AudioFormat, IrAudioFrame, UpDown};
-pub use tool::{CallRef, IrDuplexTool};
+pub use media::AudioFormat;
 pub use usage::IrDuplexUsage;
+
+// The codec's names in one place for the crate's alloc gate; shipped code names each by its module.
+#[cfg(test)]
+pub use codec::{DecodeState, DuplexReader, OpenAiRealtimeCodec, WireEvent, WireRef};
