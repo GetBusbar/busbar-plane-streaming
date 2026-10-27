@@ -30,7 +30,6 @@
 //!
 //! ## What it holds across calls
 //!
-//! The plane value ([`StreamingPlane`]) is immutable and carries only its configured upstream list.
 //! A door instance holds its live generations; a live session's state (the codec's decode state, the
 //! open turn's counters and the session's cumulative units) is a [`session_unit::SessionUnit`].
 
@@ -53,106 +52,12 @@ mod provider;
 mod request_unit;
 mod session;
 mod session_door;
-mod session_params;
 mod session_pump;
-/// The session record the crate's tests read (the door writes none: the kernel writes a session's
-/// one line).
-#[cfg(test)]
-mod session_row;
 mod session_unit;
-/// The live sessions one open builds, by door (the crate's tests' driver; the door holds `Live`).
-#[cfg(test)]
-mod sessions;
 mod splice;
 
 #[cfg(test)]
 mod tests;
 
-// The plane value and its upstreams: the crate's tests' (purity, the plane's meta); a shipped build
-// states the plane through its door alone.
-#[cfg(test)]
-use busbar_contract::ids::LaneId;
-#[cfg(test)]
-use busbar_contract::plugin::{AbiVersion, Kind, Plugin};
-
-#[cfg(test)]
-use claims::Dialect;
-
 /// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
 pub use door::door;
-
-/// One configured upstream this plane may dial or pair a claim against.
-///
-/// Borrowed for the life of the program, the same way `busbar-plane-llm::Upstream` is: the
-/// composition root interns every config-derived key once through
-/// the host's word interner (its `Registration`) and hands over names that outlive it.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Upstream {
-    /// The priced lane this upstream is reached on.
-    pub lane: LaneId,
-    /// The host to dial.
-    pub host: &'static str,
-    /// Which dialect the upstream speaks. Always one of the two duplex dialects this plane can
-    /// DIAL — `openai-realtime` or `gemini-live`. Twilio and the one-shot dialects are ingress-only
-    /// claims; a unit that arrives on them is routed to one of these two upstreams, never dialed as
-    /// one itself.
-    pub dialect: Dialect,
-}
-
-/// The streaming plane. Voice is one dialect inside it (DECISIONS #18), not its name.
-///
-/// The one field is a borrowed, immutable list: no cell, no lock, no atomic. The purity test in
-/// `tests::purity` asserts that by walking the type rather than by trusting this sentence.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct StreamingPlane {
-    upstreams: &'static [Upstream],
-}
-
-#[cfg(test)]
-impl StreamingPlane {
-    /// A plane with a configured upstream set.
-    #[must_use]
-    pub const fn new(upstreams: &'static [Upstream]) -> Self {
-        Self { upstreams }
-    }
-
-    /// A plane with nothing configured.
-    ///
-    /// It answers every question the loop asks; its answer to "where does this go" is a destination
-    /// the trust unit refuses. That is the honest answer for a plane with no upstream configured —
-    /// not a panic, and not a fabricated host.
-    pub const EMPTY: Self = Self::new(&[]);
-
-    /// The first configured upstream that speaks a given dialect.
-    ///
-    /// First match wins, the declaration order the operator wrote. Choosing among several when more
-    /// than one qualifies is the trust unit's and the ranking hooks' business, not this plane's.
-    #[must_use]
-    pub fn upstream_for_dialect(&self, dialect: Dialect) -> Option<&'static Upstream> {
-        self.upstreams.iter().find(|u| u.dialect == dialect)
-    }
-}
-
-#[cfg(test)]
-impl Default for StreamingPlane {
-    fn default() -> Self {
-        Self::EMPTY
-    }
-}
-
-#[cfg(test)]
-impl Plugin for StreamingPlane {
-    fn key(&self) -> &'static str {
-        <Self as busbar_contract::plane::PlaneMeta>::KEY
-    }
-
-    fn kind(&self) -> Kind {
-        Kind::Plane
-    }
-
-    fn abi(&self) -> AbiVersion {
-        AbiVersion(1)
-    }
-}

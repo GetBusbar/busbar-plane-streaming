@@ -145,12 +145,7 @@ where
     /// of the model's response and the caller runs it, a barge-in is the caller's to act on (Law 11;
     /// QUESTIONS Q98). The reader reads it only to meter: a usage report or an error closes the open
     /// turn, and a tool call the far end opens is counted.
-    pub fn on_server_frame(
-        &mut self,
-        frame: WireEvent,
-        _now_ms: u64,
-        sink: &mut dyn TurnSink,
-    ) -> Outbound {
+    pub fn on_server_frame(&mut self, frame: WireEvent, sink: &mut dyn TurnSink) -> Outbound {
         let mut out = Outbound::default();
         if frame.0.is_empty() {
             return out;
