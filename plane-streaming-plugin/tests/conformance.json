@@ -1,4 +1,7 @@
 {
+  "credentials": [
+    "bb-canary-streaming-5c1e7a"
+  ],
   "settings": {
     "session": {
       "model": "m-cap"
@@ -78,7 +81,13 @@
       "unit": 7,
       "claim": 1,
       "method": "POST",
-      "target": "/v1/realtime/calls"
+      "target": "/v1/realtime/calls",
+      "fields": [
+        [
+          "authorization",
+          "Bearer bb-canary-streaming-5c1e7a"
+        ]
+      ]
     },
     "unclaimed": {
       "unit": 8,

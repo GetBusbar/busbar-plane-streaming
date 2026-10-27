@@ -17,6 +17,8 @@
 //! Every answer is plain data in the plane's own vocabulary; writing it into the host's buffers is
 //! the door's job. A new ATTEMPT forgets what the previous attempt's far end said.
 
+use zeroize::{Zeroize, Zeroizing};
+
 use crate::codec::ir::config::SessionConfig;
 use crate::driven::{
     mint_failed, mint_reply, sdp_reply, Attempt, Door, Reply, FIELD_CONTENT_TYPE, FIELD_LOCATION,
@@ -49,8 +51,8 @@ pub struct Piece<'a> {
     pub head: &'a [(&'a [u8], &'a [u8])],
 }
 
-/// The plane's answer to one piece.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The plane's answer to one piece. (No equality: a mint's answer to the caller is sealed.)
+#[derive(Debug)]
 pub enum Answer {
     /// Nothing to emit yet.
     Nothing,
@@ -64,8 +66,9 @@ pub enum Answer {
     Refused,
 }
 
-/// One unit on a one-request door.
-#[derive(Debug, Clone)]
+/// One unit on a one-request door. Its `Debug` gives the far end's gathered answer as a length:
+/// a mint's answer carries the live `ek_` secret.
+#[derive(Clone)]
 pub struct RequestUnit {
     door: Door,
     locked: SessionConfig,
@@ -73,8 +76,24 @@ pub struct RequestUnit {
     status: Option<u16>,
     location: Option<String>,
     content_type: Option<String>,
-    far: Vec<u8>,
+    /// The far end's answer, gathered: wiped when it is cleared or dropped.
+    far: Zeroizing<Vec<u8>>,
     answered: bool,
+}
+
+impl std::fmt::Debug for RequestUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestUnit")
+            .field("door", &self.door)
+            .field("locked", &self.locked)
+            .field("caller_ref", &self.caller_ref)
+            .field("status", &self.status)
+            .field("location", &self.location)
+            .field("content_type", &self.content_type)
+            .field("far", &format_args!("{} bytes", self.far.len()))
+            .field("answered", &self.answered)
+            .finish()
+    }
 }
 
 impl RequestUnit {
@@ -94,7 +113,7 @@ impl RequestUnit {
             status: None,
             location: None,
             content_type: None,
-            far: Vec::new(),
+            far: Zeroizing::new(Vec::new()),
             answered: false,
         })
     }
@@ -122,7 +141,7 @@ impl RequestUnit {
                 self.status = None;
                 self.location = None;
                 self.content_type = None;
-                self.far.clear();
+                self.far.zeroize();
                 match self
                     .door
                     .route(&self.locked, self.caller_ref.as_deref(), &[])
@@ -160,7 +179,7 @@ impl RequestUnit {
             self.location = field(FIELD_LOCATION);
             self.content_type = field(FIELD_CONTENT_TYPE);
         }
-        self.far.extend_from_slice(piece.bytes);
+        gather(&mut self.far, piece.bytes);
         if !piece.last {
             return Answer::Nothing;
         }
@@ -176,8 +195,21 @@ impl RequestUnit {
                 &self.far,
             ),
         };
+        self.far.zeroize();
         self.answer(reply)
     }
+}
+
+/// Append `bytes` to the gathered answer `far`. Outgrowing its buffer moves it into a larger one
+/// and wipes the old (a `Vec` that grew in place would leave each outgrown buffer unwiped).
+fn gather(far: &mut Zeroizing<Vec<u8>>, bytes: &[u8]) {
+    if far.capacity() - far.len() < bytes.len() {
+        let wanted = (far.len() + bytes.len()).max(far.capacity().saturating_mul(2));
+        let mut grown = Zeroizing::new(Vec::with_capacity(wanted));
+        grown.extend_from_slice(far);
+        *far = grown;
+    }
+    far.extend_from_slice(bytes);
 }
 
 #[cfg(test)]
