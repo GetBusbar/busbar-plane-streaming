@@ -76,7 +76,7 @@ const BARE: &[u8] = b"{}";
 const SIDEBAND: u32 = 2;
 
 fn linked(d: &Dispatcher, instance: &str, settings: &'static [u8]) -> Plugin<Plane> {
-    let row = LinkedRow::of(door::door).expect("the streaming door states itself");
+    let row = LinkedRow::of(door).expect("the streaming door states itself");
     let bind = Bind {
         instance: Arc::from(instance),
         max_inflight_cap: 8,

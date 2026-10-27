@@ -1126,12 +1126,15 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
     out.set(|o| &o.dialect, a.dialect);
     // Every door is keyed or signed: a unit on it needs a principal.
     out.set(|o| &o.principal_need, PRINCIPAL_REQUIRED);
-    let model = instance
-        .get()
-        .and_then(Plane::newest)
-        .and_then(|cfg| cfg.session.model);
-    if let Some(model) = model {
-        out.route(ROUTE_DIRECT, &model);
+    // The model is read where the newest generation holds it: an arrival copies no section.
+    if let Some(p) = instance.get() {
+        let generations = lock(&p.generations);
+        if let Some(model) = generations
+            .last()
+            .and_then(|(cfg, _)| cfg.session.model.as_deref())
+        {
+            out.route(ROUTE_DIRECT, model);
+        }
     }
     Outcome::Ready
 });
