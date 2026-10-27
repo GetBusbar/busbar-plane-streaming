@@ -6,6 +6,12 @@
 
 use super::*;
 
+/// The Statement's version is the crate's, as each sibling plane's literal is pinned to its own.
+#[test]
+fn the_statement_names_the_crates_version() {
+    assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
+}
+
 /// P-ITEM: WRONG-PROVIDER ATTRIBUTION (spec DONE item 2, "All P-item behaviours match 1.5.5";
 /// first fixed red-before-green in busbar e15713578a). A live session is served by the provider
 /// its door DIALED: a Gemini Live session's far frames ride the Gemini Live socket's need, at the
