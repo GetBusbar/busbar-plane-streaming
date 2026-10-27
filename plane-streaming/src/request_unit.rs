@@ -21,8 +21,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::codec::ir::config::SessionConfig;
 use crate::driven::{
-    mint_failed, mint_reply, sdp_reply, Attempt, Door, Reply, Steps, FIELD_CONTENT_TYPE,
-    FIELD_LOCATION,
+    mint_failed, mint_reply, sdp_reply, Attempt, Door, Reply, FIELD_CONTENT_TYPE, FIELD_LOCATION,
 };
 
 /// Who pushed a piece.
@@ -147,8 +146,7 @@ impl RequestUnit {
                     .door
                     .route(&self.locked, self.caller_ref.as_deref(), &[])
                 {
-                    Ok(Some(attempt)) => Answer::Attempt(attempt),
-                    Ok(None) => Answer::Refused,
+                    Ok(attempt) => Answer::Attempt(attempt),
                     Err(reason) => {
                         let reply = mint_failed(&reason);
                         self.answer(reply)

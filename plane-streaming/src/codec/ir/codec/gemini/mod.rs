@@ -64,7 +64,6 @@ mod wire {
     pub const SETUP_COMPLETE: &str = "setupComplete";
     pub const SERVER_CONTENT: &str = "serverContent";
     pub const TOOL_CALL: &str = "toolCall";
-    pub const TOOL_CALL_CANCELLATION: &str = "toolCallCancellation";
     pub const USAGE_METADATA: &str = "usageMetadata";
 }
 
@@ -637,7 +636,6 @@ impl DuplexReader for GeminiLiveCodec {
                         let Some(media) = decode_audio(str_at(inline, "data")) else {
                             continue; // a payload that is not base64 is not silence — emit no frame.
                         };
-                        st.record_played(media.len() as u64);
                         out.push(IrServerEvent::AudioFrame(IrAudioFrame {
                             dir: UpDown::Down,
                             seq: st.next_down_seq(),
@@ -660,9 +658,6 @@ impl DuplexReader for GeminiLiveCodec {
                 });
             }
             if sc.get("turnComplete").and_then(Value::as_bool) == Some(true) {
-                // THE GEMINI ITEM BOUNDARY: the turn's audio is complete, so the played-out position
-                // starts over — the next turn's barge-in truncates at ITS audio, not the running total.
-                st.reset_playback();
                 out.push(IrServerEvent::AudioDone {
                     item_id: String::new(),
                 });
@@ -703,7 +698,6 @@ impl DuplexReader for GeminiLiveCodec {
         } else {
             // `toolCallCancellation`, `goAway`, `sessionResumptionUpdate` and any unknown frame have no
             // shared IR home — degrade to empty (drop+warn).
-            let _ = wire::TOOL_CALL_CANCELLATION;
             Vec::new()
         };
 
@@ -719,6 +713,34 @@ impl DuplexReader for GeminiLiveCodec {
 }
 
 // ── writer ──────────────────────────────────────────────────────────────────────────────────────
+
+/// One tool event framed for either direction: `None` while a call's arguments are still
+/// accumulating (or a close finds no accumulation to frame).
+fn tool_event(t: IrDuplexTool, st: &mut DecodeState) -> Option<Value> {
+    Some(match t {
+        IrDuplexTool::CallOpen { call_id, name, .. } => {
+            // The announcement names the tool; the ARGUMENTS follow as fragments and the call
+            // is framed whole at its close, so the name is remembered for that frame.
+            st.remember_call_name(&call_id, &name);
+            tool_call_frame(json!({ "id": call_id, "name": name }))
+        }
+        IrDuplexTool::CallArgs {
+            call_ref,
+            json_delta,
+            ..
+        } => {
+            st.push_call_args(call_ref, &json_delta);
+            return None;
+        }
+        IrDuplexTool::CallClose { call_ref, call_id } => atomic_tool_call(call_ref, &call_id, st)?,
+        IrDuplexTool::CallResult {
+            call_id,
+            name,
+            output,
+            ..
+        } => tool_response_frame(&call_id, &name, &output),
+    })
+}
 
 /// Frame one Gemini `toolCall` around a single `functionCall` object.
 fn tool_call_frame(fc: Value) -> Value {
@@ -817,37 +839,9 @@ impl DuplexWriter for GeminiLiveCodec {
                 | IrDuplexControl::ItemDelete { .. }
                 | IrDuplexControl::ItemTruncate { .. } => return None,
             },
-            IrClientEvent::Tool(t) => match t {
-                IrDuplexTool::CallResult {
-                    call_id,
-                    name,
-                    output,
-                    ..
-                } => tool_response_frame(&call_id, &name, &output),
-                // The other tool variants are server→client; a client-side writer never authors them,
-                // but frame them symmetrically (through the same accumulate-then-frame-at-close seam)
-                // rather than panic.
-                IrDuplexTool::CallOpen {
-                    call_ref,
-                    call_id,
-                    name,
-                } => {
-                    st.remember_call_name(&call_id, &name);
-                    let _ = call_ref;
-                    tool_call_frame(json!({ "id": call_id, "name": name }))
-                }
-                IrDuplexTool::CallArgs {
-                    call_ref,
-                    json_delta,
-                    ..
-                } => {
-                    st.push_call_args(call_ref, &json_delta);
-                    return None;
-                }
-                IrDuplexTool::CallClose { call_ref, call_id } => {
-                    atomic_tool_call(call_ref, &call_id, st)?
-                }
-            },
+            // The server→client tool variants are framed symmetrically (through the same
+            // accumulate-then-frame-at-close seam) rather than panic.
+            IrClientEvent::Tool(t) => tool_event(t, st)?,
         };
         Some(wire_of(&v))
     }
@@ -855,36 +849,7 @@ impl DuplexWriter for GeminiLiveCodec {
     fn write_down(&self, ev: IrServerEvent, st: &mut DecodeState) -> Option<WireEvent> {
         let v = match ev {
             IrServerEvent::SessionCreated { session } => json!({ wire::SETUP_COMPLETE: session }),
-            IrServerEvent::Tool(t) => match t {
-                IrDuplexTool::CallOpen {
-                    call_ref,
-                    call_id,
-                    name,
-                } => {
-                    // The announcement names the tool; the ARGUMENTS follow as fragments and the call
-                    // is framed whole at its close, so the name is remembered for that frame.
-                    st.remember_call_name(&call_id, &name);
-                    let _ = call_ref;
-                    tool_call_frame(json!({ "id": call_id, "name": name }))
-                }
-                IrDuplexTool::CallArgs {
-                    call_ref,
-                    json_delta,
-                    ..
-                } => {
-                    st.push_call_args(call_ref, &json_delta);
-                    return None;
-                }
-                IrDuplexTool::CallClose { call_ref, call_id } => {
-                    atomic_tool_call(call_ref, &call_id, st)?
-                }
-                IrDuplexTool::CallResult {
-                    call_id,
-                    name,
-                    output,
-                    ..
-                } => tool_response_frame(&call_id, &name, &output),
-            },
+            IrServerEvent::Tool(t) => tool_event(t, st)?,
             // Gemini's barge-in signal is `serverContent.interrupted`; the shared SpeechStarted maps
             // onto it. SpeechStopped has no Gemini wire event → an empty serverContent (dropped).
             IrServerEvent::SpeechStarted { .. } => json!({

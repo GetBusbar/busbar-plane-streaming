@@ -112,12 +112,24 @@ fn at(buf: &[u8], s: Span) -> String {
 /// Keep a line printable: one line, bounded.
 pub fn clip(s: &str) -> String {
     let one: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-    if one.chars().count() > 360 {
-        let head: String = one.chars().take(360).collect();
+    if one.chars().count() > 2400 {
+        let head: String = one.chars().take(2400).collect();
         format!("{head}…")
     } else {
         one
     }
+}
+
+/// Whether a far request's `target` is the dialect's socket: the path is the socket's exactly, and
+/// the model the session is dialled for rides the query as the provider's own docs spell it
+/// (`/v1/realtime?model=<m>`), the query nothing but that one member.
+pub fn dials_socket(target: &str, socket: &str) -> bool {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    path == socket
+        && (query.is_empty()
+            || query
+                .strip_prefix("model=")
+                .is_some_and(|m| !m.is_empty() && !m.contains(['&', '='])))
 }
 
 /// Whether the planted wrong answers are the subject (`VOICE_CONFORM_RED` set).

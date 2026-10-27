@@ -14,8 +14,8 @@ use busbar_plugin_loader::dispatch::LoadedDoor;
 
 /// This plugin's own door, named for the loader.
 fn loaded_door() -> LoadedDoor {
-    busbar_plugin_loader::dispatch::admit_linked(busbar_plane_streaming::door)
-        .expect("the streaming door is admitted")
+    let door: busbar_contract::abi::mechanism::door::DoorFn = busbar_plane_streaming::door;
+    LoadedDoor::from(door)
 }
 
 busbar_plugin_loader::conformance_suite! {

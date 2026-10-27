@@ -61,8 +61,8 @@ use busbar_contract::abi::plane::{
     RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, CANCEL_FAILED,
     EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION,
     INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
-    PIECE_REFUSED, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT, TAIL_REFUSED_PIECE,
-    TAP_FAULT_DECODE, UNITS_ESTIMATED, UNITS_REPORTED,
+    PIECE_REFUSED, PRINCIPAL_REQUIRED, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT,
+    TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
@@ -73,7 +73,7 @@ use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
 use crate::claims::{HTTP_TRANSPORT, WS_TRANSPORT};
 use crate::config::StreamsCfg;
-use crate::driven::{Door, Steps, FIELD_CONTENT_LENGTH};
+use crate::driven::{Door, FIELD_CONTENT_LENGTH};
 use crate::meta;
 use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME, TWILIO_MEDIA_STREAMS};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
@@ -95,10 +95,6 @@ pub const SUBJECT_NOUN: &str = "streaming session";
 pub const ADMIN_NOUN: &str = "streaming-session";
 /// The record resource kind a session is audited under.
 pub const AUDIT_KIND: &str = "streaming_session";
-/// The one value a key's `session` grant names to open a live session here: the pool every session
-/// is served on.
-#[cfg(test)]
-pub const SESSION_POOL: &str = "streaming-server";
 /// The section the plane reads but does not own: the upstream destinations (core's grammar, as the
 /// llm door consumes it).
 pub const PROVIDERS_SECTION: &str = "providers";
@@ -314,9 +310,6 @@ pub const TAIL: &PlaneTail = &{
     t
 };
 
-/// The inbound auth style of a door read without a credential (no door of the plane is, today).
-pub const NO_AUTH: &str = "none";
-
 /// One door a live session is opened through: one line of this plane on a listener's guest list
 /// (`BUSBAR-1.6.0.md` section 6, "Auth points and guest lists", step 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,7 +325,7 @@ pub struct Route {
     /// upgrade request, then the connection is handed to [`Route::carrier`].
     pub upgrade: bool,
     /// The default inbound auth style: applied only where the operator's config gives the line no
-    /// auth.
+    /// auth. Every door is keyed or signed: none is read without a credential.
     pub auth: &'static str,
     /// The dialect the line's units speak, by its index in the tail's dialects.
     pub dialect: u32,
@@ -341,24 +334,6 @@ pub struct Route {
 }
 
 impl Route {
-    /// Read without a credential.
-    #[must_use]
-    pub const fn open(&self) -> bool {
-        let a = self.auth.as_bytes();
-        let n = NO_AUTH.as_bytes();
-        if a.len() != n.len() {
-            return false;
-        }
-        let mut i = 0;
-        while i < a.len() {
-            if a[i] != n[i] {
-                return false;
-            }
-            i += 1;
-        }
-        true
-    }
-
     /// `true` for an exact path, `false` for a pattern.
     #[cfg(test)]
     #[must_use]
@@ -445,15 +420,15 @@ impl Route {
     #[must_use]
     pub fn claim(&self) -> ClaimSpec {
         // The flags are the contract's one spelling of a route's claim: a `{name}` target is a
-        // PATTERN (`CLAIM_PATTERN`), any other exact, an open one adds `CLAIM_OPEN`. Without
-        // `CLAIM_PATTERN` a `{call_id}` target would be claimed as a one-level prefix.
+        // PATTERN (`CLAIM_PATTERN`), any other exact; no door is open. Without `CLAIM_PATTERN` a
+        // `{call_id}` target would be claimed as a one-level prefix.
         ClaimSpec {
             refusal_dialect: self.refusal_dialect as u16,
             ..ServedRoute {
                 verb: self.verb,
                 target: self.target,
                 carrier: self.carrier,
-                open: self.open(),
+                open: false,
             }
             .claim_spec()
         }
@@ -651,16 +626,11 @@ struct Units {
 }
 
 impl Units {
-    /// Whether a new unit is refused: the table is at [`MAX_UNITS`]. No unit is dropped to make
-    /// room (THE DESIGN: admission bounds live work, nothing evicts it); a unit leaves when it ends.
-    fn full(&self) -> bool {
-        self.held.len() >= MAX_UNITS
-    }
-
-    /// Hold `held` for unit `unit`. Answers `false`, holding nothing, at the bound: no unit in
-    /// flight is dropped to make room.
+    /// Hold `held` for unit `unit`. Answers `false`, holding nothing, at [`MAX_UNITS`]: no unit in
+    /// flight is dropped to make room (THE DESIGN: admission bounds live work, nothing evicts it);
+    /// a unit leaves when it ends.
     fn hold(&mut self, unit: u64, held: Held) -> bool {
-        if !self.held.contains_key(&unit) && self.full() {
+        if !self.held.contains_key(&unit) && self.held.len() >= MAX_UNITS {
             return false;
         }
         self.held.insert(unit, held);
@@ -1150,25 +1120,15 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
             }
         }
     }
-    let mut units = input.units_buf();
-    for (class, amount) in a.door.admit() {
-        units.push(UnitCount {
-            class,
-            source: UNITS_ESTIMATED,
-            amount,
-        });
-    }
-    if !units.fits() {
-        out.set(|o| &o.units_needed, units.needed() as u32);
-        return Outcome::Failed;
-    }
-    out.set(|o| &o.units_written, units.written() as u32);
+    // No admission estimate: a session pays for what the far end reports, so no unit is written.
+    out.set(|o| &o.units_written, 0);
     out.set(|o| &o.op_class, a.op_class);
     out.set(|o| &o.dialect, a.dialect);
-    out.set(|o| &o.principal_need, a.door.authenticate());
-    let model = (!a.door.is_open())
-        .then(|| instance.get().and_then(Plane::newest))
-        .flatten()
+    // Every door is keyed or signed: a unit on it needs a principal.
+    out.set(|o| &o.principal_need, PRINCIPAL_REQUIRED);
+    let model = instance
+        .get()
+        .and_then(Plane::newest)
         .and_then(|cfg| cfg.session.model);
     if let Some(model) = model {
         out.route(ROUTE_DIRECT, &model);
@@ -1358,7 +1318,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                     {
                         live.accept();
                     }
-                    live.from_far_end(bytes, now_ms);
+                    live.from_far_end(bytes);
                     p.far_end_ended(door, given.flags(), live.call_id(), live.accepted());
                 }
                 FROM_KERNEL => {}
@@ -1390,7 +1350,6 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         Some((Side::FarEnd, _)) => door
             .route(&cfg.session, None, &[])
             .ok()
-            .flatten()
             .map(|a| (a.verb, live.dial_target(a.target))),
         _ => None,
     };
@@ -1478,10 +1437,6 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         }
     }
     if !units.held.contains_key(&given.unit()) {
-        // At the bound a new unit is refused: no unit in flight is dropped to make room.
-        if units.full() {
-            return Outcome::Refused;
-        }
         let caller_ref = input
             .caller_ref()
             .as_str()
@@ -1491,6 +1446,7 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         let Some(held) = p.held(given.claim(), caller_ref) else {
             return Outcome::Refused;
         };
+        // At the bound a new unit is refused: no unit in flight is dropped to make room.
         if !units.hold(given.unit(), held) {
             return Outcome::Refused;
         }

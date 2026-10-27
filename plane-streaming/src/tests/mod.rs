@@ -1,6 +1,4 @@
-//! Test-only wiring: the selector, purity/determinism
-//! and style checks the crate doc comments promise elsewhere (`lib.rs`'s [`crate::StreamingPlane`] doc
-//! comment cites [`purity`] by name).
+//! Test-only wiring: the selector and style checks.
 
 /// What a request path matches, decided the same way the boot's overlap check decides it.
 mod selectors {
@@ -28,8 +26,6 @@ mod selectors {
     #[test]
     fn twilio_media_streams_is_claimed_on_the_websocket_carrier_under_the_webhook_signature() {
         use crate::claims::{dialect_for, Dialect, DIALECT_CLAIMS, WS_TRANSPORT};
-        use crate::StreamingPlane;
-        use busbar_contract::plane::PlaneMeta;
 
         let twilio: Vec<_> = DIALECT_CLAIMS
             .iter()
@@ -47,10 +43,6 @@ mod selectors {
         );
         assert_eq!(claim.selector, Selector::PrefixOneLevel("/twilio"));
         assert_eq!(claim.scheme_alternatives, &["webhook-signature"]);
-        assert!(
-            <StreamingPlane as PlaneMeta>::CLAIMS.contains(claim),
-            "the declared claim is one the boot seal reads"
-        );
         // An arrival one level under `/twilio` names the dialect; the prefix alone and a deeper
         // path do not, and neither does another dialect's path.
         assert_eq!(
@@ -61,61 +53,6 @@ mod selectors {
         assert_eq!(dialect_for("/twilio/a/b"), None);
         assert_eq!(dialect_for("/v1/realtime"), Some(Dialect::OpenaiRealtime));
     }
-}
-
-/// Purity and determinism: the properties every plane in the design is held to ("pure over its
-/// inputs, no input or output of its own"), checked here rather than merely asserted in prose.
-mod purity {
-    use crate::StreamingPlane;
-
-    /// `StreamingPlane` derives `Copy`. Every interior-mutable cell (`Cell`, `RefCell`, `Mutex`,
-    /// `OnceLock`, ...) is `!Copy`, so a type that IS `Copy` structurally cannot hold one: this is
-    /// a compile-time proof, not a convention, that the plane keeps no mutable state of its own
-    /// across calls: everything that varies across a session lives in the session's own state
-    /// (see `session_unit::SessionUnit`).
-    const fn assert_copy<T: Copy>() {}
-    const _: () = assert_copy::<StreamingPlane>();
-
-    /// Two planes built from the same upstream list compare equal, and looking up the same dialect
-    /// twice gives the same answer — the two are really the same check, since `upstream_for_dialect`
-    /// is a pure function of `self.upstreams()` and the argument.
-    #[test]
-    fn same_configuration_answers_the_same_way_every_time() {
-        use crate::claims::Dialect;
-        use crate::Upstream;
-        use busbar_contract::ids::LaneId;
-
-        static UPSTREAMS: &[Upstream] = &[Upstream {
-            lane: LaneId::new("realtime"),
-            host: "api.openai.example",
-            dialect: Dialect::OpenaiRealtime,
-        }];
-        let a = StreamingPlane::new(UPSTREAMS);
-        let b = StreamingPlane::new(UPSTREAMS);
-        assert_eq!(a, b);
-        assert_eq!(
-            a.upstream_for_dialect(Dialect::OpenaiRealtime),
-            b.upstream_for_dialect(Dialect::OpenaiRealtime)
-        );
-        assert_eq!(a.upstream_for_dialect(Dialect::GeminiLive), None);
-    }
-
-    /// A plane with nothing configured answers every dialect lookup with `None` rather than
-    /// panicking or fabricating a host.
-    #[test]
-    fn empty_plane_names_no_upstream() {
-        use crate::claims::Dialect;
-        assert!(StreamingPlane::EMPTY
-            .upstream_for_dialect(Dialect::OpenaiRealtime)
-            .is_none());
-        assert_eq!(StreamingPlane::EMPTY, StreamingPlane::default());
-    }
-
-    // The µ-law transform's determinism used to be "asserted" here by comparing one call of a pure
-    // function to a second call of the same pure function over the same byte — a statement no
-    // implementation of it can falsify, and one that read as coverage the transform did not have.
-    // What the transform is actually held to lives in [`super::ulaw`]: the standard's own reference
-    // vectors in both directions, and a round trip over all 256 bytes that pins the decoded sample.
 }
 
 /// Style rules this crate holds itself to, checked rather than merely asserted in prose: no
@@ -186,9 +123,6 @@ mod voice_corpus_tests;
 
 /// What reading one wire frame may allocate, borrowed against owned.
 mod codec_alloc_gate_tests;
-
-/// The plane's type-level purity gates, moved in from `tests/purity.rs`.
-mod purity_gate_tests;
 
 /// The bytes a caller's answer body puts on the wire, read as a test's stand-in for the host's reply
 /// buffer: a sealed answer through the SDK's test-only driver (`test-seal`).

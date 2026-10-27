@@ -27,34 +27,21 @@ pub const SDP_CONTENT_TYPE: &str = "application/sdp";
 /// The header a mint request names its caller in, so the provider can attribute the browser session.
 pub const SAFETY_IDENTIFIER_HEADER: &str = "OpenAI-Safety-Identifier";
 
-/// The lifetime of a minted secret when none is requested, in seconds.
-pub const DEFAULT_TTL_SECS: u64 = 600;
-/// The shortest lifetime a mint asks for, in seconds.
-pub const MIN_TTL_SECS: u64 = 10;
-/// The longest lifetime a mint asks for, in seconds.
-pub const MAX_TTL_SECS: u64 = 7200;
+/// The lifetime a minted secret is asked for, in seconds.
+pub const TTL_SECS: u64 = 600;
 
 /// The prefix every ephemeral secret the provider mints carries.
 const EK_PREFIX: &str = "ek_";
 
-/// The lifetime a mint asks for: the requested one, else [`DEFAULT_TTL_SECS`], held inside
-/// [`MIN_TTL_SECS`]..=[`MAX_TTL_SECS`].
-#[must_use]
-pub fn clamped_ttl_secs(requested: Option<u64>) -> u64 {
-    requested
-        .unwrap_or(DEFAULT_TTL_SECS)
-        .clamp(MIN_TTL_SECS, MAX_TTL_SECS)
-}
-
-/// The mint request's body: the secret's lifetime, anchored at its creation, and the locked session
+/// The mint request's body: the secret's lifetime ([`TTL_SECS`]), anchored at its creation, and the locked session
 /// params the browser's session is bound to, in the GA `session` shape the GA client-secret endpoint
 /// reads ([`SessionConfig::ga_session`]: `type` is `realtime`).
 ///
 /// # Errors
 /// The serializer's text when the body does not serialize.
-pub fn mint_request_body(ttl_secs: u64, config: &SessionConfig) -> Result<Vec<u8>, String> {
+pub fn mint_request_body(config: &SessionConfig) -> Result<Vec<u8>, String> {
     let body = serde_json::json!({
-        "expires_after": { "anchor": "created_at", "seconds": ttl_secs },
+        "expires_after": { "anchor": "created_at", "seconds": TTL_SECS },
         "session": serde_json::Value::Object(config.ga_session()),
     });
     serde_json::to_vec(&body).map_err(|e| format!("mint request body did not serialize: {e}"))

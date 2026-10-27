@@ -61,7 +61,6 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         assert_eq!(declared.egress_class, EGRESS_PROVIDER, "{door:?}");
         let attempt = door
             .route(&cfg.session, None, &[])
-            .expect("a session door's dial is a request")
             .expect("a session door dials");
         assert_eq!(
             attempt.target, path,
@@ -91,14 +90,14 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         .position(|c| *c == crate::meta::CLASS_TEXT_TOKENS_OUT)
         .expect("declared") as u32;
     let mut gemini = Live::open(Door::Gemini, &cfg).expect("a session door");
-    gemini.from_far_end(report, 0);
+    gemini.from_far_end(report);
     assert_eq!(
         gemini.units(),
         [(text_in, 10), (text_out, 20), (PER_SESSION_CLASS, 1)],
         "the Gemini session is metered on the Gemini far end's report"
     );
     let mut openai = Live::open(Door::Sideband, &cfg).expect("a session door");
-    openai.from_far_end(report, 0);
+    openai.from_far_end(report);
     assert_eq!(
         openai.units(),
         [(PER_SESSION_CLASS, 1)],
@@ -274,7 +273,10 @@ fn a_refused_unit_is_forgotten_and_its_room_is_free() {
         for unit in 1..=MAX_UNITS as u64 {
             assert!(units.hold(unit, held_mint()), "unit {unit}");
         }
-        assert!(units.full(), "the table is full");
+        assert!(
+            !units.hold(MAX_UNITS as u64 + 1, held_mint()),
+            "the table is full"
+        );
     }
     assert!(lock(&p.calls).pend(1, "rtc_1".to_string()));
     p.end_unit(1);
@@ -283,7 +285,10 @@ fn a_refused_unit_is_forgotten_and_its_room_is_free() {
         "the refused unit is forgotten"
     );
     assert_eq!(lock(&p.calls).take(1), None, "its pending call with it");
-    assert!(!lock(&p.units).full(), "its room is free");
+    assert!(
+        lock(&p.units).hold(MAX_UNITS as u64 + 1, held_mint()),
+        "its room is free"
+    );
     assert!(
         lock(&p.units).held.contains_key(&2),
         "no other unit is touched"

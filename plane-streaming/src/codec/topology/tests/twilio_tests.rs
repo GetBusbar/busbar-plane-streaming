@@ -3,14 +3,9 @@
 
 //! TWILIO ENVELOPE TESTS (behind `runtime`): the JSON Media Streams envelope decodes/encodes to the
 //! raw µ-law bytes the telephony proxy carries; the base64 payload maps to the exact wire bytes; the
-//! `start` media-format guard refuses a non-`g711_ulaw` negotiation; the forgery guard rejects a
-//! `streamSid` that was not the one admitted; and the webhook TwiML renders as ONE `<Stream>` element
-//! whatever the URL it is handed contains.
+//! `start` media-format guard refuses a non-`g711_ulaw` negotiation.
 
-use crate::codec::topology::twilio::{
-    assert_g711_ulaw, render_twiml_for_call, AdmissionGuard, TwilioEnvelope, TwilioError,
-    TwilioEvent,
-};
+use crate::codec::topology::twilio::{assert_g711_ulaw, TwilioEnvelope, TwilioError, TwilioEvent};
 
 fn frame(v: serde_json::Value) -> Vec<u8> {
     serde_json::to_vec(&v).unwrap()
@@ -187,24 +182,6 @@ fn start_media_format_guard_refuses_non_g711() {
     );
 }
 
-// ── The pre-admission forgery guard rejects a mismatched streamSid ──────────────────────────────────
-
-#[test]
-fn forgery_guard_rejects_mismatched_stream_sid() {
-    let guard = AdmissionGuard::bind("call-1", "MZ-admitted");
-    assert_eq!(guard.call_id(), "call-1");
-    assert_eq!(guard.stream_sid(), "MZ-admitted");
-
-    // The admitted stream is allowed.
-    assert!(guard.admit("MZ-admitted").is_ok());
-
-    // A forged/replayed connection presenting a different streamSid is REFUSED before any byte flows.
-    assert!(
-        matches!(guard.admit("MZ-forged"), Err(TwilioError::Forged { .. })),
-        "a mismatched streamSid is a forged connection and is refused"
-    );
-}
-
 // ── Malformed / unknown frames fail closed ──────────────────────────────────────────────────────────
 
 #[test]
@@ -223,48 +200,5 @@ fn malformed_and_unknown_frames_fail_closed() {
             "event": "media", "streamSid": "MZ1", "media": { "payload": "*not*base64*" }
         }))),
         Err(TwilioError::BadPayload)
-    );
-}
-
-// ── The webhook TwiML is ONE <Stream>, whatever the URL carries ──────────────────────────────────
-
-/// THE INVARIANT THE ESCAPE EXISTS FOR. The rendered TwiML is what Twilio EXECUTES: the URL is
-/// interpolated into an XML attribute, so a `"` in it would close the attribute and everything after
-/// it would be read as markup — a `<Dial>` in a call id would become a real instruction to dial. The
-/// document must stay exactly one `<Stream>`, and no bare `"` may appear inside the attribute value.
-#[test]
-fn rendered_twiml_is_one_stream_element_whatever_the_url_carries() {
-    let twiml = render_twiml_for_call(
-        r#"wss://host"/x"#,
-        r#"call"/><Dial><Number>+15550100</Number></Dial><Stream url="wss://evil"#,
-    );
-
-    assert_eq!(
-        twiml.matches("<Stream").count(),
-        1,
-        "exactly one Stream element: {twiml}"
-    );
-    assert!(
-        !twiml.contains("<Dial"),
-        "no injected instruction survives as markup: {twiml}"
-    );
-    assert!(
-        !twiml.contains("<Number"),
-        "and no dialled number does either: {twiml}"
-    );
-
-    // The attribute value itself: everything between the opening quote and the closing one carries no
-    // bare `"` — the escape is what keeps the attribute a single value.
-    let (_, after) = twiml.split_once("url=\"").expect("a url attribute");
-    let (value, rest) = after.split_once('"').expect("a closing quote");
-    assert!(
-        !value.contains('"'),
-        "the attribute value holds no unescaped quote: {value}"
-    );
-    assert!(value.contains("&quot;"), "the quote is escaped: {value}");
-    assert!(value.contains("&lt;Dial&gt;"), "as is the markup: {value}");
-    assert_eq!(
-        rest, "/></Connect></Response>",
-        "and the document ends right there"
     );
 }
