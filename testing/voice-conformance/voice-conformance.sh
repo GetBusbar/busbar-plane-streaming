@@ -68,7 +68,7 @@
 #
 # THE INPUTS LATER LEGS CONSUME (authored by another agent; referenced, not created, here):
 #   testing/voice-conformance/fixtures/{openai,gemini}/   captured transcripts + spec fixtures
-#   qa/evidence/voice-cross-dialect-mapping.*             the OpenAI<->Gemini equivalence the
+#   docs/evidence/voice-cross-dialect-mapping.*             the OpenAI<->Gemini equivalence the
 #                                                         cross-parity leg is judged against
 #
 # MODES
