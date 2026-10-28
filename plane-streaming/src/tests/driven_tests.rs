@@ -76,9 +76,10 @@ fn the_mint_dials_nothing_and_busbars_call_names_the_caller() {
 /// mint keeps the served plane's text.
 #[test]
 fn a_minted_ticket_is_answered_and_a_failure_keeps_the_served_text() {
-    let ok = minted("ek_1", 9);
+    let ok = minted(&crate::tests::sealed_minted("ek_1", 9).ticket, 9);
     assert_eq!(ok.status, 200);
-    let v: serde_json::Value = serde_json::from_slice(&ok.body).expect("json");
+    let v: serde_json::Value =
+        serde_json::from_slice(&crate::tests::body_bytes(ok.body)).expect("json");
     assert_eq!(
         v,
         serde_json::json!({"value": "ek_1", "expires_at_unix": 9})
@@ -86,7 +87,7 @@ fn a_minted_ticket_is_answered_and_a_failure_keeps_the_served_text() {
     let refused = mint_failed("the host minted no ticket");
     assert_eq!(refused.status, 502);
     assert_eq!(
-        String::from_utf8(refused.body).expect("utf-8"),
+        String::from_utf8(crate::tests::body_bytes(refused.body)).expect("utf-8"),
         "streaming ephemeral-secret mint failed: ephemeral token mint failed: the host minted no \
          ticket"
     );
@@ -172,7 +173,7 @@ fn plain_openai_realtime_over_ws_is_its_own_session_door() {
 #[test]
 fn debug_of_a_minted_tickets_reply_prints_no_ticket() {
     const CANARY: &str = "ek_CANARY7c1f9e";
-    let reply = minted(CANARY, 9);
+    let reply = minted(&crate::tests::sealed_minted(CANARY, 9).ticket, 9);
     assert_eq!(reply.status, 200);
     let as_bytes = CANARY
         .bytes()

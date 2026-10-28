@@ -10,14 +10,16 @@ fn a_mint_asks_for_a_ten_minute_ticket() {
     assert_eq!(TTL_SECS, 600);
 }
 
-/// The mint door's answer is the OpenAI-compatible shape SDKs read, and nothing else.
+/// The mint door's answer is the OpenAI-compatible shape SDKs read, and nothing else: the ticket
+/// sealed through the SDK (R7), members in name order.
 #[test]
 fn the_caller_is_answered_the_ticket_and_its_expiry_only() {
-    let read: serde_json::Value =
-        serde_json::from_slice(&minted_answer("ek_abc", 1_700_000_600)).expect("json");
+    let m = crate::tests::sealed_minted("ek_abc", 1_700_000_600);
+    let mut answer = minted_answer(&m.ticket, m.expires_at_unix).expect("text");
+    let wire = crate::tests::sealed_bytes(&mut answer);
     assert_eq!(
-        read,
-        serde_json::json!({"value": "ek_abc", "expires_at_unix": 1_700_000_600})
+        wire,
+        br#"{"expires_at_unix":1700000600,"value":"ek_abc"}"#.to_vec()
     );
     assert!(TICKET_PREFIX == "ek_", "SDKs pass the ek_ prefix through");
 }

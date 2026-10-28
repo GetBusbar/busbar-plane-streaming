@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use busbar_contract::abi::sdk::Minted;
+
 use crate::codec::ir::config::SessionConfig;
 use crate::driven::{mint_failed, minted, Door, Reply};
 use crate::ticket::{ticket_record, TTL_SECS};
@@ -39,8 +41,8 @@ pub struct Piece {
     pub last: bool,
 }
 
-/// The plane's answer to one piece.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The plane's answer to one piece. (No equality: a mint's answer to the caller is sealed.)
+#[derive(Debug)]
 pub enum Answer {
     /// Nothing to emit yet.
     Nothing,
@@ -123,11 +125,11 @@ impl RequestUnit {
         }
     }
 
-    /// The host answered the mint: the caller's answer, the ticket and its expiry, or the served
-    /// plane's 502 naming why.
-    pub fn minted(&mut self, result: Result<(String, u64), String>) -> Answer {
+    /// The host answered the mint: the caller's answer, the ticket (sealed: R7) and its expiry, or
+    /// the served plane's 502 naming why.
+    pub fn minted(&mut self, result: Result<Minted, String>) -> Answer {
         let reply = match result {
-            Ok((ticket, expires_at_unix)) => minted(&ticket, expires_at_unix),
+            Ok(m) => minted(&m.ticket, m.expires_at_unix),
             Err(reason) => mint_failed(&reason),
         };
         self.answer(reply)

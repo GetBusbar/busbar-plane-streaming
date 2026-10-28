@@ -14,6 +14,8 @@
 //! Busbar terminates the browser's media (row 132): the mint door answers a ticket busbar mints
 //! itself and dials nothing; the SDP door is a datagram session whose far end is busbar's own call.
 
+use busbar_contract::abi::sdk::cred::{Cred, SealedWrite};
+
 use crate::ticket::{minted_answer, CALLS_PATH, CALL_FORM_TYPE, SAFETY_IDENTIFIER_HEADER};
 
 /// The media type of a JSON body.
@@ -201,16 +203,48 @@ pub fn call_attempt(caller: Option<&str>) -> Attempt {
     }
 }
 
+/// A caller's answer body: public bytes, or a mint's answer sealed by the SDK (it carries busbar's
+/// bearer ticket, which this plane never holds as text and cannot read back: R7).
+#[allow(missing_debug_implementations)]
+pub enum Body {
+    /// Public bytes (a refusal's text).
+    Public(Vec<u8>),
+    /// The SDK's sealed write: the door moves it into the host's reply buffer
+    /// (`SealedWrite::stream_into`).
+    Sealed(SealedWrite),
+}
+
+impl Body {
+    /// The length in bytes (public: the head states it).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Public(b) => b.len(),
+            Self::Sealed(w) => w.len(),
+        }
+    }
+
+    /// The public bytes; `None` for a sealed answer, which this plane never reads. (Read by the
+    /// voice battery, whose overlay lifts this `cfg(test)` fence.)
+    #[cfg(test)]
+    #[must_use]
+    pub fn public(&self) -> Option<&[u8]> {
+        match self {
+            Self::Public(b) => Some(b),
+            Self::Sealed(_) => None,
+        }
+    }
+}
+
 /// What the caller is answered. Its `Debug` prints the body's length, never its bytes: a mint
 /// answer's body is the live `ek_` ticket.
-#[derive(Clone, PartialEq, Eq)]
 pub struct Reply {
     /// The status.
     pub status: u16,
     /// The head fields, in order.
     pub fields: Vec<(&'static str, String)>,
     /// The body.
-    pub body: Vec<u8>,
+    pub body: Body,
 }
 
 impl std::fmt::Debug for Reply {
@@ -237,20 +271,28 @@ pub fn mint_failed(reason: &str) -> Reply {
     Reply {
         status: MINT_FAILED_STATUS,
         fields: Vec::new(),
-        body: format!(
-            "streaming ephemeral-secret mint failed: ephemeral token mint failed: {reason}"
-        )
-        .into_bytes(),
+        body: Body::Public(
+            format!(
+                "streaming ephemeral-secret mint failed: ephemeral token mint failed: {reason}"
+            )
+            .into_bytes(),
+        ),
     }
 }
 
-/// The caller's answer to a mint busbar answered: the ticket and its expiry.
+/// Why a minted ticket was not answered: it is not text.
+pub const MINTED_NOT_TEXT: &str = "the minted ticket is not text";
+
+/// The caller's answer to a mint busbar answered: the ticket, sealed, and its expiry.
 #[must_use]
-pub fn minted(ticket: &str, expires_at_unix: u64) -> Reply {
-    Reply {
-        status: 200,
-        fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
-        body: minted_answer(ticket, expires_at_unix),
+pub fn minted(ticket: &Cred, expires_at_unix: u64) -> Reply {
+    match minted_answer(ticket, expires_at_unix) {
+        Ok(answer) => Reply {
+            status: 200,
+            fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
+            body: Body::Sealed(answer),
+        },
+        Err(_) => mint_failed(MINTED_NOT_TEXT),
     }
 }
 
