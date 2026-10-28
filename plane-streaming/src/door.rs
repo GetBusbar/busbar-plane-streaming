@@ -41,7 +41,7 @@
 //! units on every answer. A request unit on a session door is refused.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::piece::{self, Owed};
 use busbar_contract::abi::hook::REQUEST_STREAM;
@@ -72,6 +72,7 @@ use busbar_contract::abi::sdk::{
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
 use crate::claims::{HTTP_TRANSPORT, WS_TRANSPORT};
+use crate::codec::ir::config::SessionConfig;
 use crate::config::StreamsCfg;
 use crate::driven::{Door, FIELD_CONTENT_LENGTH};
 use crate::meta;
@@ -827,12 +828,17 @@ impl Brokered {
     }
 }
 
+/// One live generation: its section, the session params a request unit under it mints over (built
+/// once, at its publish), and its answers.
+type Published = (Arc<StreamsCfg>, Arc<SessionConfig>, Generation);
+
 /// One open plane instance.
 pub struct Plane {
     /// The deployment's public base URL, as `open` read it; a refresh keeps it.
     public_url: Option<String>,
-    /// The live generations' settings and answers, oldest first (control lane only).
-    generations: Mutex<Vec<(StreamsCfg, Generation)>>,
+    /// The live generations' settings, the session params a request unit under each mints over
+    /// (built once, at its publish), and their answers, oldest first (control lane only).
+    generations: Mutex<Vec<Published>>,
     /// The published snapshots, held by the SDK until their generation's `retire`.
     snapshots: Generations<PlaneSnapshot>,
     /// The request units in flight.
@@ -858,11 +864,9 @@ impl Plane {
     /// that opens a live session.
     fn held(&self, claim: u32, caller_ref: Option<String>) -> Option<Held> {
         let door = Door::of(claim)?;
-        let generations = lock(&self.generations);
-        let (cfg, _) = generations.last()?;
-        // The mint binds the browser's session to the section's session under its two token
-        // ceilings, as a socket session is locked, and names the session model by its wire name.
-        let locked = crate::session_door::with_ceilings(cfg.wire_session(cfg.session.clone()), cfg);
+        let locked = lock(&self.generations)
+            .last()
+            .map(|(_, locked, _)| Arc::clone(locked))?;
         let unit = RequestUnit::open(door, locked, caller_ref)?;
         Some(Held {
             unit,
@@ -900,15 +904,17 @@ impl Plane {
     }
 
     /// The newest live generation's section; `None` before the first publish.
-    fn newest(&self) -> Option<StreamsCfg> {
-        lock(&self.generations).last().map(|(cfg, _)| cfg.clone())
+    fn newest(&self) -> Option<Arc<StreamsCfg>> {
+        lock(&self.generations)
+            .last()
+            .map(|(cfg, _, _)| Arc::clone(cfg))
     }
 
     /// Whether any live generation configures a session wall-clock ceiling.
     fn any_ceiling(&self) -> bool {
         lock(&self.generations)
             .iter()
-            .any(|(cfg, _)| cfg.session_max_secs.is_some())
+            .any(|(cfg, _, _)| cfg.session_max_secs.is_some())
     }
 
     /// Name the instance's driver ticket: a session owes output of its own.
@@ -929,7 +935,11 @@ impl Plane {
     ) {
         let g = Generation::build(generation, self.public_url.as_deref());
         out.publish(pick, &self.snapshots, generation, &g.snapshot());
-        lock(&self.generations).push((cfg, g));
+        // The mint binds the browser's session to the section's session under its two token
+        // ceilings, as a socket session is locked, and names the session model by its wire name.
+        let locked =
+            crate::session_door::with_ceilings(cfg.wire_session(cfg.session.clone()), &cfg);
+        lock(&self.generations).push((Arc::new(cfg), Arc::new(locked), g));
     }
 }
 
@@ -1012,7 +1022,7 @@ slot!(
 
 slot!(Retire, GenIn, OutHead, |instance, input, _out| {
     if let Some(p) = instance.get() {
-        lock(&p.generations).retain(|(_, g)| g.generation() != input.generation());
+        lock(&p.generations).retain(|(_, _, g)| g.generation() != input.generation());
         p.snapshots.retire(input.generation());
     }
     Outcome::Ready
@@ -1095,14 +1105,17 @@ slot!(
         if let Some(p) = instance.get() {
             let ticket = input.cancel().ticket();
             let unit = input.unit();
-            let session_answered = lock(&p.sessions).far_answered(ticket, unit);
-            let unit_answered = lock(&p.units).far_answered(ticket, unit);
+            // Each table is locked once, in the order a session's piece takes them.
+            let mut sessions = lock(&p.sessions);
+            let mut units = lock(&p.units);
+            let session_answered = sessions.far_answered(ticket, unit);
+            let unit_answered = units.far_answered(ticket, unit);
             answered = session_answered || unit_answered;
-            lock(&p.sessions).cancel(ticket);
-            lock(&p.units).cancel(ticket, unit);
+            sessions.cancel(ticket);
+            units.cancel(ticket, unit);
             if unit != 0 {
                 lock(&p.calls).forget(unit);
-                lock(&p.sessions).close(unit);
+                sessions.close(unit);
             }
         }
         out.set(
@@ -1160,7 +1173,7 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         let generations = lock(&p.generations);
         if let Some(model) = generations
             .last()
-            .and_then(|(cfg, _)| cfg.session.model.as_deref())
+            .and_then(|(cfg, _, _)| cfg.session.model.as_deref())
         {
             out.route(ROUTE_DIRECT, model);
         }
