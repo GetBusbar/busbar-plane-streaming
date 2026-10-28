@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE METER'S READS — what a live session reads off each frame, in each dialect. Design
-//! `BUSBAR-1.6.0.md` #18/#45.
+//! The meter's reads: what a live session reads off each frame, in each dialect.
 //!
-//! A session is a relay (Law 5: "A RELAY (same dialect) runs the reader only as that read-only tap
-//! and sends the client's bytes with governed byte-level splices"). So the reader answers only what
+//! A session is a relay: a same-dialect relay runs the reader only as a read-only tap and sends
+//! the client's bytes with governed byte-level splices. So the reader answers only what
 //! the session meters: from the far end, a usage report, an error, a tool call's open; from the
 //! caller, the audio it sends. The plane writes no frame of its own beyond the two a session is
 //! told, the locked session and the ceiling's error ([`crate::splice::LockedKeys`]).
@@ -60,9 +59,8 @@ const FLOOR_BYTES_PER_TOKEN: u64 = 4;
 
 /// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity
 /// was reported), a readable count is the count (through the crate's one seam,
-/// [`crate::codec::ir::usage::read_count_u64`]), and a present-but-UNREADABLE count is a REFUSAL (#42) —
-/// the old `unwrap_or_default` metered a count the provider really sent as zero, and every money view
-/// over that turn was then faithfully wrong. The error is the operator-facing message: the field and
+/// [`crate::codec::ir::usage::read_count_u64`]), and a present-but-UNREADABLE count is a refusal: a count the
+/// provider really sent is never metered as zero. The error is the operator-facing message: the field and
 /// a BOUNDED spelling (cut on a character, so a hostile multi-byte spelling cannot panic the cut).
 fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     match o.and_then(|x| x.get(key)) {
@@ -75,8 +73,8 @@ fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     }
 }
 
-/// WHAT AN UNREADABLE USAGE REPORT BILLS (owner ruling 2026-10-27: spend is always attributed and
-/// nothing is silent): the llm plane's floor, one output token per [`FLOOR_BYTES_PER_TOKEN`] bytes
+/// What an unreadable usage report bills (spend is always attributed and nothing is silent): the
+/// llm plane's floor, one output token per [`FLOOR_BYTES_PER_TOKEN`] bytes
 /// of the report and at least one, marked as the plane's floor. Its one log line names the field and
 /// its spelling; the door's call capture carries it to the plugin's host log.
 pub(crate) fn usage_floor(report_len: usize, message: &str) -> IrDuplexUsage {
@@ -133,7 +131,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
                 vec![Metered::ToolOpen]
             }
             // An absent `usage` is no report (zero); a present-but-unreadable billed count bills
-            // the plane's floor and says so (#42: never metered at zero).
+            // the plane's floor and says so (never metered at zero).
             wire::RESPONSE_DONE => vec![Metered::Usage(
                 match v
                     .get("response")
@@ -160,8 +158,8 @@ impl DuplexReader for OpenAiRealtimeCodec {
     }
 }
 
-/// Extract the split token classes from a `response.done.usage` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
-/// SEPARATE classes; extraction-only, never client-translated).
+/// Extract the split token classes from a `response.done.usage` object (audio vs text are
+/// separate classes; extraction-only, never client-translated).
 ///
 /// The stated `input_tokens`/`output_tokens` totals are what the far end bills ("Usage statistics
 /// for the Response, this will correspond to billing", the Realtime API reference), and the
@@ -171,12 +169,12 @@ impl DuplexReader for OpenAiRealtimeCodec {
 /// alone: a turn that also carried image input billed its audio and text and dropped the rest.
 /// Audio bills as audio and image tokens as image tokens (each its own declared class); every
 /// other token the side bills is attributed to `text`. It is an integer passthrough of the wire
-/// figures, no rate lookup or multiply, so #71's hot-path rule is untouched.
+/// figures, no rate lookup or multiply.
 ///
 /// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` (`gemini/mod.rs`).
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
-/// present-but-unreadable one is an `Err` the caller bills the floor for ([`usage_floor`], #42).
+/// present-but-unreadable one is an `Err` the caller bills the floor for ([`usage_floor`]).
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     let ind = u.get("input_token_details");
     let outd = u.get("output_token_details");
@@ -202,7 +200,7 @@ fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     })
 }
 
-/// THE SECOND DIALECT — Gemini Live (`BidiGenerateContent`). See [`gemini::GeminiLiveCodec`].
+/// The second dialect, Gemini Live (`BidiGenerateContent`). See [`gemini::GeminiLiveCodec`].
 pub mod gemini;
 
 #[cfg(test)]

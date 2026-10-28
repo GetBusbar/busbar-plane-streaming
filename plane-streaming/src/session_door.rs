@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! LIVE SESSIONS THROUGH THE DOOR (`BUSBAR-1.6.0.md` Part 3, section 12, "Duplex sessions" (K6);
-//! THE DESIGN, section 7, "A session is one unit with one line").
+//! Live sessions through the door: a session is one unit with one line.
 //!
 //! A piece that names a stream is a live session's. The door keeps one [`Live`] per stream, built
 //! at the stream's first piece over the newest live generation's `streams:` section, and answers
@@ -19,7 +18,7 @@
 //!   the session's unsolicited output: the door wakes the instance's driver ticket, `drive` names
 //!   the session, and each collection (`FROM_KERNEL`, no bytes, no attempt) answers the next queued
 //!   frame, toward the side it is bound for.
-//! - EVERY ANSWER REPORTS THE SESSION'S CUMULATIVE UNITS, the eight classes the plane counts over its
+//! - Every answer reports the session's cumulative units, the eight classes the plane counts over its
 //!   closed turns and its open turn's running counts (so a cancel or a cut, which reports nothing
 //!   of its own, bills what streamed from the last answer), and, once the far end has first
 //!   answered the session, its fee unit ([`PER_SESSION_CLASS`], `1`): a session whose far end never
@@ -121,7 +120,7 @@ pub struct Live {
     call_id: Option<String>,
     /// The model a session attached to no call names on its dial (`?model=`): the provider's wire
     /// name for the session model its route was named for (the catalog entry's `upstream_model`,
-    /// else its name; Part 2 #51), on the plain realtime and telephony doors; `None` on the sideband
+    /// else its name), on the plain realtime and telephony doors; `None` on the sideband
     /// (it names its call) and on the Gemini Live socket (its model rides the setup frame).
     dial_model: Option<String>,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
@@ -232,8 +231,7 @@ impl Live {
     /// The target the session dials under the member's base URL: the dialect's socket `path`; for
     /// a session attached to a provider's call, that call only (`?call_id=`, the provider's
     /// sideband connection to the call's own session); for a plain or telephony session, the
-    /// session's model (`?model=`, form-escaped, as OpenAI's own WS surface takes it; ARCHITECT
-    /// ruling 2026-10-23 on Part 2 #45).
+    /// session's model (`?model=`, form-escaped, as OpenAI's own WS surface takes it).
     #[must_use]
     pub fn dial_target(&self, path: &str) -> String {
         match (&self.call_id, &self.dial_model) {
@@ -352,7 +350,7 @@ impl Live {
     }
 }
 
-/// THE SECTION'S TOKEN CEILINGS over the session params `locked`: the per-response output cap is
+/// The section's token ceilings over the session params `locked`: the per-response output cap is
 /// `streams.max_output_tokens`, or the session's own where that is lower, and the context window is
 /// `streams.context_window_tokens`. Each dialect states them in its own keys when the session is
 /// locked (`max_output_tokens` and `truncation` on OpenAI Realtime, `generationConfig.maxOutputTokens`
@@ -368,8 +366,7 @@ pub fn with_ceilings(mut locked: SessionConfig, cfg: &StreamsCfg) -> SessionConf
     locked
 }
 
-/// THE SESSION-OPEN PARAMS A COMMITTED HOOK REWRITE PRODUCED (the session-open hook projection the
-/// retired streams crate applied, verbatim: ARCHITECT Q-L5B-PROJECT), or why they cannot be used.
+/// The session-open params a committed hook rewrite produced, or why they cannot be used.
 /// The rewrite is a JSON object PATCHED over the `locked` params as the hook was shown them: a key
 /// the hook named wins, a key it did not name keeps the locked value (naming a key with `null`
 /// clears it). The merge comes before the decode, so a patch that names one bad field refuses the
@@ -415,8 +412,8 @@ pub struct Sessions {
 impl Sessions {
     /// Stream `stream`'s session, opened on `door` under `cfg` at its first piece. `None` for a
     /// door that answers one request, a stream past [`MAX_SESSIONS`], or a stream whose session
-    /// ended: a caller's piece after its call ended (a second Twilio `stop`) is refused, as 1.5.5
-    /// refused it, never opened as a fresh session that ends and settles a second time.
+    /// ended: a caller's piece after its call ended (a second Twilio `stop`) is refused,
+    /// never opened as a fresh session that ends and settles a second time.
     pub fn get_or_open(&mut self, stream: u64, door: Door, cfg: &StreamsCfg) -> Option<&mut Live> {
         if !self.live.contains_key(&stream) {
             if self.live.len() >= MAX_SESSIONS || self.ended.contains(&stream) {

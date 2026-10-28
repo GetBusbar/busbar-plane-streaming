@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! ONE LIVE SESSION AS THE DRIVER SERVES IT, sans I/O: the session pump, the telephony carrier's
+//! One live session as the driver serves it, sans I/O: the session pump, the telephony carrier's
 //! envelope where the session came in over the telephony door, the session's cumulative units and
 //! its wall-clock ceiling.
 //!
@@ -191,7 +191,7 @@ where
     /// caller runs the tool (Law 11).
     ///
     /// A usage report the reader cannot read (a billed count present but not a count) bills the
-    /// plane's floor for the turn and the session goes on (owner ruling 2026-10-27: spend is always
+    /// plane's floor for the turn and the session goes on (spend is always
     /// attributed); [`Self::take_unreadable`] reports it to the kernel once.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8]) -> Plan {

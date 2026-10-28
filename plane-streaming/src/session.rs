@@ -109,7 +109,7 @@ pub fn class_counts(
 ) -> Vec<(MeterClassId, u64)> {
     let reported = usage.copied().unwrap_or_default();
     // `cached_tokens` is NOT ledgered here: it is a subset of the input token classes above, not a
-    // billable class beside them (architect ruling #71 — see `meta::CLASS_CACHED_TOKENS`'s doc).
+    // billable class beside them (see `meta::CLASS_CACHED_TOKENS`'s doc).
     // Pricing it too would double-bill the same cached input.
     [
         (meta::CLASS_AUDIO_TOKENS_IN, reported.audio_in),

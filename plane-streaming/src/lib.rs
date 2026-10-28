@@ -1,5 +1,5 @@
-//! The STREAMING plane: what bytes mean, for duplex/live sessions. Voice is ONE dialect inside this
-//! plane (DECISIONS #18) — never the plane's name.
+//! The streaming plane: what bytes mean, for duplex/live sessions. Voice is one dialect inside this
+//! plane, never the plane's name.
 //!
 //! ## What this crate is
 //!
@@ -7,7 +7,7 @@
 //! per-generation snapshot, the driver answers for the one-request doors ([`driven`]), and one live
 //! session as the driver serves it ([`session_unit`] over the frame pump [`session_pump`]). The
 //! meter's reads of each dialect (OpenAI Realtime, Gemini Live) and the session config they lock
-//! are this crate's own `codec` module (`docs/design/BUSBAR-1.6.0.md` #18/#45); the
+//! are this crate's own `codec` module; the
 //! Twilio Media Streams envelope is [`codec::topology::twilio`]. No wire format is written twice.
 //!
 //! ## What this crate is not
@@ -59,5 +59,5 @@ mod splice;
 #[cfg(test)]
 mod tests;
 
-/// THE DOOR: this plugin's one public item (BUSBAR-1.6.0.md l.3567, Crate shape).
+/// The door: this plugin's one public item.
 pub use door::door;

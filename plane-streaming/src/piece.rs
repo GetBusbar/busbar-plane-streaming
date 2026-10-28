@@ -4,7 +4,7 @@
 //! THIS PLANE'S PIECE ANSWER: what an `on_piece` answer owes the host's reply
 //! buffer, and the one settle of the answer's field, unit and arena buffers.
 //!
-//! `BUSBAR-1.6.0.md` Part 3, section 12, "The route pump": a full reply buffer answers `more = 1`;
+//! The route pump: a full reply buffer answers `more = 1`;
 //! the kernel flushes it, waits for the caller's side and calls again with the same `from` and zero
 //! bytes ([`is_recall`]). An answer that does not fit its field, unit or arena buffer is short as a
 //! whole ([`settle`]): the slot answers FAILED, and the kernel re-calls with the same piece and room.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE PLANE'S ANSWERS TO THE KERNEL PLANE DRIVER for its two one-request doors (`BUSBAR-1.6.0.md`
-//! Part 3, section 12): the ephemeral-secret mint and the SDP offer. Each answer is plain data, in
+//! The plane's answers to the kernel plane driver for its two one-request doors: the
+//! ephemeral-secret mint and the SDP offer. Each answer is plain data, in
 //! the plane's own vocabulary; writing it into the host's buffers is the door's job.
 //!
 //! | driver crossing | here |
@@ -44,7 +44,7 @@ pub enum Door {
     /// The telephony socket.
     Twilio,
     /// `GET /v1/realtime`: plain server-to-server OpenAI Realtime over WS, attached to no call
-    /// (ARCHITECT ruling 2026-10-23 on Part 2 #45; the sideband is call-attached only).
+    /// (the sideband is call-attached only).
     Realtime,
 }
 
