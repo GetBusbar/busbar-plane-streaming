@@ -205,7 +205,7 @@ fn cred_check(o: &CredObs) -> Result<String, String> {
         || !minted.verb.is_empty()
         || !minted.target.is_empty()
         || minted.status != u32::from(refused.status)
-        || minted.emitted != refused.body
+        || refused.body.public() != Some(minted.emitted.as_slice())
     {
         return Err(format!(
             "the mint reached for the provider instead of minting: {arrived:?} {minted:?}"

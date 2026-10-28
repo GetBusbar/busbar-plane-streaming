@@ -15,6 +15,8 @@
 //!
 //! Pure: nothing here sends a request, reads a clock or holds a key.
 
+use busbar_contract::abi::sdk::cred::{Cred, NotJsonText, SealedJson, SealedWrite};
+
 use crate::codec::ir::config::SessionConfig;
 
 /// The prefix of every ticket the plane's mint door answers: the plane's issued-id prefix, declared
@@ -44,14 +46,18 @@ pub const SAFETY_IDENTIFIER_HEADER: &str = "OpenAI-Safety-Identifier";
 /// The prefix of a call id, busbar's and the provider's alike.
 const CALL_ID_PREFIX: &str = "rtc_";
 
-/// The caller's answer to a mint: the ticket and its expiry, and nothing else.
-#[must_use]
-pub fn minted_answer(ticket: &str, expires_at_unix: u64) -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "value": ticket,
-        "expires_at_unix": expires_at_unix,
-    }))
-    .unwrap_or_default()
+/// The caller's answer to a mint: the ticket and its expiry, and nothing else, members in name
+/// order. The ticket is a bearer credential (R7): it goes into the answer SEALED, through the SDK,
+/// and this plane never reads it.
+///
+/// # Errors
+///
+/// The ticket is not JSON text (the host's ticket is UTF-8, so this does not happen).
+pub fn minted_answer(ticket: &Cred, expires_at_unix: u64) -> Result<SealedWrite, NotJsonText> {
+    SealedJson::new()
+        .public("expires_at_unix", expires_at_unix)
+        .sealed("value", ticket)
+        .encoded()
 }
 
 /// The record stored with a ticket: the session config its session is locked to.

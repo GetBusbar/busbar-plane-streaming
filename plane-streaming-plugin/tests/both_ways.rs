@@ -717,11 +717,9 @@ fn narrow_mint_script(p: &Plugin<Plane>) -> (Vec<u8>, Vec<String>) {
 fn a_mint_answer_streams_through_a_narrow_reply_buffer() {
     let d = host();
     let (bytes, lines) = narrow_mint_script(&linked(&d));
-    let minted = serde_json::to_vec(&serde_json::json!({
-        "value": TICKET,
-        "expires_at_unix": TICKET_EXPIRES,
-    }))
-    .expect("json");
+    // The sealed answer's members go out in name order.
+    let minted =
+        format!(r#"{{"expires_at_unix":{TICKET_EXPIRES},"value":"{TICKET}"}}"#).into_bytes();
     assert_eq!(bytes, minted, "{lines:#?}");
     assert_eq!(lines.len(), minted.len().div_ceil(16), "{lines:#?}");
     for line in &lines[..lines.len() - 1] {

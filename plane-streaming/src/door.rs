@@ -76,8 +76,7 @@ use busbar_contract::abi::plane::{
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
 use busbar_contract::abi::sdk::{
-    Generations, HostBuf, Instance, Lent, Out, Safe, SafeSlot, ServiceError, Services, StaticWake,
-    Wake,
+    Generations, HostBuf, Instance, Lent, Minted, Out, Safe, SafeSlot, Services, StaticWake, Wake,
 };
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
@@ -949,9 +948,6 @@ const UNTICKETED: CompletionHandle = CompletionHandle {
 /// Why a mint answered no ticket: the host served none (none is minted, or the host refused).
 pub const MINTED_NONE: &str = "the host minted no ticket";
 
-/// The room a minted ticket is written into: far more than a ticket's prefix and signed body.
-const TICKET_ROOM: usize = 4096;
-
 /// The session a browser's session is locked to from `session`: under the section's two token
 /// ceilings, as a socket session is locked, the session model named by its wire name.
 fn browser_lock(session: SessionConfig, cfg: &StreamsCfg) -> SessionConfig {
@@ -960,15 +956,13 @@ fn browser_lock(session: SessionConfig, cfg: &StreamsCfg) -> SessionConfig {
 
 impl Plane {
     /// MINT A TICKET (`ticket.mint`) for the principal of the unit this crossing serves, living
-    /// `ttl_secs`, with `record` stored beside it: the ticket and its expiry, or why not.
-    fn mint_ticket(&self, ttl_secs: u64, record: &[u8]) -> Result<(String, u64), String> {
+    /// `ttl_secs`, with `record` stored beside it: the ticket, SEALED by the SDK (a bearer
+    /// credential this plane never reads: R7), and its expiry, or why not.
+    fn mint_ticket(&self, ttl_secs: u64, record: &[u8]) -> Result<Minted, String> {
         let services = self.services.as_ref().ok_or(MINTED_NONE)?;
-        let mut room = vec![0u8; TICKET_ROOM];
-        match services.ticket_mint(UNTICKETED, ttl_secs, record, &mut room) {
-            Ok(m) => Ok((m.ticket.to_string(), m.expires_at_unix)),
-            Err(ServiceError::Short { .. }) => Err("the minted ticket is over-long".into()),
-            Err(_) => Err(MINTED_NONE.into()),
-        }
+        services
+            .ticket_mint(UNTICKETED, ttl_secs, record)
+            .map_err(|_| MINTED_NONE.to_string())
     }
 
     /// TAKE what admitted the unit this crossing serves (`ticket.take`): `Some` a ticket's record,
@@ -1453,7 +1447,7 @@ fn answer_piece(
                 return (Outcome::Failed, false);
             }
             out.set(|o| &o.reply_status, u32::from(reply.status));
-            let done = held.owed.owe(&reply.body, EMIT_DONE, input, out);
+            let done = held.owed.owe_body(reply.body, EMIT_DONE, input, out);
             (Outcome::Ready, done)
         }
     }
