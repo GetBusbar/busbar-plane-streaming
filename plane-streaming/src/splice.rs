@@ -19,7 +19,7 @@
 
 use serde_json::{Map, Value};
 
-use crate::codec::ir::codec::gemini::{setup_locked, GeminiLiveCodec};
+use crate::codec::ir::codec::gemini::{setup_from_session_config, setup_locked, GeminiLiveCodec};
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
 use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
 use crate::codec::ir::media::AudioFormat;
@@ -76,8 +76,11 @@ pub trait LockedKeys {
     fn response_rule(&self, locked: &SessionConfig) -> Option<Rule>;
     /// The frame that tells the far end the session is locked to `locked`, in the shape its
     /// socket reads, for a caller-side envelope that configures nothing itself (the telephony
-    /// carrier); `None` for a dialect whose writer frames it.
+    /// carrier).
     fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>>;
+    /// The error frame that tells the caller why the plane ends the session (`code`, `message`);
+    /// `None` for a dialect with no in-band error.
+    fn ceiling_frame(&self, code: &str, message: &str) -> Option<Vec<u8>>;
     /// Whether `frame` carries an item the caller may never author: a conversation item, or a
     /// per-response input item, in a role that instructs the model (`system`, `developer`). Such a
     /// frame goes nowhere. A frame whose bytes cannot be read here is answered `true`.
@@ -184,6 +187,15 @@ impl LockedKeys for OpenAiRealtimeCodec {
         serde_json::to_vec(&serde_json::json!({
             "type": "session.update",
             "session": Value::Object(locked.ga_session()),
+        }))
+        .ok()
+    }
+
+    /// An `error` event naming `code` and `message`.
+    fn ceiling_frame(&self, code: &str, message: &str) -> Option<Vec<u8>> {
+        serde_json::to_vec(&serde_json::json!({
+            "type": "error",
+            "error": { "code": code, "message": message },
         }))
         .ok()
     }
@@ -416,7 +428,13 @@ impl LockedKeys for GeminiLiveCodec {
         None
     }
 
-    fn locked_frame(&self, _locked: &SessionConfig) -> Option<Vec<u8>> {
+    /// A `setup` carrying the locked session.
+    fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>> {
+        serde_json::to_vec(&setup_from_session_config(locked)).ok()
+    }
+
+    /// Gemini Live has no in-band error message: it reports errors with the socket's close.
+    fn ceiling_frame(&self, _code: &str, _message: &str) -> Option<Vec<u8>> {
         None
     }
 

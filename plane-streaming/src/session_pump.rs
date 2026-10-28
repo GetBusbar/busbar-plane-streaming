@@ -15,7 +15,7 @@
 //! as they came, and the caller acts on them. Nothing here sends, sleeps, reads a clock or holds a
 //! key; the caller carries the plan and is told when a turn closes.
 //!
-//! What the pump holds for the session: the codec's decode state, the open turn's own counters (the
+//! What the pump holds for the session: the open turn's own counters (the
 //! uplink audio admitted and the tool calls opened since the last turn closed, the two quantities no
 //! usage report carries), and the locked session config.
 //!
@@ -26,12 +26,9 @@
 use std::borrow::Cow;
 
 use crate::codec::ir::codec::peek::Lite;
-use crate::codec::ir::codec::{DecodeState, DuplexReader, DuplexWriter, WireEvent, WireRef};
+use crate::codec::ir::codec::{DuplexReader, Metered, WireEvent};
 use crate::codec::ir::config::SessionConfig;
-use crate::codec::ir::control::IrDuplexControl;
-use crate::codec::ir::event::{IrClientEvent, IrServerEvent};
 use crate::codec::ir::media::AudioFormat;
-use crate::codec::ir::tool::IrDuplexTool;
 use crate::codec::ir::usage::IrDuplexUsage;
 use crate::session::TurnCounters;
 use crate::splice::{splice, LockedKeys, Rule};
@@ -63,7 +60,6 @@ pub trait TurnSink {
 #[derive(Debug)]
 pub struct SessionPump<C> {
     codec: C,
-    decode: DecodeState,
     turn: TurnCounters,
     /// The locked `session` config: its keys are spliced over a caller's own.
     locked_config: Option<SessionConfig>,
@@ -76,7 +72,7 @@ pub struct SessionPump<C> {
 
 impl<C> SessionPump<C>
 where
-    C: DuplexReader + DuplexWriter + LockedKeys,
+    C: DuplexReader + LockedKeys,
 {
     /// A pump over `codec`, locked to `locked_config` when one is given.
     pub fn new(codec: C, locked_config: Option<SessionConfig>) -> Self {
@@ -93,7 +89,6 @@ where
         SessionPump {
             codec,
             rules,
-            decode: DecodeState::default(),
             turn: TurnCounters::default(),
             locked_config,
             audio_in,
@@ -103,57 +98,42 @@ where
     /// The error frame a session past its `ceiling_secs` ceiling is told before it closes, in its
     /// dialect; `None` when the dialect has no place to say so.
     pub fn ceiling_error(&mut self, ceiling_secs: u64) -> Option<WireEvent> {
-        self.codec.write_down(
-            IrServerEvent::Error {
-                code: SESSION_CEILING_REASON.to_string(),
-                message: format!(
+        self.codec
+            .ceiling_frame(
+                SESSION_CEILING_REASON,
+                &format!(
                     "the session reached its configured ceiling of {ceiling_secs} s (streams.session_max_secs)"
                 ),
-            },
-            &mut self.decode,
-        )
+            )
+            .map(|frame| WireEvent(frame.into()))
     }
 
     /// The locked session as a frame that configures the far end, in the shape its socket reads
     /// ([`LockedKeys::locked_frame`]): what a caller-side envelope that configures nothing itself
     /// (the telephony carrier) is translated into. `None` with no lock.
     pub fn locked_update(&mut self) -> Option<WireEvent> {
-        let config = self.locked_config.clone()?;
-        if let Some(frame) = self.codec.locked_frame(&config) {
-            return Some(WireEvent(frame.into()));
-        }
-        self.codec.write_up(
-            IrClientEvent::Control(IrDuplexControl::SessionConfigure { config }),
-            &mut self.decode,
-        )
+        let frame = self.codec.locked_frame(self.locked_config.as_ref()?)?;
+        Some(WireEvent(frame.into()))
     }
 
     /// A FRAME FROM THE FAR END. It reaches the caller as the far end sent it: a tool call is part
     /// of the model's response and the caller runs it, a barge-in is the caller's to act on (Law 11;
     /// QUESTIONS Q98). The reader reads it only to meter: a usage report or an error closes the open
-    /// turn, and a tool call the far end opens is counted. A frame whose head shows it carries none
-    /// of these (the audio) is not read at all ([`DuplexReader::meters_down`]).
+    /// turn, and a tool call the far end opens is counted ([`DuplexReader::meter_down`]: a frame
+    /// whose head shows it carries none of these, the audio, is not read past its head).
     pub fn on_server_frame(&mut self, frame: WireEvent, sink: &mut dyn TurnSink) -> Outbound {
         let mut out = Outbound::default();
         if frame.0.is_empty() {
             return out;
         }
-        if !self.codec.meters_down(&frame.0) {
-            out.downlink.push(frame);
-            return out;
-        }
-        for ev in self
-            .codec
-            .read_down_ref(WireRef(&frame.0), &mut self.decode)
-        {
-            match ev {
-                IrServerEvent::Usage(u) => {
+        for metered in self.codec.meter_down(&frame.0) {
+            match metered {
+                Metered::Usage(u) => {
                     out.usage_unreadable |= u.floor;
                     self.settle_turn(sink, Some(&u), &mut out);
                 }
-                IrServerEvent::Error { .. } => self.settle_turn(sink, None, &mut out),
-                IrServerEvent::Tool(IrDuplexTool::CallOpen { .. }) => self.turn.open_tool_call(),
-                _ => {}
+                Metered::Error => self.settle_turn(sink, None, &mut out),
+                Metered::ToolOpen => self.turn.open_tool_call(),
             }
         }
         out.downlink.push(frame);
@@ -172,8 +152,8 @@ where
         let mut out = Outbound::default();
         // The frame is read once, as strictly as a whole-frame read, its audio left where it lies.
         // An object naming none of the dialect's governed members passes every check and every
-        // splice as it came (`LockedKeys::GOVERNED`), and its audio is counted off that read; any
-        // other frame takes the checks, the whole-frame read and the splices.
+        // splice as it came (`LockedKeys::GOVERNED`); any other frame takes the checks and the
+        // splices. A frame that read refuses carries no audio the meter counts.
         let read = Lite::read(&frame.0);
         let plain = read
             .as_ref()
@@ -200,18 +180,11 @@ where
                 return out;
             }
         }
-        if let (true, Some(top)) = (plain, &read) {
+        if let Some(top) = &read {
             let (turn, audio_in) = (&mut self.turn, self.audio_in);
             self.codec.uplink_audio(top, &mut |format, len| {
                 turn.admit_audio(format.unwrap_or(audio_in), len);
             });
-        } else {
-            for ev in self.codec.read_up_ref(WireRef(&frame.0), &mut self.decode) {
-                if let IrClientEvent::AudioFrame(f) = ev {
-                    self.turn
-                        .admit_audio(f.format.unwrap_or(self.audio_in), f.media.len());
-                }
-            }
         }
         if plain || self.rules.is_empty() {
             out.upstream.push(frame);

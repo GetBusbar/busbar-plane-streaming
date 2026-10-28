@@ -13,14 +13,11 @@
 # and codecs through this harness; they never reimplement a codec — or a door — in shell.
 
 # Resolved from THIS file's location (testing/voice-conformance/lib/): the battery dir, repo root,
-# fixtures, and the cross-dialect map. Computed once at source time.
+# and fixtures. Computed once at source time.
 VC_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VC_DIR="$(cd "$VC_LIB_DIR/.." && pwd)"          # testing/voice-conformance
 VC_ROOT="$(cd "$VC_DIR/../.." && pwd)"          # repo root
 VC_FIXTURES="$VC_DIR/fixtures"
-# The cross-dialect map is busbar's (the kernel's equivalence table): read from the busbar checkout
-# the suite runs against ($BUSBAR_CHECKOUT, the pin), else from this tree when it is busbar itself.
-VC_MAP="${BUSBAR_CHECKOUT:-$VC_ROOT}/docs/evidence/voice-cross-dialect-map.json"
 # The workspace the harness builds in. In this repo the harness is not a member of the root
 # workspace; testing/conformance/voice.sh writes, at run time, a workspace that adds it and names it
 # here. Unset, the root manifest is used (busbar's layout).

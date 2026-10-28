@@ -38,9 +38,8 @@ money steps, the transport), which a plane cannot see and the harness therefore 
 
 | leg | slices | what it judges at the door |
 |---|---|---|
-| `spec-per-dialect` | `openai`, `gemini`, `twilio` | every fixture: codec round trip, and the door's relay of it by the session rules; the `twilio` slice also replays `transcript.jsonl`, one whole call |
-| `replay` | `default` | each captured transcript through one session: codec skeleton; the door's relay and skeleton |
-| `cross-parity` | `oo og go gg` | the codec bridge per the cross-dialect map; the bridged wire through the destination door |
+| `spec-per-dialect` | `openai`, `gemini`, `twilio` | every fixture: what it decodes to, and the door's relay of it by the session rules; the `twilio` slice also replays `transcript.jsonl`, one whole call |
+| `replay` | `default` | each captured transcript through one session: its decoded skeleton; the door's relay and skeleton |
 | `provider-credential` | 1 | every far request rides a declared outbound need; none carries a credential |
 | `metering-lease` | 1 | a session's units, reported per declared class, once per turn; the fee once answered |
 | `session-scope` | 1 | the `session` grant kind; every door asks for a principal; 404 off the guest list |

@@ -7,8 +7,8 @@
 # LEG: replay — captured-transcript replay.
 #
 # Each dialect's captured `transcript.jsonl` (testing/voice-conformance/fixtures/{openai,gemini}/):
-#   * CODEC: decoded through ONE session state in order, every event re-framed to valid wire JSON, and
-#     the expected concept skeleton (config → connect → audio → tool call → tool result → audio →
+#   * DECODE: decoded through ONE session state in order by the harness's own decoder, and the
+#     expected concept skeleton (config → connect → audio → tool call → tool result → audio →
 #     barge-in → close/complete) re-derived in order;
 #   * DOOR: the whole transcript driven through ONE live session on the door (client lines as caller
 #     pieces, server lines as far-end pieces), linked AND dropped; what the door relays must equal the
