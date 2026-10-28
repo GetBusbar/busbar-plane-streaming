@@ -65,6 +65,9 @@ pub struct Cap {
 /// it sits at the top level, whatever the frame's `type` says (a far end may read a `type` the
 /// caller wrote twice differently from this reader).
 pub trait LockedKeys {
+    /// Every top-level member a rule governs or a check below reads: a JSON object naming none of
+    /// them passes every rule and every check as it came.
+    const GOVERNED: &'static [&'static str];
     /// The rule for the object that configures the session (`session.update`'s `session`, `setup`),
     /// locked to `locked`.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule;
@@ -115,6 +118,8 @@ const LIVE_CUT: &[&str] = &["systemInstruction", "tools"];
 const INSTRUCTING_ROLES: &[&str] = &["system", "developer"];
 
 impl LockedKeys for OpenAiRealtimeCodec {
+    const GOVERNED: &'static [&'static str] = &["session", "response", "item"];
+
     /// The locked keys in the GA `session` shape the GA socket reads
     /// ([`SessionConfig::ga_session`]): a caller's GA members are merged with them member by
     /// member (`audio.input`, `audio.output`).
@@ -373,6 +378,8 @@ fn elements(b: &[u8], open: usize) -> Option<Vec<usize>> {
 }
 
 impl LockedKeys for GeminiLiveCodec {
+    const GOVERNED: &'static [&'static str] = &["setup"];
+
     /// `setup`, locked to `locked`. The output ceiling is not set over the caller's: the
     /// caller's `generationConfig.maxOutputTokens` is held to the lower of its value and the
     /// ceiling, and is the ceiling where it names none.
