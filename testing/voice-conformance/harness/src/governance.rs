@@ -13,7 +13,7 @@ use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::Plugin;
 use serde_json::json;
 
-use crate::codec_legs::{caller_norms, downscope_bridge, far_norms, frame, Dialect, Norm};
+use crate::codec_legs::{caller_norms, far_norms, frame, Dialect, Norm};
 use crate::composition::{downlink, uplink, usage_units, USAGE_DONE};
 use crate::door::{
     drive, judge, open, piece, refusal, result, session, tick, Emission, Log, Piece, Rendered, Rig,
@@ -217,11 +217,7 @@ fn settled_once(rig: &Rig, checkpoint: &str) {
     );
 }
 
-// ── V4: crossing a dialect down-scopes; at the door the lock is spliced ─────────────────────────
-
-fn widened(text: &str) -> bool {
-    text.contains("semantic") || text.contains("g711")
-}
+// ── V4: at the door the lock is spliced over an OpenAI-only concept ──────────────────────────────
 
 fn downscope_script(p: &Plugin<Plane>) -> Log {
     let _ = open(p, SESSION, Some(PUBLIC));
@@ -237,10 +233,6 @@ fn downscope_update() -> serde_json::Value {
 }
 
 fn downscope_check(log: &Log) -> Result<String, String> {
-    let bridged = downscope_bridge(&downscope_update());
-    if !bridged.contains("Config") || widened(&bridged) {
-        return Err(format!("the bridge toward Gemini widened: {bridged}"));
-    }
     let far: Vec<&Emission> = log.emissions.iter().filter(|e| e.to_far).collect();
     let sent: Vec<serde_json::Value> = far
         .iter()
@@ -256,9 +248,9 @@ fn downscope_check(log: &Log) -> Result<String, String> {
         ));
     }
     Ok(
-        "an OpenAI-only semantic_vad/g711 concept is down-scoped, never widened, toward Gemini; \
-         and at the door the caller's session.update reaches the far end with the locked keys \
-         spliced in (the locked model, no caller instructions) and its own keys kept"
+        "at the door the caller's session.update carrying OpenAI-only semantic_vad/g711 keys \
+         reaches the far end with the locked keys spliced in (the locked model, no caller \
+         instructions) and its own keys kept"
             .to_string(),
     )
 }

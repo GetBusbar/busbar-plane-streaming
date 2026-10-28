@@ -6,8 +6,8 @@
 //! The plane's door ([`door`]) and everything it answers with: the Statement tail and the
 //! per-generation snapshot, the driver answers for the one-request doors ([`driven`]), and one live
 //! session as the driver serves it ([`session_unit`] over the frame pump [`session_pump`]). The
-//! dialect readers and writers (OpenAI Realtime, Gemini Live) and the four-layer duplex/session IR
-//! they meet in are this crate's own `codec` module (`docs/design/BUSBAR-1.6.0.md` #18/#45); the
+//! meter's reads of each dialect (OpenAI Realtime, Gemini Live) and the session config they lock
+//! are this crate's own `codec` module (`docs/design/BUSBAR-1.6.0.md` #18/#45); the
 //! Twilio Media Streams envelope is [`codec::topology::twilio`]. No wire format is written twice.
 //!
 //! ## What this crate is not

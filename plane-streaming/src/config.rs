@@ -30,8 +30,7 @@
 //! per-key grammar — the three plane-imposed session ceilings — are covered by the additive-only gate,
 //! so a deployment's live-voice CEILINGS cannot be retyped or removed without the gate flagging it.
 
-use crate::codec::ir::config::SessionConfig;
-use crate::codec::ir::control::IrVad;
+use crate::codec::ir::config::{IrVad, SessionConfig};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Context-window ceiling default — 32768 tokens.

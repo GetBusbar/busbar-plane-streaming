@@ -1036,11 +1036,7 @@ fn fail_check(o: &FailObs) -> Result<String, String> {
         ));
     }
     let a = &o.answered;
-    if a.outcome != Outcome::Ready
-        || !a.done
-        || a.status != 200
-        || a.emitted != MINTED_ANSWER
-    {
+    if a.outcome != Outcome::Ready || !a.done || a.status != 200 || a.emitted != MINTED_ANSWER {
         return Err(format!(
             "attempt 2's answer was not the caller's whole answer, free of attempt 1: {a:?}"
         ));
