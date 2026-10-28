@@ -220,6 +220,7 @@ fn usage_metadata_totals_saturate_rather_than_wrap() {
         image_in: 0,
         video_in: 0,
         cached: 0,
+        floor: false,
     };
     let meta = usage_to_metadata(&u);
     assert_eq!(meta["promptTokenCount"].as_u64(), Some(u64::MAX));
