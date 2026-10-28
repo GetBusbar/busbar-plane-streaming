@@ -19,7 +19,6 @@
 //! member it does not model, is held to the same rule as a modelled one. The reader serves only the
 //! units. The expectation is computed from the wire by the splice, never by the door.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
