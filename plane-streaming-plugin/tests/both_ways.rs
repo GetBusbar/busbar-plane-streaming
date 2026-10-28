@@ -18,8 +18,9 @@ use busbar_contract::abi::mechanism::lifecycle::{
 };
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneOpenIn, PlaneOpenOut,
-    PlaneRefreshOut, PlaneSnapshot, UnitCount, CANCEL_FAILED, CLAIM_EXACT, CLAIM_OPEN, EMIT_DONE,
-    EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST,
+    PlaneRefreshOut, PlaneSnapshot, UnitCount, CANCEL_ABORTED, CANCEL_OK_PARTIAL, CLAIM_EXACT,
+    CLAIM_OPEN, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
+    PIECE_HAS_STATUS, PIECE_LAST,
 };
 use busbar_plane_streaming::door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -329,9 +330,9 @@ fn script(p: &Plugin<Plane>, public_url: Option<&'static str>) -> Vec<String> {
     x.out.cancel.head = out_head();
     let c = p.call(life::CANCEL, &mut x);
     t.push(format!(
-        "cancel {:?} failed={}",
+        "cancel {:?} aborted={}",
         c.outcome,
-        x.out.cancel.disposition == CANCEL_FAILED
+        x.out.cancel.disposition == CANCEL_ABORTED
     ));
     t
 }
@@ -368,7 +369,7 @@ fn expected(public: bool) -> Vec<String> {
         "arrive 6 Refused dialect=0 op=0 principal=0".into(),
         "arrive 9 Refused dialect=0 op=0 principal=0".into(),
         "tick Ready next=0".into(),
-        "cancel Ready failed=true".into(),
+        "cancel Ready aborted=true".into(),
     ]
 }
 
@@ -1573,6 +1574,52 @@ fn cancel_unit(p: &Plugin<Plane>, unit: u64) -> Outcome {
     x.input.unit = unit;
     x.out.cancel.head = out_head();
     p.call(life::CANCEL, &mut x).outcome
+}
+
+/// `cancel` of `unit` by its key: the disposition the door answered.
+fn cancel_disposition(p: &Plugin<Plane>, unit: u64) -> u32 {
+    let mut x: Frame<
+        busbar_contract::abi::plane::PlaneCancelIn,
+        busbar_contract::abi::plane::PlaneCancelOut,
+    > = Frame::new(z(), z());
+    x.input.cancel.head = in_head();
+    x.input.unit = unit;
+    x.out.cancel.head = out_head();
+    assert_eq!(p.call(life::CANCEL, &mut x).outcome, Outcome::Ready);
+    x.out.cancel.disposition
+}
+
+/// A CANCEL SAYS HOW FAR THE UNIT GOT (owner billing rule R21: the ledger records what the dialect
+/// did): cut before the far end answered it is ABORTED (billed nothing); cut after the far end began
+/// its answer it is PARTIAL, so the units it reported bill when its answer was streamed, as the llm
+/// and decisions planes answer; both doors alike. RED before: every cancel was FAILED.
+#[test]
+fn a_cancel_after_the_far_end_answered_is_partial() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
+        let p = door(&d);
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(256);
+        b.call(&p, &attempt(7, 0));
+        b.call(&p, &push(7, 0, FROM_CALLER, PIECE_LAST, &[]));
+        assert_eq!(
+            cancel_disposition(&p, 7),
+            CANCEL_ABORTED,
+            "cut before the far end answered: aborted"
+        );
+        b.call(&p, &attempt(17, 0));
+        b.call(&p, &push(17, 0, FROM_CALLER, PIECE_LAST, &[]));
+        let first = Push {
+            status: 200,
+            ..push(17, 0, FROM_FAR_END, PIECE_HAS_STATUS, &MINTED[..8])
+        };
+        b.call(&p, &first);
+        assert_eq!(
+            cancel_disposition(&p, 17),
+            CANCEL_OK_PARTIAL,
+            "cut after the far end answered: partial"
+        );
+    }
 }
 
 /// The brokered calls' published lifetime, in nanoseconds (OpenAI Realtime's 60 minutes).
