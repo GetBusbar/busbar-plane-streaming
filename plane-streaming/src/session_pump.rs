@@ -23,6 +23,9 @@
 //! or the session ending with a turn open), the turn's usage and counters, and whether the session
 //! stays open.
 
+use std::borrow::Cow;
+
+use crate::codec::ir::codec::peek::Lite;
 use crate::codec::ir::codec::{DecodeState, DuplexReader, DuplexWriter, WireEvent, WireRef};
 use crate::codec::ir::config::SessionConfig;
 use crate::codec::ir::control::IrDuplexControl;
@@ -128,10 +131,15 @@ where
     /// A FRAME FROM THE FAR END. It reaches the caller as the far end sent it: a tool call is part
     /// of the model's response and the caller runs it, a barge-in is the caller's to act on (Law 11;
     /// QUESTIONS Q98). The reader reads it only to meter: a usage report or an error closes the open
-    /// turn, and a tool call the far end opens is counted.
+    /// turn, and a tool call the far end opens is counted. A frame whose head shows it carries none
+    /// of these (the audio) is not read at all ([`DuplexReader::meters_down`]).
     pub fn on_server_frame(&mut self, frame: WireEvent, sink: &mut dyn TurnSink) -> Outbound {
         let mut out = Outbound::default();
         if frame.0.is_empty() {
+            return out;
+        }
+        if !self.codec.meters_down(&frame.0) {
+            out.downlink.push(frame);
             return out;
         }
         for ev in self
@@ -162,42 +170,63 @@ where
     /// whose own reader might read them differently.
     pub fn on_client_frame(&mut self, frame: WireEvent) -> Outbound {
         let mut out = Outbound::default();
-        if serde_json::from_slice::<serde::de::IgnoredAny>(&frame.0).is_err() {
-            return out;
-        }
-        let locked_format = self
-            .locked_config
+        // The frame is read once, as strictly as a whole-frame read, its audio left where it lies.
+        // An object naming none of the dialect's governed members passes every check and every
+        // splice as it came (`LockedKeys::GOVERNED`), and its audio is counted off that read; any
+        // other frame takes the checks, the whole-frame read and the splices.
+        let read = Lite::read(&frame.0);
+        let plain = read
             .as_ref()
-            .and_then(|c| c.input_audio_format);
-        let Ok(named) = self.codec.uplink_format(&frame.0) else {
-            return out;
-        };
-        match (locked_format, named) {
-            (Some(locked), Some(named)) if locked != named => return out,
-            (None, Some(named)) => self.audio_in = named,
-            _ => {}
-        }
-        if self.locked_config.is_some() && self.codec.authors_instructions(&frame.0) {
-            return out;
-        }
-        for ev in self.codec.read_up_ref(WireRef(&frame.0), &mut self.decode) {
-            if let IrClientEvent::AudioFrame(f) = ev {
-                self.turn
-                    .admit_audio(f.format.unwrap_or(self.audio_in), f.media.len());
+            .and_then(Lite::keys)
+            .is_some_and(|mut keys| !keys.any(|k| C::GOVERNED.contains(&k)));
+        if !plain {
+            if read.is_none() && serde_json::from_slice::<serde::de::IgnoredAny>(&frame.0).is_err()
+            {
+                return out;
+            }
+            let locked_format = self
+                .locked_config
+                .as_ref()
+                .and_then(|c| c.input_audio_format);
+            let Ok(named) = self.codec.uplink_format(&frame.0) else {
+                return out;
+            };
+            match (locked_format, named) {
+                (Some(locked), Some(named)) if locked != named => return out,
+                (None, Some(named)) => self.audio_in = named,
+                _ => {}
+            }
+            if self.locked_config.is_some() && self.codec.authors_instructions(&frame.0) {
+                return out;
             }
         }
-        if self.rules.is_empty() {
+        if let (true, Some(top)) = (plain, &read) {
+            let (turn, audio_in) = (&mut self.turn, self.audio_in);
+            self.codec.uplink_audio(top, &mut |format, len| {
+                turn.admit_audio(format.unwrap_or(audio_in), len);
+            });
+        } else {
+            for ev in self.codec.read_up_ref(WireRef(&frame.0), &mut self.decode) {
+                if let IrClientEvent::AudioFrame(f) = ev {
+                    self.turn
+                        .admit_audio(f.format.unwrap_or(self.audio_in), f.media.len());
+                }
+            }
+        }
+        if plain || self.rules.is_empty() {
             out.upstream.push(frame);
             return out;
         }
-        let mut bytes = frame.0.to_vec();
+        let mut bytes = Cow::Borrowed(&frame.0[..]);
         for rule in &self.rules {
             match splice(&bytes, rule) {
-                Some(spliced) => bytes = spliced,
+                Some(spliced) => bytes = Cow::Owned(spliced),
                 None => return out,
             }
         }
-        out.upstream.push(if bytes.as_slice() == &frame.0[..] {
+        // At least one rule ran, so the bytes are already the splice's own.
+        let bytes = bytes.into_owned();
+        out.upstream.push(if bytes[..] == frame.0[..] {
             frame
         } else {
             WireEvent(bytes.into())
