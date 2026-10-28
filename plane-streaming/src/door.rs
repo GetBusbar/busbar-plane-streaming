@@ -58,11 +58,11 @@ use busbar_contract::abi::plane::{
     class_of, reason_of, ArriveIn, ArriveOut, BillableClass, DialectAuth, OnPieceIn, OnPieceOut,
     OpClass, OutField, PlaneCancelIn, PlaneCancelOut, PlaneDriveIn, PlaneDriveOut, PlaneOpenIn,
     PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RefusalClass,
-    RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, CANCEL_FAILED,
-    EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION,
-    INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
-    PIECE_REFUSED, PRINCIPAL_REQUIRED, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT,
-    TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_REPORTED,
+    RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT,
+    CANCEL_ABORTED, CANCEL_OK_PARTIAL, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END,
+    FROM_KERNEL, INGRESS_DUPLEX_SESSION, INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS,
+    PIECE_LAST, PIECE_OUT_TEXT, PIECE_REFUSED, PRINCIPAL_REQUIRED, ROUTE_DIRECT, SHAPE_PIECEWISE,
+    SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
@@ -646,6 +646,16 @@ impl Units {
         }
     }
 
+    /// Whether the unit on `ticket`, or unit `unit` (`0` = none named), had its far end answer.
+    fn far_answered(&self, ticket: Ticket, unit: u64) -> bool {
+        self.tickets
+            .get(&ticket)
+            .copied()
+            .into_iter()
+            .chain((unit != 0).then_some(unit))
+            .any(|u| self.held.get(&u).is_some_and(|h| h.unit.far_answered()))
+    }
+
     /// The op on `ticket` is cancelled, or the kernel cancels unit `unit` itself (`0` = none
     /// named, [`PlaneCancelIn::unit`]): the unit either names is forgotten. Answers whether one
     /// was.
@@ -1073,15 +1083,21 @@ slot!(
 // request unit's ticket, or the kernel's own cancel of a unit (`PlaneCancelIn::unit`, a unit whose
 // ticket no piece may ever have carried), forgets the unit's state, its pending sideband call and
 // the session its unit names.
-// Either way it bills nothing of its own and writes no record.
+// It writes no record. A unit or session whose far end had begun its answer is PARTIAL, so the
+// units it reported bill when its answer was streamed (owner billing rule R21: the ledger records
+// what the dialect did); one cut before is ABORTED.
 slot!(
     Cancel,
     PlaneCancelIn,
     PlaneCancelOut,
     |instance, input, out| {
+        let mut answered = false;
         if let Some(p) = instance.get() {
             let ticket = input.cancel().ticket();
             let unit = input.unit();
+            let session_answered = lock(&p.sessions).far_answered(ticket, unit);
+            let unit_answered = lock(&p.units).far_answered(ticket, unit);
+            answered = session_answered || unit_answered;
             lock(&p.sessions).cancel(ticket);
             lock(&p.units).cancel(ticket, unit);
             if unit != 0 {
@@ -1089,7 +1105,14 @@ slot!(
                 lock(&p.sessions).close(unit);
             }
         }
-        out.set(|o| &o.cancel.disposition, CANCEL_FAILED);
+        out.set(
+            |o| &o.cancel.disposition,
+            if answered {
+                CANCEL_OK_PARTIAL
+            } else {
+                CANCEL_ABORTED
+            },
+        );
         Outcome::Ready
     }
 );
