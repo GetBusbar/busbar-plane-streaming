@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE GA `session` CONFIG OBJECT — the typed shape carried by `session.update` (client→server) and
-//! echoed by `session.created` (server→client). Design `BUSBAR-1.6.0.md` #18/#45.
+//! The GA `session` config object: the typed shape carried by `session.update` (client→server) and
+//! echoed by `session.created` (server→client).
 //!
-//! This is the ONE place in the plane where a serde-derived struct models the wire directly, rather
-//! than the hand-mapped `serde_json::Value` dispatch the event codec uses. The justification is the
-//! LLM-plane precedent: serde-derive is reserved for CONFIG shapes (stable, named, closed field sets),
-//! while streaming EVENTS are hand-mapped. The Realtime `session` object is exactly a config shape.
+//! This is the one place in the plane where a serde-derived struct models the wire directly, rather
+//! than the hand-mapped `serde_json::Value` dispatch the event codec uses: serde-derive is reserved
+//! for config shapes (stable, named, closed field sets), while streaming events are hand-mapped.
 //!
-//! This typed config IS the plane's neutral session-config IR — the cross-dialect superset both dialects
-//! (OpenAI Realtime + Gemini Live, `BUSBAR-1.6.0.md` #18/#45) read and write, now that the plane
-//! has earned a superset at its second wire format. The GA field set is modeled faithfully so a
+//! This typed config is the plane's neutral session-config IR, the cross-dialect superset both
+//! dialects (OpenAI Realtime + Gemini Live) read and write. The GA field set is modeled faithfully so a
 //! decode→encode round-trip is JSON-stable (opaque `tools` / `tool_choice` ride as `serde_json::Value`;
 //! the plane locks and reconciles them but never reshapes them).
 
@@ -94,16 +92,16 @@ mod opt_audio_fmt {
     }
 }
 
-/// THE GA `session` CONFIG OBJECT (`BUSBAR-1.6.0.md` #18/#45). Every field is optional on the wire (a partial
+/// The GA `session` config object. Every field is optional on the wire (a partial
 /// `session.update` patches only what it names), so absent keys decode to `None`/empty and are
 /// omitted on re-encode — keeping a partial patch JSON-stable. `turn_detection` is the ONE field with
 /// THREE wire states rather than two, because GA gives `null` its own meaning: see the field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SessionConfig {
-    /// THE UPSTREAM MODEL ID the session targets. OpenAI Realtime carries this SERVER-SIDE (it appears
+    /// The upstream model id the session targets. OpenAI Realtime carries this SERVER-SIDE (it appears
     /// on `session.created`, not the writable `session.update` patch), so it stays `None` for the
     /// OpenAI dialect; Gemini Live carries it as `setup.model`. Modeled here as the genuinely-shared
-    /// field the SECOND dialect (Gemini) earns into the superset IR (`BUSBAR-1.6.0.md` #18/#45). Optional — an OpenAI
+    /// field the second dialect (Gemini) earns into the superset IR. Optional — an OpenAI
     /// `session.update` omits it (decodes to `None`, skipped on re-encode, so the OpenAI round-trip is
     /// unaffected).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,7 +151,7 @@ pub struct SessionConfig {
     )]
     pub turn_detection: Option<Option<IrVad>>,
     /// The tool set, carried VERBATIM as opaque JSON (the plane locks the set but never reshapes a
-    /// definition — the tool layer (`BUSBAR-1.6.0.md` #18/#45) normalizes call CORRELATION, not the
+    /// definition — the tool layer normalizes call correlation, not the
     /// argument/definition bytes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<serde_json::Value>,
@@ -163,7 +161,7 @@ pub struct SessionConfig {
     /// Per-response output-token ceiling, or `"inf"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<MaxOutputTokens>,
-    /// THE CONTEXT-WINDOW CEILING the plane imposes on a live session (`streams.context_window_tokens`),
+    /// The context-window ceiling the plane imposes on a live session (`streams.context_window_tokens`),
     /// in tokens. Never read from or written to a wire `session` object under this name: it is the
     /// plane's own ceiling, which each dialect states in its own key when the session is locked (the
     /// OpenAI Realtime `truncation` limit, the Gemini Live `contextWindowCompression` trigger).
@@ -172,7 +170,7 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
-    /// THE LOCKED SESSION IN THE GA `session` SHAPE, the shape the GA `/v1/realtime` socket reads
+    /// The locked session in the GA `session` shape, the shape the GA `/v1/realtime` socket reads
     /// (no `OpenAI-Beta` header): `type` is `realtime`; the requested modalities are
     /// `output_modalities`; the uplink format and turn detection sit under `audio.input`, the
     /// downlink format and the voice under `audio.output`, each format the GA format object

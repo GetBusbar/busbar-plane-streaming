@@ -2,7 +2,7 @@
 //!
 //! The meter-class list is the voice row's list (`audio_tokens_in/out`, `text_tokens_in/out`,
 //! `audio_seconds_in`, `tool_calls`; `cached_tokens` is attribution only) and the two input classes
-//! the providers bill apart from text, `image_tokens_in` and `video_tokens_in` (#77(4): classes are
+//! the providers bill apart from text, `image_tokens_in` and `video_tokens_in` (classes are
 //! strings the plane declares). It names `audio_seconds_in` and no outbound twin: the downlink is
 //! already priced by `audio_tokens_out`.
 

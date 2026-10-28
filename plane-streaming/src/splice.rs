@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE GOVERNED SPLICE: the one edit a same-dialect relay makes to a caller's bytes.
+//! The governed splice: the one edit a same-dialect relay makes to a caller's bytes.
 //!
-//! Law 5: "A RELAY (same dialect) runs the reader only as that read-only tap and sends the client's
-//! bytes with governed byte-level splices; a WRITER runs only when translating." The governance a
-//! live session splices is Part 2 #45's browser trust boundary: the caller "never authors tools or
-//! instructions, and cannot override the session's locked instructions". So a caller frame that
+//! A same-dialect relay runs the reader only as a read-only tap and sends the client's bytes with
+//! governed byte-level splices. The governance a live session splices is the browser trust
+//! boundary: the caller never authors tools or instructions, and cannot override the session's
+//! locked instructions. So a caller frame that
 //! configures the session, or asks for one response under its own settings, has its instructions
 //! and tool set cut out and the session's locked keys put in their place; every other member it
 //! wrote passes as the caller wrote it, byte for byte, and so does every frame that configures
@@ -60,7 +60,7 @@ pub struct Cap {
     pub when_absent: bool,
 }
 
-/// THE DIALECT'S GOVERNED KEYS: which caller frames a session's lock splices, and how. Every rule
+/// The dialect's governed keys: which caller frames a session's lock splices, and how. Every rule
 /// is applied to EVERY caller frame, by the frame's bytes: a governed object is governed wherever
 /// it sits at the top level, whatever the frame's `type` says (a far end may read a `type` the
 /// caller wrote twice differently from this reader).

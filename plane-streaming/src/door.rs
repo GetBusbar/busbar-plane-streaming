@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE STREAMING PLANE'S DOOR: the one function a compiled-in row holds and a dropped-in image
+//! The streaming plane's door: the one function a compiled-in row holds and a dropped-in image
 //! exports (the `busbar-plane-streaming-plugin` cdylib twin), and everything it states and answers.
-//!
-//! The composition root links [`door`] on its `plane-door` axis (the `plane-streaming` row,
-//! `BUSBAR-1.6.0.md` Part 3, section 12) and binds it through the loader's one load beside the
-//! dropped-in plane doors.
 //!
 //! ## What the plane states once
 //!
@@ -36,7 +32,7 @@
 //! the reply buffer across `more = 1` re-calls ([`crate::piece`]).
 //!
 //! A piece that names a stream is a live session's, served by the door's [`Sessions`]
-//! ([`crate::session_door`]): the driver's duplex vocabulary (K6), one frame per answer, the
+//! ([`crate::session_door`]): the driver's duplex vocabulary, one frame per answer, the
 //! session's unsolicited output named on the instance's driver ticket, and the session's cumulative
 //! units on every answer. A request unit on a session door is refused.
 
@@ -102,7 +98,7 @@ pub const AUDIT_KIND: &str = "streaming_session";
 /// llm door consumes it).
 pub const PROVIDERS_SECTION: &str = "providers";
 /// The section the plane reads but does not own: the model catalog, whose entry for the session
-/// model names the provider's wire model (`upstream_model`, Part 2 #51).
+/// model names the provider's wire model (`upstream_model`).
 pub const MODELS_SECTION: &str = "models";
 /// A model entry's provider wire-model override, inside [`MODELS_SECTION`].
 pub const UPSTREAM_MODEL_KEY: &str = "upstream_model";
@@ -141,7 +137,7 @@ const SECTIONS: &[Section] = &[
 
 /// The dialects, in the order the per-call `dialect` index names them; then the PROVIDER
 /// protocols a member's provider states, as the far-end spellings of the two realtime dialects
-/// (ARCHITECT Q-L5B-NEEDS: the provider protocol -> realtime dialect mapping is the plane's own):
+/// (the provider protocol -> realtime dialect mapping is the plane's own):
 /// `openai` is spoken as OpenAI Realtime, `gemini` as Gemini Live. No arrival names them.
 pub const DIALECTS_BY_NAME: &[&str] = &[
     OPENAI_REALTIME,
@@ -205,8 +201,8 @@ const fn class(class: &'static str, family: &'static str) -> BillableClass {
 
 /// The eight classes a session counts in (`cached_tokens` is attribution only, never billed), then
 /// the session's fee unit: `per_session`, reported `1` once the far end first answers the session
-/// and never before, so a session whose open failed refunds its fee (ARCHITECT Q-L5-FEE (A), Q17-6;
-/// the fee unit is a billable class reported as a count of 0 or 1 and never ledgered, Q17-5 (c)).
+/// and never before, so a session whose open failed refunds its fee (the fee
+/// unit is a billable class reported as a count of 0 or 1 and never ledgered).
 const BILLABLE_CLASSES: &[BillableClass] = &[
     class(meta::CLASS_AUDIO_TOKENS_IN.as_str(), TOKEN_FAMILY),
     class(meta::CLASS_AUDIO_TOKENS_OUT.as_str(), TOKEN_FAMILY),
@@ -259,8 +255,8 @@ const fn pass(transport: &'static str, style: &'static str) -> Need {
 /// The plane's connection needs: its keyed doors and its telephony door inbound; outbound, to the
 /// upstream `streams.session.model` names, OpenAI Realtime's socket and its one-shot passes (the
 /// mint, the SDP offer) under its bearer style, and Gemini Live's socket under its key header
-/// (ARCHITECT Q-L5B-NEEDS: every outbound need declares its auth; the kernel binds each a member's
-/// style names, one per (transport, auth), and a far request names the one it rides).
+/// (every outbound need declares its auth; the kernel binds each a member's style names, one per
+/// (transport, auth), and a far request names the one it rides).
 const NEEDS: &[Need] = &[
     need(DIRECTION_INBOUND, WS_TRANSPORT, abi_str(KEY_AUTH), NONE),
     need(DIRECTION_INBOUND, HTTP_TRANSPORT, abi_str(KEY_AUTH), NONE),
@@ -283,7 +279,7 @@ pub const RIDES_REALTIME_PASS: u32 = 5;
 /// Gemini Live's socket.
 pub const RIDES_LIVE_SOCKET: u32 = 6;
 
-/// THE STATEMENT TAIL.
+/// The Statement tail.
 pub const TAIL: &PlaneTail = &{
     let mut t = PlaneTail::EMPTY
         .with_dialects(DIALECTS)
@@ -306,7 +302,7 @@ pub const TAIL: &PlaneTail = &{
     t.subject_noun = abi_str(SUBJECT_NOUN);
     t.admin_noun = abi_str(ADMIN_NOUN);
     t.audit_kind = abi_str(AUDIT_KIND);
-    // No stream ceiling (ARCHITECT STREAM-CEILING, 2026-10-07): a live session runs as long as its
+    // No stream ceiling: a live session runs as long as its
     // caller keeps it open, so the streaming plane states none; a streamed answer's send runs under
     // the deployment's ceiling.
     // No lane words of its own: its attempts' counters carry the kernel's own lane.
@@ -314,7 +310,6 @@ pub const TAIL: &PlaneTail = &{
 };
 
 /// One door a live session is opened through: one line of this plane on a listener's guest list
-/// (`BUSBAR-1.6.0.md` section 6, "Auth points and guest lists", step 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Route {
     /// The method set: every door takes one method.
@@ -356,8 +351,8 @@ impl Route {
 /// The doors, in the order a snapshot claims them: the ephemeral-secret mint and the SDP offer (one
 /// request each), the browser's sideband socket, the Gemini Live socket, the telephony socket and
 /// the plain OpenAI Realtime socket. The four sockets are upgrade lines. The protected-resource
-/// metadata path a refused caller is pointed at is NOT claimed (1.5.5 parity, ARCHITECT 2026-10-04: no accepted difference): the
-/// data listener's fallback answers it as it did.
+/// metadata path a refused caller is pointed at is not claimed: the
+/// data listener's fallback answers it.
 pub const ROUTES: &[Route] = &[
     Route {
         verb: "POST",
@@ -406,7 +401,7 @@ pub const ROUTES: &[Route] = &[
     },
     // Plain server-to-server OpenAI Realtime over WS, as the provider serves it: a WS upgrade on
     // `GET /v1/realtime` (the caller's `?model=` rides its query), a session attached to no call.
-    // The sideband above is call-attached only (ARCHITECT ruling 2026-10-23 on Part 2 #45).
+    // The sideband above is call-attached only.
     Route {
         verb: "GET",
         target: "/v1/realtime",
@@ -454,10 +449,9 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
     }
 }
 
-/// THE SETTINGS THE HOST HANDS, read: the plane's grammar over its own `streams:` section, with the
+/// The settings the host hands, read: the plane's grammar over its own `streams:` section, with the
 /// session model's provider wire model resolved from the `models` section beside it. A host hands a
-/// plane that consumes sections ONE object keyed by section (spec Part 1, "a plane's settings
-/// reach it as ONE validated JSON object"; architect ruling R-6, 2026-10-23): `{streams: …}` plus
+/// plane that consumes sections one object keyed by section: `{streams: …}` plus
 /// each consumed section the deployment writes. A blob without a `streams` key is the section itself (a host that hands the bare section, or a test), read as
 /// [`read_settings`] reads it. The section's grammar refuses a `streams` key of its own, so the two
 /// forms never read alike.
@@ -574,22 +568,21 @@ pub const MAX_PENDING_CALLS: usize = 4096;
 
 /// The most live calls the SDP door has brokered that an instance keeps the owner of; at it, with
 /// every row unexpired ([`REALTIME_CALL_MAX_MS`]), a new SDP offer is refused
-/// ([`STATUS_CALLS_FULL`]). No other caller's live call is dropped to make room (THE DESIGN:
-/// retention bounds only settled handles); a call leaves when the far end ends it, when it is past
+/// ([`STATUS_CALLS_FULL`]). No other caller's live call is dropped to make room
+/// (retention bounds only settled handles); a call leaves when the far end ends it, when it is past
 /// its dialect's maximum lifetime, or when its own caller's next offer displaces it
 /// ([`MAX_CALLS_PER_CALLER`]). Offers checked against the bound at once are each recorded when their
 /// far end answers, so the instance may hold past it by at most the units in flight
-/// ([`MAX_UNITS`]). PROVISIONAL: awaiting the owner's ratification.
+/// ([`MAX_UNITS`]).
 pub const MAX_BROKERED_CALLS: usize = 4096;
 
 /// The most live brokered calls one caller (one `caller_ref`) keeps at once. At it, that caller's
 /// next SDP offer proceeds and displaces that caller's own oldest row (a sideband to that call is
 /// then refused); no other caller's row is ever displaced. `MAX_BROKERED_CALLS / 64`, so at least
-/// 64 callers each hold their whole allowance before the instance's bound is met. PROVISIONAL:
-/// awaiting the owner's ratification.
+/// 64 callers each hold their whole allowance before the instance's bound is met.
 pub const MAX_CALLS_PER_CALLER: usize = MAX_BROKERED_CALLS / 64;
 
-/// THE LONGEST AN OPENAI REALTIME CALL LIVES, in milliseconds: OpenAI's published limit, "The
+/// The longest an OpenAI Realtime call lives, in milliseconds: OpenAI's published limit, "The
 /// maximum duration of a Realtime session is 60 minutes."
 /// (<https://developers.openai.com/api/docs/guides/realtime-conversations>). Azure OpenAI documents
 /// 30 minutes for its Realtime sessions; 60 is the longer bound, so it is the safe one: a row never
@@ -597,7 +590,6 @@ pub const MAX_CALLS_PER_CALLER: usize = MAX_BROKERED_CALLS / 64;
 /// ended once it is older than this, so its row is settled and expires. The SDP door brokers OpenAI
 /// Realtime calls only and no Gemini Live call, so no Gemini Live lifetime is stated (its published
 /// session limits also lift under the context-window compression this plane always asks for).
-/// PROVISIONAL: awaiting the owner's ratification.
 pub const REALTIME_CALL_MAX_MS: u64 = 60 * 60 * 1000;
 
 /// While a brokered row waits for its age to start (no tick has run since it was recorded), the
@@ -630,7 +622,7 @@ struct Units {
 
 impl Units {
     /// Hold `held` for unit `unit`. Answers `false`, holding nothing, at [`MAX_UNITS`]: no unit in
-    /// flight is dropped to make room (THE DESIGN: admission bounds live work, nothing evicts it);
+    /// flight is dropped to make room (admission bounds live work, nothing evicts it);
     /// a unit leaves when it ends.
     fn hold(&mut self, unit: u64, held: Held) -> bool {
         if !self.held.contains_key(&unit) && self.held.len() >= MAX_UNITS {
@@ -707,7 +699,7 @@ impl PendingCalls {
     }
 }
 
-/// THE LIVE CALLS THE SDP DOOR BROKERED, each with the caller reference of the unit whose offer
+/// The live calls the SDP door brokered, each with the caller reference of the unit whose offer
 /// created it (a sideband attaches only to its own caller's call, and may attach again after its
 /// sideband closes), and each caller's calls, oldest first. A call leaves when the far end ends it
 /// (seen through its sideband), when it is older than [`REALTIME_CALL_MAX_MS`] (it has certainly
@@ -1094,7 +1086,7 @@ slot!(
 // ticket no piece may ever have carried), forgets the unit's state, its pending sideband call and
 // the session its unit names.
 // It writes no record. A unit or session whose far end had begun its answer is PARTIAL, so the
-// units it reported bill when its answer was streamed (owner billing rule R21: the ledger records
+// units it reported bill when its answer was streamed (the ledger records
 // what the dialect did); one cut before is ABORTED.
 slot!(
     Cancel,
@@ -1136,7 +1128,7 @@ slot!(Close, InHead, OutHead, |_, _, _out| { Outcome::Ready });
 
 // A claimed arrival is classified: its door's dialect, the session open, a known principal. No
 // admission estimate: a session's units are what the far end reports. A door that reaches the far end
-// names its route: the DIRECT entry `streams.session.model` (ARCHITECT Q-L5B-ROUTE: the composition
+// names its route: the DIRECT entry `streams.session.model` (the composition
 // folds that top-level catalog model into the plane's route table, so the kernel's door steps resolve
 // it as any section entry). The metadata door reaches none and names none.
 slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
@@ -1146,7 +1138,7 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         return Outcome::Refused;
     };
     // A sideband arrival's call is kept until its session opens. At the bound the arrival is
-    // refused: no pending call is dropped to make room (THE DESIGN: admission bounds live work,
+    // refused: no pending call is dropped to make room (admission bounds live work,
     // nothing evicts it).
     if a.door == Door::Sideband {
         let call = input
@@ -1271,7 +1263,7 @@ fn answer_piece(
                 });
             }
             // A one-request door's answer is WHOLE: its head states its length, so the caller is
-            // answered under it, never chunked (1.6.0-pre's bytes; the serve path sends a whole
+            // answered under it, never chunked (the serve path sends a whole
             // answer under the length its head states).
             let mut head = reply.fields.clone();
             head.push((FIELD_CONTENT_LENGTH, reply.body.len().to_string()));
@@ -1460,7 +1452,7 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
         return Outcome::Failed;
     };
     let given = input;
-    // THE REFUSED PIECE (`TAIL_REFUSED_PIECE`): the kernel is about to refuse the unit (its
+    // The refused piece (`TAIL_REFUSED_PIECE`): the kernel is about to refuse the unit (its
     // member's credential is gone, or no member is left). What the door holds for it is
     // forgotten; nothing it would emit reaches anyone, so it answers nothing.
     if given.from() == FROM_KERNEL && given.flags() & PIECE_REFUSED != 0 {
@@ -1618,9 +1610,8 @@ const REALTIME_DIALECT: u32 = 0;
 /// The error code a live session's budget cut is told under.
 pub const BUDGET_EXHAUSTED_CODE: &str = "budget_exhausted";
 
-/// A live session's budget cut, told in its stream (THE DESIGN section 7: "Where the protocol
-/// carries a place to say so, a cut ends the stream WITH AN ERROR FRAME naming budget
-/// exhaustion"): OpenAI Realtime's `error` event naming the budget; nothing in a dialect with no
+/// A live session's budget cut, told in its stream (where the protocol carries a place to say so,
+/// a cut ends the stream with an error frame naming budget exhaustion): OpenAI Realtime's `error` event naming the budget; nothing in a dialect with no
 /// in-band error (Gemini Live closes, Twilio Media Streams has no error event).
 #[must_use]
 pub fn session_cut_render(dialect: u32, text: &str) -> Vec<u8> {
@@ -1689,7 +1680,7 @@ slot!(Hydrate, GenIn, OutHead, |_, _, _out| { Outcome::Ready });
 
 slot!(Start, GenIn, OutHead, |_, _, _out| { Outcome::Ready });
 
-// `project` (ARCHITECT Q-L5B-PROJECT; K5): the hook view of a unit's open, once, when a hook is
+// `project`: the hook view of a unit's open, once, when a hook is
 // bound. A session door projects the session-open params it locks (the telephony door's µ-law, else
 // the section's session) as the view's body, the session-open the hooks screen; a hook's rewrite is
 // patched over them ([`committed_session_config`]), kept for the session the unit opens, and THAT is
@@ -1784,7 +1775,7 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
 });
 
 busbar_contract::statement_extensions!(
-    /// The Statement's extensions: this plugin's whole `declares` document (BUSBAR-1.6.0.md l.246).
+    /// The Statement's extensions: this plugin's whole `declares` document.
     EXTENSIONS: [(
         busbar_contract::abi::mechanism::extensions::EXT_DECLARES,
         include_bytes!("../declares.json")
