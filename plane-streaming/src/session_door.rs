@@ -464,6 +464,18 @@ impl Sessions {
         self.tickets.retain(|_, s| *s != stream);
     }
 
+    /// Whether the session on `ticket`, or stream `stream` (`0` = none named), had its far end
+    /// answer.
+    #[must_use]
+    pub fn far_answered(&self, ticket: Ticket, stream: u64) -> bool {
+        self.tickets
+            .get(&ticket)
+            .copied()
+            .into_iter()
+            .chain((stream != 0).then_some(stream))
+            .any(|s| self.live.get(&s).is_some_and(|live| live.answered))
+    }
+
     /// The op on `ticket` is cancelled: the session it serves, if any, is over. Answers whether
     /// one was.
     pub fn cancel(&mut self, ticket: Ticket) -> bool {
