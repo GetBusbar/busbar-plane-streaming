@@ -515,6 +515,7 @@ fn usage_totals_saturate_rather_than_wrap() {
         image_in: 0,
         video_in: 0,
         cached: 0,
+        floor: false,
     };
     let wire = usage_to_wire(&u);
     assert_eq!(
@@ -1236,6 +1237,7 @@ fn usage_extraction_survives_reencode() {
         image_in: 0,
         video_in: 0,
         cached: 0,
+        floor: false,
     };
     let w = down(&codec, IrServerEvent::Usage(u));
     let mut st = DecodeState::default();

@@ -64,6 +64,9 @@ url = { workspace = true }
 # THE GATHERED MINT ANSWER IS WIPED (`request_unit::RequestUnit::far`): the far end's answer carries
 # the live `ek_` secret until the SDK captures it.
 zeroize = { workspace = true }
+# The one log line an unreadable usage report raises (`busbar_contract::diag_warn!`): the door's
+# call capture carries it to the plugin's host log, compiled in or dropped in.
+tracing = { workspace = true }
 
 [dev-dependencies]
 # The TEST-ONLY seal (#65). `busbar_contract::plugin::TestKernelSeal` is the one blessed

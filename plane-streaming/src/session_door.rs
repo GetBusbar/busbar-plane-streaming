@@ -246,10 +246,16 @@ impl Live {
         }
     }
 
-    /// Whether the session ended on a far-end usage report it could not read and the kernel has
-    /// not been told; telling clears it.
-    pub fn take_unmetered(&mut self) -> bool {
-        each!(&mut self.unit, |u| u.take_unmetered())
+    /// Whether the far end sent a usage report the reader could not read and the kernel has not
+    /// been told; telling clears it.
+    pub fn take_unreadable(&mut self) -> bool {
+        each!(&mut self.unit, |u| u.take_unreadable())
+    }
+
+    /// Whether a turn of the session billed the plane's floor (its output tokens).
+    #[must_use]
+    pub fn floored(&self) -> bool {
+        each!(&self.unit, |u| u.floored())
     }
 
     /// Queue what `plan` owes either side, the far end's frames first.
