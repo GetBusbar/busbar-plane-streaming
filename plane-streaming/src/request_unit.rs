@@ -17,6 +17,8 @@
 //! Every answer is plain data in the plane's own vocabulary; writing it into the host's buffers is
 //! the door's job. A new ATTEMPT forgets what the previous attempt's far end said.
 
+use std::sync::Arc;
+
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::codec::ir::config::SessionConfig;
@@ -71,7 +73,7 @@ pub enum Answer {
 #[derive(Clone)]
 pub struct RequestUnit {
     door: Door,
-    locked: SessionConfig,
+    locked: Arc<SessionConfig>,
     caller_ref: Option<String>,
     status: Option<u16>,
     location: Option<String>,
@@ -102,13 +104,17 @@ impl RequestUnit {
     /// by `caller_ref` (the kernel's reference, never the principal). `None` for a door that opens
     /// a live session.
     #[must_use]
-    pub fn open(door: Door, locked: SessionConfig, caller_ref: Option<String>) -> Option<Self> {
+    pub fn open(
+        door: Door,
+        locked: impl Into<Arc<SessionConfig>>,
+        caller_ref: Option<String>,
+    ) -> Option<Self> {
         if door.is_session() {
             return None;
         }
         Some(Self {
             door,
-            locked,
+            locked: locked.into(),
             caller_ref,
             status: None,
             location: None,
