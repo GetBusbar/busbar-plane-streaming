@@ -19,7 +19,7 @@ use busbar_contract::abi::mechanism::lifecycle::{
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneOpenIn, PlaneOpenOut,
     PlaneRefreshOut, PlaneSnapshot, UnitCount, CANCEL_ABORTED, CANCEL_OK_PARTIAL, CLAIM_EXACT,
-    CLAIM_OPEN, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
+    CLAIM_OPEN, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     PIECE_HAS_STATUS, PIECE_LAST,
 };
 use busbar_plane_streaming::door;
@@ -106,15 +106,10 @@ fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     .expect("the envelope serializes")
 }
 
-/// The served plane's answer to a minted secret, built as the plane builds it (the logic crate's
-/// `driven_tests` pins `mint_reply`'s body to this shape).
-fn minted_answer() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({
-        "value": "ek_oracle_0001",
-        "expires_at_unix": 1_767_225_600,
-    }))
-    .expect("the answer serializes")
-}
+/// The served plane's 502 for a mint the host served no ticket for (the logic crate's
+/// `driven_tests` pins `mint_failed`'s text to this shape, and its `door` names the reason).
+const MINT_FAILED: &str =
+    "streaming ephemeral-secret mint failed: ephemeral token mint failed: the host minted no ticket";
 
 /// THE STATEMENT CARRIES THE DECLARES DOCUMENT (BUSBAR-1.6.0.md l.246, ARCHITECT ruling
 /// 2026-10-21): the door's Statement, read back, holds `declares.json` byte for byte under
@@ -156,7 +151,7 @@ fn snapshot(p: *const PlaneSnapshot) -> String {
             // SAFETY: the snapshot names `claims_len` claims.
             let c = unsafe { &*s.claims.add(i) };
             format!(
-                "{} {} {}{}{}",
+                "{} {} {}{}{}{}",
                 read(c.verb),
                 read(c.target),
                 read(c.carrier),
@@ -167,6 +162,11 @@ fn snapshot(p: *const PlaneSnapshot) -> String {
                 },
                 if c.flags & CLAIM_OPEN != 0 {
                     " open"
+                } else {
+                    ""
+                },
+                if c.flags & CLAIM_TICKET != 0 {
+                    " ticket"
                 } else {
                     ""
                 }
@@ -340,7 +340,8 @@ fn script(p: &Plugin<Plane>, public_url: Option<&'static str>) -> Vec<String> {
 const PUBLIC: &str = "https://gw.example.com/ignored?q=1#f";
 
 fn expected(public: bool) -> Vec<String> {
-    let doors = "POST /v1/realtime/client_secrets http exact, POST /v1/realtime/calls http exact, \
+    let doors = "POST /v1/realtime/client_secrets http exact, \
+                 POST /v1/realtime/calls webrtc exact ticket, \
                  GET /v1/realtime/sideband/{call_id} ws, GET /v1/realtime/gemini/{call_id} ws, \
                  GET /twilio/{call_id} ws, GET /v1/realtime ws exact";
     let (claims, audience, metadata) = if public {
@@ -503,17 +504,9 @@ fn the_tail_states_what_the_served_plane_declares() {
 const SESSION: &[u8] = br#"{"session":{"model":"m-cap"}}"#;
 /// The kernel's reference for the caller.
 const CALLER_REF: &str = "c0ffee";
-/// The body the served plane sent its far end for that mint (the recorded
-/// `streams|mint|client-secrets` cell, `golden/1.6.0-pre`).
-/// The session goes in the GA shape (`type: realtime`) under the section's two token ceilings (the
-/// defaults, 4096 and 32768).
-const MINT_BODY: &str = r#"{"expires_after":{"anchor":"created_at","seconds":600},"session":{"max_output_tokens":4096,"model":"m-cap","truncation":{"retention_ratio":1.0,"token_limits":{"post_instructions":28672},"type":"retention_ratio"},"type":"realtime"}}"#;
-/// The far end's mint answer.
-const MINTED: &[u8] = br#"{"value":"ek_oracle_0001","expires_at":1767225600}"#;
-/// The caller's SDP offer, and the far end's answer and where its call lives.
-const OFFER: &[u8] = b"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=oracle-offer\r\nt=0 0\r\n";
-const SDP_ANSWER: &[u8] = b"v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n";
-const LOCATION: &str = "/v1/realtime/calls/rtc_oracle0001";
+/// The ticket the services double mints, and when it expires.
+const TICKET: &str = "ek_conformance_0001";
+const TICKET_EXPIRES: u64 = 1_767_225_600;
 
 fn octets(b: &[u8]) -> Blob {
     // SAFETY: the test's own bytes, which outlive the call each `in` is built for.
@@ -640,85 +633,41 @@ const fn attempt(unit: u64, claim: u32) -> Push<'static> {
     }
 }
 
-/// THE UNIT SCRIPT: a mint, an SDP offer, a session door's piece and an unpublished claim's (the
-/// metadata path among them: it is no claim, 1.5.5 parity), in the order the route pump pushes them.
+/// THE UNIT SCRIPT: the mint (busbar mints the ticket itself and dials nothing; the dispatcher here
+/// serves no ticket, so the mint is the served plane's 502), the SDP door's request piece (it opens a
+/// session, so a request piece is refused), a session door's request piece and an unpublished
+/// claim's (the metadata path among them: it is no claim, 1.5.5 parity).
 fn unit_script(p: &Plugin<Plane>) -> Vec<String> {
     let mut t = vec![format!("open {:?}", open(p, 1, SESSION, Some(PUBLIC)).0)];
     let mut b = Bufs::new(256);
-    let whole = PIECE_HAS_STATUS | PIECE_LAST;
-
     t.push(format!("mint attempt {}", b.call(p, &attempt(7, 0))));
     let caller = push(7, 0, FROM_CALLER, PIECE_LAST, &[]);
     t.push(format!("mint caller {}", b.call(p, &caller)));
-    let far = Push {
-        status: 200,
-        ..push(7, 0, FROM_FAR_END, whole, MINTED)
-    };
-    t.push(format!("mint far_end {}", b.call(p, &far)));
-
-    t.push(format!("sdp attempt {}", b.call(p, &attempt(8, 1))));
-    let offer = push(8, 1, FROM_CALLER, PIECE_LAST, OFFER);
-    t.push(format!("sdp caller {}", b.call(p, &offer)));
-    let location = [Field {
-        name: text("location"),
-        value: text(LOCATION),
-    }];
-    let far = Push {
-        status: 201,
-        head: &location,
-        ..push(8, 1, FROM_FAR_END, whole, SDP_ANSWER)
-    };
-    t.push(format!("sdp far_end {}", b.call(p, &far)));
-
+    t.push(format!("mint units [{}]", b.last_units));
+    t.push(format!("sdp request {}", b.call(p, &attempt(8, 1))));
     t.push(format!("sideband {}", b.call(p, &attempt(10, 2))));
     t.push(format!("unpublished {}", b.call(p, &attempt(11, 9))));
     t.push(format!("metadata path {}", b.call(p, &attempt(12, 6))));
     t
 }
 
-/// What the unit script must read: the served plane's answers, through the door.
+/// What the unit script must read, through the door.
 fn unit_expected() -> Vec<String> {
     let none = "verb= target= fields=[]";
-    let minted = minted_answer();
-    let mut t = vec![
+    vec![
         "open Ready".to_string(),
+        format!("mint attempt Ready emitted= more=0 far=false done=false status=0 {none}"),
         format!(
-            "mint attempt Ready emitted={MINT_BODY} more=0 far=true done=false status=0 \
-             verb=POST target=/v1/realtime/client_secrets \
-             fields=[\"content-type=application/json\", \"OpenAI-Safety-Identifier={CALLER_REF}\"]"
+            "mint caller Ready emitted={MINT_FAILED} more=0 far=false done=true status=502 \
+             verb= target= fields=[\"content-length={}\"]",
+            MINT_FAILED.len()
         ),
-        format!("mint caller Ready emitted= more=0 far=false done=false status=0 {none}"),
-        format!(
-            "mint far_end Ready emitted={} more=0 far=false done=true status=200 verb= target= \
-             fields=[\"content-type=application/json\", \"content-length={}\"]",
-            String::from_utf8_lossy(&minted),
-            minted.len()
-        ),
-        "sdp attempt Ready emitted= more=0 far=true done=false status=0 verb=POST \
-         target=/v1/realtime/calls fields=[\"content-type=application/sdp\"]"
-            .to_string(),
-        format!(
-            "sdp caller Ready emitted={} more=0 far=true done=false status=0 {none}",
-            String::from_utf8_lossy(OFFER)
-        ),
-        format!(
-            "sdp far_end Ready emitted={} more=0 far=false done=true status=201 verb= target= \
-             fields=[\"content-type=application/sdp\", \"location={LOCATION}\", \
-             \"content-length={}\"]",
-            String::from_utf8_lossy(SDP_ANSWER),
-            SDP_ANSWER.len()
-        ),
-    ];
-    t.push(format!(
-        "sideband Refused emitted= more=0 far=false done=false status=0 {none}"
-    ));
-    t.push(format!(
-        "unpublished Refused emitted= more=0 far=false done=false status=0 {none}"
-    ));
-    t.push(format!(
-        "metadata path Refused emitted= more=0 far=false done=false status=0 {none}"
-    ));
-    t
+        "mint units []".to_string(),
+        format!("sdp request Refused emitted= more=0 far=false done=false status=0 {none}"),
+        format!("sideband Refused emitted= more=0 far=false done=false status=0 {none}"),
+        format!("unpublished Refused emitted= more=0 far=false done=false status=0 {none}"),
+        format!("metadata path Refused emitted= more=0 far=false done=false status=0 {none}"),
+    ]
 }
 
 #[test]
@@ -738,19 +687,13 @@ fn the_dropped_door_answers_the_one_request_doors_as_the_linked_door_does() {
     );
 }
 
-/// A mint answered through a reply buffer of 16 bytes: the sealed answer, a buffer at a time, its
-/// `more` re-calls (no bytes, no flags) paying the rest, `done` only with the last byte.
+/// A mint answered through a reply buffer of 16 bytes: the ticket busbar minted (row 132), a
+/// buffer at a time, its `more` re-calls (no bytes, no flags) paying the rest, `done` only with the
+/// last byte.
 fn narrow_mint_script(p: &Plugin<Plane>) -> (Vec<u8>, Vec<String>) {
     let _ = open(p, 1, SESSION, Some(PUBLIC));
-    let mut b = Bufs::new(256);
-    let _ = b.call(p, &attempt(7, 0));
-    let _ = b.call(p, &push(7, 0, FROM_CALLER, PIECE_LAST, &[]));
     let mut narrow = Bufs::new(16);
-    let far = Push {
-        status: 200,
-        ..push(7, 0, FROM_FAR_END, PIECE_HAS_STATUS | PIECE_LAST, MINTED)
-    };
-    let mut lines = vec![narrow.call(p, &far)];
+    let mut lines = vec![narrow.call(p, &push(7, 0, FROM_CALLER, PIECE_LAST, &[]))];
     let mut bytes = Vec::new();
     loop {
         let line = lines.last().expect("a line");
@@ -768,13 +711,17 @@ fn narrow_mint_script(p: &Plugin<Plane>) -> (Vec<u8>, Vec<String>) {
     (bytes, lines)
 }
 
-/// The sealed mint answer streams through a narrow reply buffer, byte for byte the served answer,
-/// and the dropped-in door answers it as the linked door does.
+/// The mint answer streams through a narrow reply buffer, byte for byte the minted answer, and the
+/// dropped-in door answers it as the linked door does.
 #[test]
-fn a_sealed_mint_answer_streams_through_a_narrow_reply_buffer() {
-    let d = Dispatcher::new(DispatchConfig::default());
+fn a_mint_answer_streams_through_a_narrow_reply_buffer() {
+    let d = host();
     let (bytes, lines) = narrow_mint_script(&linked(&d));
-    let minted = minted_answer();
+    let minted = serde_json::to_vec(&serde_json::json!({
+        "value": TICKET,
+        "expires_at_unix": TICKET_EXPIRES,
+    }))
+    .expect("json");
     assert_eq!(bytes, minted, "{lines:#?}");
     assert_eq!(lines.len(), minted.len().div_ceil(16), "{lines:#?}");
     for line in &lines[..lines.len() - 1] {
@@ -806,43 +753,150 @@ fn uplink(ms: usize) -> Vec<u8> {
 
 const USAGE_DONE: &[u8] = br#"{"type":"response.done","response":{"usage":{"input_token_details":{"audio_tokens":10,"text_tokens":3},"output_token_details":{"audio_tokens":20,"text_tokens":4}}}}"#;
 
-/// The SDP offer of `unit` by `caller`, whose far end answers 201 with its call at `location`: the
-/// call that caller's sideband may attach to. The far end's answer, as text.
+// ── BUSBAR TERMINATES THE BROWSER'S MEDIA (row 132) ──────────────────────────────────────────────
+
+/// A host that mints and takes tickets and draws randomness: unit 50 was admitted by a ticket whose
+/// record locks `instructions: from-ticket`; every other unit by a key. Each draw of randomness is
+/// a fresh count, so every call busbar places has its own id.
+struct TicketHost {
+    draws: std::sync::atomic::AtomicU64,
+    /// The record the last mint stored beside its ticket.
+    minted: std::sync::Mutex<Vec<u8>>,
+}
+
+/// The record unit 50's ticket locks: a session config naming its instructions.
+const TICKET_RECORD: &[u8] = br#"{"instructions":"from-ticket"}"#;
+
+impl busbar_contract::services::double::ServicesDouble for TicketHost {
+    fn ticket_mint(
+        &self,
+        _caller: &busbar_contract::services::Caller,
+        _unit: Option<u64>,
+        _ttl_secs: u64,
+        record: &[u8],
+    ) -> busbar_contract::services::Stored {
+        *self
+            .minted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = record.to_vec();
+        busbar_contract::services::Stored {
+            bytes: TICKET.as_bytes().to_vec(),
+            ..busbar_contract::services::Stored::ready(TICKET_EXPIRES)
+        }
+    }
+
+    fn ticket_take(
+        &self,
+        _caller: &busbar_contract::services::Caller,
+        unit: Option<u64>,
+    ) -> busbar_contract::services::Stored {
+        use busbar_contract::abi::host::service::{TICKET_NONE, TICKET_TAKEN};
+        if unit == Some(50) {
+            busbar_contract::services::Stored {
+                bytes: TICKET_RECORD.to_vec(),
+                ..busbar_contract::services::Stored::ready(TICKET_TAKEN)
+            }
+        } else {
+            busbar_contract::services::Stored::ready(TICKET_NONE)
+        }
+    }
+
+    fn random_fill(&self, len: u64) -> busbar_contract::services::Stored {
+        let draw = self
+            .draws
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .to_le_bytes();
+        busbar_contract::services::Stored {
+            bytes: draw
+                .iter()
+                .copied()
+                .cycle()
+                .take(usize::try_from(len).expect("a length"))
+                .collect(),
+            ..busbar_contract::services::Stored::ready(0)
+        }
+    }
+}
+
+/// A dispatcher whose host serves tickets and randomness ([`TicketHost`]), and that host.
+fn ticket_host() -> (Dispatcher, Arc<TicketHost>) {
+    let host = Arc::new(TicketHost {
+        draws: std::sync::atomic::AtomicU64::new(0xa0),
+        minted: std::sync::Mutex::new(Vec::new()),
+    });
+    let d = Dispatcher::with_services(DispatchConfig::default(), host.clone());
+    (d, host)
+}
+
+/// A dispatcher whose host serves tickets and randomness.
+fn host() -> Dispatcher {
+    ticket_host().0
+}
+
+/// `s`, for the life of the test binary (a pushed target is `'static`).
+fn leak(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// The SDP offer of stream `unit` by `caller`: busbar answers 201 naming its own call, places its
+/// call to the provider, and the provider answers 201 naming its call at `location`: the call that
+/// caller's sideband may attach to. Busbar's call id.
 fn broker(p: &Plugin<Plane>, unit: u64, location: &'static str, caller: &'static str) -> String {
-    let mut b = Bufs::new(256);
+    let mut b = Bufs::with_units(1 << 16, 8);
     b.caller = caller;
-    let _ = b.call(p, &attempt(unit, 1));
-    let _ = b.call(p, &push(unit, 1, FROM_CALLER, PIECE_LAST, OFFER));
+    let opened = b.call(
+        p,
+        &Push {
+            stream: unit,
+            ..push(unit, 1, FROM_CALLER, 0, &[])
+        },
+    );
+    let id = opened
+        .split("location=/v1/realtime/calls/")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("the open names busbar's call: {opened}"))
+        .to_string();
+    assert!(
+        opened.contains("status=201"),
+        "the open is answered 201: {opened}"
+    );
+    let placed = b.call(
+        p,
+        &Push {
+            stream: unit,
+            ..push(unit, 1, FROM_KERNEL, 0, &[])
+        },
+    );
+    assert!(placed.contains("far=true"), "busbar's call: {placed}");
     let head = [Field {
         name: text("location"),
         value: text(location),
     }];
-    let far = Push {
-        status: 201,
-        head: &head,
-        ..push(
-            unit,
-            1,
-            FROM_FAR_END,
-            PIECE_HAS_STATUS | PIECE_LAST,
-            SDP_ANSWER,
-        )
-    };
-    b.call(p, &far)
+    let answered = b.call(
+        p,
+        &Push {
+            stream: unit,
+            status: 201,
+            head: &head,
+            ..push(unit, 1, FROM_FAR_END, PIECE_HAS_STATUS, &[])
+        },
+    );
+    assert!(answered.starts_with("Ready"), "{answered}");
+    id
 }
 
-/// The SDP offer the test caller makes for call `location` (on a unit of its own), then `arrive`
-/// of `unit` on the sideband door at `target` (`/v1/realtime/sideband/{call_id}`): the provider
-/// call the unit's session attaches to.
-fn attach_sideband(
-    p: &Plugin<Plane>,
-    unit: u64,
-    location: &'static str,
-    target: &'static str,
-) -> Outcome {
-    let brokered = broker(p, unit + 100_000, location, CALLER_REF);
-    assert!(brokered.contains("status=201"), "{brokered}");
-    arrive_sideband(p, unit, target)
+/// The sideband target naming busbar's call `id`.
+fn sideband_to(id: &str) -> &'static str {
+    leak(format!("/v1/realtime/sideband/{id}"))
+}
+
+/// The SDP offer the test caller makes for the provider's call `location` (on a stream of its
+/// own), then `arrive` of `unit` on the sideband door naming busbar's call: the provider call the
+/// unit's session attaches to.
+fn attach_sideband(p: &Plugin<Plane>, unit: u64, location: &'static str) -> Outcome {
+    let id = broker(p, unit + 100_000, location, CALLER_REF);
+    arrive_sideband(p, unit, sideband_to(&id))
 }
 
 /// `arrive` of `unit` on the sideband door at `target` (`/v1/realtime/sideband/{call_id}`): the
@@ -864,12 +918,7 @@ fn session_script(p: &Plugin<Plane>) -> Vec<String> {
     let mut t = vec![format!("open {:?}", open(p, 1, SESSION, Some(PUBLIC)).0)];
     t.push(format!(
         "arrive {:?}",
-        attach_sideband(
-            p,
-            20,
-            "/v1/realtime/calls/rtc_both0020",
-            "/v1/realtime/sideband/rtc_both0020"
-        )
+        attach_sideband(p, 20, "/v1/realtime/calls/rtc_both0020")
     ));
     let mut b = Bufs::with_units(1 << 18, 8);
     let line = |t: &mut Vec<String>, b: &mut Bufs, what: &str, push: &Push<'_>| {
@@ -916,7 +965,7 @@ fn session_script(p: &Plugin<Plane>) -> Vec<String> {
 
 #[test]
 fn a_live_session_is_answered_through_the_door() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let t = session_script(&linked(&d));
     let payload = busbar_contract::media::base64_encode(&vec![0u8; 2000 * 48]);
     let line = |what: &str| {
@@ -975,12 +1024,14 @@ fn a_live_session_is_answered_through_the_door() {
 /// RED-BEFORE-GREEN (the provider's sideband connection, OpenAI's "Webhooks and server-side
 /// controls" guide: a server attaches to a WebRTC call's own session at
 /// `wss://api.openai.com/v1/realtime?call_id=rtc_xxxxx`, the call id from the call's `Location`):
-/// the sideband door dials the call its arrival's `{call_id}` names, and a session whose arrival
-/// named no call is refused, never dialled as a fresh session. RED: the `{call_id}` was never read
-/// and every sideband dialled `/v1/realtime`, an unrelated session. Both ways.
+/// the sideband door dials the provider's call that busbar's call its arrival's `{call_id}` names
+/// resolves to (row 132), and a session whose arrival named no call is refused, never dialled as a
+/// fresh session; an arrival naming no call busbar holds is no door's (a 404). RED: the
+/// `{call_id}` was never read and every sideband dialled `/v1/realtime`, an unrelated session.
+/// Both ways.
 #[test]
 fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
@@ -988,12 +1039,7 @@ fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
         let unnamed = b.call(p, &session(60, FROM_CALLER, 0, &uplink(100)));
         assert!(unnamed.starts_with("Refused"), "{unnamed}");
         assert_eq!(
-            attach_sideband(
-                p,
-                61,
-                "/v1/realtime/calls/rtc_both0061",
-                "/v1/realtime/sideband/rtc_both0061"
-            ),
+            attach_sideband(p, 61, "/v1/realtime/calls/rtc_both0061"),
             Outcome::Ready
         );
         let named = b.call(p, &session(61, FROM_CALLER, 0, &uplink(100)));
@@ -1004,32 +1050,33 @@ fn a_sideband_session_attaches_to_the_call_its_arrival_names() {
         );
         assert_eq!(
             arrive_sideband(p, 62, "/v1/realtime/sideband/rtc_x&model=y"),
-            Outcome::Ready,
-            "an id that is not the provider's shape names no call"
+            Outcome::Refused,
+            "an id that is not a call id's shape names no call"
         );
         let forged = b.call(p, &session(62, FROM_CALLER, 0, &uplink(100)));
         assert!(forged.starts_with("Refused"), "{forged}");
+        assert_eq!(
+            arrive_sideband(p, 63, "/v1/realtime/sideband/rtc_both0061"),
+            Outcome::Refused,
+            "the provider's own call id is not busbar's: no call busbar holds"
+        );
     }
 }
 
 /// RED-BEFORE-GREEN (THE DESIGN #45's browser trust boundary; owner ruling: a sideband attaches only
-/// to a call its own caller's SDP offer created): a call another caller's offer brokered is
+/// to a call its own caller's SDP offer created): a call another caller's offer placed is
 /// refused, however well-formed its id, and so is a call no offer through this door created; the
 /// caller whose offer created it attaches. RED: any well-formed id was dialled, so one caller could
 /// take control of another's call on the operator's account. Both ways.
 #[test]
 fn a_sideband_attaches_only_to_its_own_callers_call() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        let theirs = broker(p, 90, "/v1/realtime/calls/rtc_theirs0001", "beef");
-        assert!(theirs.contains("status=201"), "{theirs}");
+        let theirs = sideband_to(&broker(p, 90, "/v1/realtime/calls/rtc_theirs0001", "beef"));
         let mut b = Bufs::with_units(1 << 18, 8);
-        assert_eq!(
-            arrive_sideband(p, 91, "/v1/realtime/sideband/rtc_theirs0001"),
-            Outcome::Ready
-        );
+        assert_eq!(arrive_sideband(p, 91, theirs), Outcome::Ready);
         let foreign = b.call(p, &session(91, FROM_CALLER, 0, &uplink(100)));
         assert!(
             foreign.starts_with("Refused"),
@@ -1037,7 +1084,8 @@ fn a_sideband_attaches_only_to_its_own_callers_call() {
         );
         assert_eq!(
             arrive_sideband(p, 92, "/v1/realtime/sideband/rtc_unbrokered01"),
-            Outcome::Ready
+            Outcome::Refused,
+            "a call no offer here created"
         );
         let unknown = b.call(p, &session(92, FROM_CALLER, 0, &uplink(100)));
         assert!(
@@ -1045,10 +1093,7 @@ fn a_sideband_attaches_only_to_its_own_callers_call() {
             "a call no offer here created: {unknown}"
         );
         b.caller = "beef";
-        assert_eq!(
-            arrive_sideband(p, 93, "/v1/realtime/sideband/rtc_theirs0001"),
-            Outcome::Ready
-        );
+        assert_eq!(arrive_sideband(p, 93, theirs), Outcome::Ready);
         let own = b.call(p, &session(93, FROM_CALLER, 0, &uplink(100)));
         assert!(
             own.contains("far=true")
@@ -1058,22 +1103,18 @@ fn a_sideband_attaches_only_to_its_own_callers_call() {
     }
 }
 
-/// RED-BEFORE-GREEN (MONEY: one session fee per call): the SDP offer that brokers a call reports
-/// the call's fee unit, and the sideband that joins that call reports its tokens and no second fee.
+/// RED-BEFORE-GREEN (MONEY: one session fee per call): the SDP offer whose call busbar placed
+/// reports the call's fee unit, and the sideband that joins that call reports its tokens and no second fee.
 /// RED: the joined session reported its own `per_session` once its far end answered, so one call
 /// was charged the fee twice. Both ways.
 #[test]
 fn a_sideband_joining_a_brokered_call_adds_no_second_fee() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        let brokered = broker(p, 94, "/v1/realtime/calls/rtc_fee0001", CALLER_REF);
-        assert!(brokered.contains("status=201"), "{brokered}");
-        assert_eq!(
-            arrive_sideband(p, 95, "/v1/realtime/sideband/rtc_fee0001"),
-            Outcome::Ready
-        );
+        let id = broker(p, 94, "/v1/realtime/calls/rtc_fee0001", CALLER_REF);
+        assert_eq!(arrive_sideband(p, 95, sideband_to(&id)), Outcome::Ready);
         let mut b = Bufs::with_units(1 << 18, 8);
         let _ = b.call(p, &session(95, FROM_CALLER, 0, &uplink(100)));
         let far = Push {
@@ -1091,86 +1132,79 @@ fn a_sideband_joining_a_brokered_call_adds_no_second_fee() {
 }
 
 /// RED-BEFORE-GREEN (MONEY; THE DESIGN: the plane reports the units it did, and the session fee is
-/// charged once per opened session): a browser session the mint or the SDP offer brokers on the
-/// operator's account reports its fee unit with the far end's answer, as a socket session does once
-/// its far end answers; a pass the far end refused brokered nothing and reports none. A failed SDP
-/// offer's error body keeps the far end's own type. RED: both doors reported no unit at all, so a
-/// caller ran realtime sessions on the operator's key with a budget that never moved. Both ways.
+/// charged once per opened session): a browser session whose call busbar placed on the operator's
+/// account reports its fee unit with the provider's success, as a socket session does once its far
+/// end answers; a call the provider refused placed nothing, reports none, and ends the session. The
+/// ticket busbar mints places no call and reports nothing (row 132). RED: the SDP door reported no
+/// unit at all, so a caller ran realtime sessions on the operator's key with a budget that never
+/// moved. Both ways.
 #[test]
 fn a_brokered_browser_session_reports_its_session_fee() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
-    let whole = PIECE_HAS_STATUS | PIECE_LAST;
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        let mut b = Bufs::new(256);
+        let mut b = Bufs::with_units(1 << 16, 8);
 
-        let _ = b.call(p, &attempt(70, 0));
-        let _ = b.call(p, &push(70, 0, FROM_CALLER, PIECE_LAST, &[]));
-        let far = Push {
-            status: 200,
-            ..push(70, 0, FROM_FAR_END, whole, MINTED)
-        };
-        let minted = b.call(p, &far);
+        let minted = b.call(p, &push(70, 0, FROM_CALLER, PIECE_LAST, &[]));
         assert!(minted.contains("done=true status=200"), "{minted}");
-        assert_eq!(b.last_units, "8:1=1", "the minted session's fee: {minted}");
+        assert_eq!(b.last_units, "", "a ticket places no call: {minted}");
 
-        let _ = b.call(p, &attempt(71, 1));
-        let _ = b.call(p, &push(71, 1, FROM_CALLER, PIECE_LAST, OFFER));
-        let far = Push {
-            status: 201,
-            ..push(71, 1, FROM_FAR_END, whole, SDP_ANSWER)
-        };
-        let answered = b.call(p, &far);
-        assert!(answered.contains("done=true status=201"), "{answered}");
-        assert_eq!(
-            b.last_units, "8:1=1",
-            "the offered session's fee: {answered}"
+        for (stream, status, fee) in [(71, 201, "8:1=1"), (73, 400, "")] {
+            let opened = b.call(
+                p,
+                &Push {
+                    stream,
+                    ..push(stream, 1, FROM_CALLER, 0, &[])
+                },
+            );
+            assert!(opened.contains("status=201"), "{opened}");
+            assert_eq!(b.last_units, "", "nothing answered yet: {opened}");
+            let placed = b.call(
+                p,
+                &Push {
+                    stream,
+                    ..push(stream, 1, FROM_KERNEL, 0, &[])
+                },
+            );
+            assert!(placed.contains("far=true"), "{placed}");
+            let head = [Field {
+                name: text("location"),
+                value: text("/v1/realtime/calls/rtc_fee0071"),
+            }];
+            let answered = b.call(
+                p,
+                &Push {
+                    stream,
+                    status,
+                    head: &head,
+                    ..push(stream, 1, FROM_FAR_END, PIECE_HAS_STATUS, &[])
+                },
+            );
+            assert!(answered.starts_with("Ready"), "{answered}");
+            assert_eq!(
+                b.last_units, fee,
+                "the provider's {status} to busbar's call: {answered}"
+            );
+        }
+        let ended = b.call(
+            p,
+            &Push {
+                stream: 73,
+                ..push(73, 1, FROM_KERNEL, 0, &[])
+            },
         );
-
-        let _ = b.call(p, &attempt(72, 0));
-        let _ = b.call(p, &push(72, 0, FROM_CALLER, PIECE_LAST, &[]));
-        let far = Push {
-            status: 500,
-            ..push(72, 0, FROM_FAR_END, whole, b"{}")
-        };
-        let failed = b.call(p, &far);
-        assert!(failed.contains("done=true status=502"), "{failed}");
-        assert_eq!(b.last_units, "", "a failed mint brokered nothing: {failed}");
-
-        let _ = b.call(p, &attempt(73, 1));
-        let _ = b.call(p, &push(73, 1, FROM_CALLER, PIECE_LAST, OFFER));
-        let json_type = [Field {
-            name: text("content-type"),
-            value: text("application/json"),
-        }];
-        let far = Push {
-            status: 400,
-            head: &json_type,
-            ..push(
-                73,
-                1,
-                FROM_FAR_END,
-                whole,
-                br#"{"error":{"message":"bad offer"}}"#,
-            )
-        };
-        let refused = b.call(p, &far);
         assert!(
-            refused.contains("done=true status=400")
-                && refused.contains("\"content-type=application/json\""),
-            "the far end's error keeps its own type: {refused}"
+            ended.contains("done=true"),
+            "a refused call ends its session: {ended}"
         );
-        assert_eq!(
-            b.last_units, "",
-            "a refused offer brokered nothing: {refused}"
-        );
+        assert_eq!(b.last_units, "", "and bills nothing: {ended}");
     }
 }
 
 #[test]
 fn the_dropped_door_answers_a_live_session_as_the_linked_door_does() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let dropped = dropped(&d);
     assert_eq!(
         session_script(&dropped),
@@ -1191,24 +1225,51 @@ fn arrive_route(p: &Plugin<Plane>, claim: u32) -> (Outcome, u8, String) {
     (c.outcome, a.out.route, read(a.out.pool))
 }
 
+/// `arrive` on `claim`: the route flags it states.
+fn arrive_flags(p: &Plugin<Plane>, claim: u32) -> u8 {
+    let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
+    a.input.head = in_head();
+    a.input.claim = claim;
+    a.out.head = out_head();
+    let _ = p.call(slot::ARRIVE, &mut a);
+    a.out.route_flags
+}
+
 /// Every door that reaches the far end names the DIRECT route `streams.session.model` (the entry the
-/// composition folds from the top-level models catalog); claim 6 (the metadata path) is no claim
-/// and arrives nowhere; with no model configured nothing is named (the door steps refuse an unnamed keyed route).
-/// Both ways.
+/// composition folds from the top-level models catalog); the mint door is the plane's own to answer
+/// (row 132: busbar mints the ticket and dials nothing), counted against the caller's caps; the
+/// sideband door names a call busbar placed, and one it does not hold is refused; claim 6 (the
+/// metadata path) is no claim and arrives nowhere; with no model configured nothing is named (the
+/// door steps refuse an unnamed keyed route). Both ways.
 #[test]
 fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route() {
-    use busbar_contract::abi::plane::{ROUTE_DIRECT, ROUTE_POOL};
+    use busbar_contract::abi::plane::{ROUTE_COUNTED, ROUTE_DIRECT, ROUTE_LOCAL, ROUTE_POOL};
     let d = Dispatcher::new(DispatchConfig::default());
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        for claim in [0, 1, 2, 3, 4, PLAIN_CLAIM] {
+        for claim in [1, 3, 4, PLAIN_CLAIM] {
             assert_eq!(
                 arrive_route(p, claim),
                 (Outcome::Ready, ROUTE_DIRECT, "m-cap".to_string()),
                 "claim {claim}"
             );
         }
+        assert_eq!(
+            arrive_route(p, 0),
+            (Outcome::Ready, ROUTE_LOCAL, String::new()),
+            "the mint door dials nothing"
+        );
+        assert_eq!(
+            arrive_flags(p, 0) & ROUTE_COUNTED,
+            ROUTE_COUNTED,
+            "the mint counts against the caller's caps"
+        );
+        assert_eq!(
+            arrive_route(p, 2).0,
+            Outcome::Refused,
+            "a sideband naming no call busbar holds"
+        );
         assert_ne!(
             arrive_route(p, 6).0,
             Outcome::Ready,
@@ -1218,7 +1279,7 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
     let bare = linked(&d);
     assert_eq!(open(&bare, 1, b"{}", Some(PUBLIC)).0, Outcome::Ready);
     assert_eq!(
-        arrive_route(&bare, 2),
+        arrive_route(&bare, 3),
         (Outcome::Ready, ROUTE_POOL, String::new()),
         "no model, no route named"
     );
@@ -1288,31 +1349,44 @@ fn a_session_open_is_projected_for_the_hooks_and_a_rewrite_patches_it() {
 // ── THE NEED A FAR REQUEST RIDES (ARCHITECT Q-L5B-NEEDS) ─────────────────────────────────────────
 
 /// Every far request names the outbound need it rides: a live session's frames OpenAI Realtime's
-/// socket, the mint's request Realtime's one-shot pass (each a declared outbound need under the
-/// dialect's style, held by the door's own compile-time check). Both ways.
+/// socket, busbar's own call for an SDP door's session the outbound webrtc need (each a declared
+/// outbound need under the dialect's style, held by the door's own compile-time check); the mint
+/// dials nothing (row 132). Both ways.
 #[test]
 fn every_far_request_names_the_need_it_rides() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         assert_eq!(
-            attach_sideband(
-                p,
-                40,
-                "/v1/realtime/calls/rtc_both0040",
-                "/v1/realtime/sideband/rtc_both0040"
-            ),
+            attach_sideband(p, 40, "/v1/realtime/calls/rtc_both0040"),
             Outcome::Ready
         );
         let mut b = Bufs::with_units(1 << 18, 8);
         let answer = b.call(p, &session(40, FROM_CALLER, 0, &uplink(100)));
         assert!(answer.contains("far=true"), "{answer}");
         assert_eq!(b.last_need, rides("ws", "bearer"), "{answer}");
+        let opening = Push {
+            stream: 42,
+            ..push(42, 1, FROM_CALLER, 0, &[])
+        };
+        let _ = b.call(p, &opening);
+        let call = b.call(
+            p,
+            &Push {
+                stream: 42,
+                ..push(42, 1, FROM_KERNEL, 0, &[])
+            },
+        );
+        assert!(call.contains("far=true"), "{call}");
+        assert_eq!(b.last_need, rides("webrtc", "bearer"), "{call}");
         let mut b = Bufs::new(1 << 16);
         let answer = b.call(p, &attempt(41, 0));
-        assert!(answer.contains("far=true"), "{answer}");
-        assert_eq!(b.last_need, rides("http", "bearer"), "{answer}");
+        assert!(
+            answer.contains("far=false"),
+            "the mint dials nothing: {answer}"
+        );
+        assert_eq!(b.last_need, 0, "{answer}");
     }
 }
 
@@ -1447,25 +1521,17 @@ fn refused_unit(
 #[test]
 fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
     use busbar_contract::caps::ReasonCode;
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(1 << 16);
         let audio = uplink(100);
-        for (unit, location, target) in [
-            (
-                130,
-                "/v1/realtime/calls/rtc_both0130",
-                "/v1/realtime/sideband/rtc_both0130",
-            ),
-            (
-                132,
-                "/v1/realtime/calls/rtc_both0132",
-                "/v1/realtime/sideband/rtc_both0132",
-            ),
+        for (unit, location) in [
+            (130, "/v1/realtime/calls/rtc_both0130"),
+            (132, "/v1/realtime/calls/rtc_both0132"),
         ] {
-            assert_eq!(attach_sideband(p, unit, location, target), Outcome::Ready);
+            assert_eq!(attach_sideband(p, unit, location), Outcome::Ready);
         }
         let _ = b.call(p, &session(130, FROM_CALLER, 0, &audio));
         let _ = b.call(p, &session(132, FROM_CALLER, 0, &audio));
@@ -1592,28 +1658,42 @@ fn cancel_disposition(p: &Plugin<Plane>, unit: u64) -> u32 {
 /// A CANCEL SAYS HOW FAR THE UNIT GOT (owner billing rule R21: the ledger records what the dialect
 /// did): cut before the far end answered it is ABORTED (billed nothing); cut after the far end began
 /// its answer it is PARTIAL, so the units it reported bill when its answer was streamed, as the llm
-/// and decisions planes answer; both doors alike. RED before: every cancel was FAILED.
+/// and decisions planes answer; both doors alike. The mint unit dials nothing (row 132), so its
+/// cancel is always ABORTED; a session whose far end answered is PARTIAL. RED before: every cancel
+/// was FAILED.
 #[test]
 fn a_cancel_after_the_far_end_answered_is_partial() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
         let p = door(&d);
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(256);
-        b.call(&p, &attempt(7, 0));
         b.call(&p, &push(7, 0, FROM_CALLER, PIECE_LAST, &[]));
         assert_eq!(
             cancel_disposition(&p, 7),
             CANCEL_ABORTED,
-            "cut before the far end answered: aborted"
+            "cut before any far end answered: aborted"
         );
-        b.call(&p, &attempt(17, 0));
-        b.call(&p, &push(17, 0, FROM_CALLER, PIECE_LAST, &[]));
-        let first = Push {
-            status: 200,
-            ..push(17, 0, FROM_FAR_END, PIECE_HAS_STATUS, &MINTED[..8])
-        };
-        b.call(&p, &first);
+        assert_eq!(
+            attach_sideband(&p, 17, "/v1/realtime/calls/rtc_both0017"),
+            Outcome::Ready
+        );
+        let mut b = Bufs::with_units(1 << 18, 8);
+        b.call(&p, &session(17, FROM_CALLER, 0, &uplink(100)));
+        b.call(
+            &p,
+            &Push {
+                attempt_no: 1,
+                ..session(17, FROM_KERNEL, 0, &[])
+            },
+        );
+        b.call(
+            &p,
+            &Push {
+                status: 101,
+                ..session(17, FROM_FAR_END, PIECE_HAS_STATUS, USAGE_DONE)
+            },
+        );
         assert_eq!(
             cancel_disposition(&p, 17),
             CANCEL_OK_PARTIAL,
@@ -1636,7 +1716,7 @@ const CALL_LIFETIME_NS: u64 = 60 * 60 * 1_000_000_000;
 /// (at d7aa995): `tick` asked for no next tick at all. Both ways, through `on_piece` and `tick`.
 #[test]
 fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
@@ -1648,8 +1728,8 @@ fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
         );
         d.recycle(driver);
         let before = d.stats().stale_wakes;
-        let brokered = broker(p, 300, "/v1/realtime/calls/rtc_tick0300", CALLER_REF);
-        assert!(brokered.contains("status=201"), "{brokered}");
+        let id = broker(p, 300, "/v1/realtime/calls/rtc_tick0300", CALLER_REF);
+        let target = sideband_to(&id);
         assert!(
             woke_retired(&d, before),
             "recording the call wakes the driver ticket the door was ticked on"
@@ -1663,10 +1743,7 @@ fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
             "the row's age starts at this tick, and the door asks to be ticked when it expires"
         );
         let mut b = Bufs::with_units(1 << 18, 8);
-        assert_eq!(
-            arrive_sideband(p, 301, "/v1/realtime/sideband/rtc_tick0300"),
-            Outcome::Ready
-        );
+        assert_eq!(arrive_sideband(p, 301, target), Outcome::Ready);
         let live = b.call(p, &session(301, FROM_CALLER, 0, &uplink(100)));
         assert!(live.contains("far=true"), "inside its lifetime: {live}");
         assert_eq!(
@@ -1675,8 +1752,9 @@ fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
             "the expired row is freed, and nothing is left to tick for"
         );
         assert_eq!(
-            arrive_sideband(p, 302, "/v1/realtime/sideband/rtc_tick0300"),
-            Outcome::Ready
+            arrive_sideband(p, 302, target),
+            Outcome::Refused,
+            "past its lifetime, busbar holds the call no longer"
         );
         let expired = b.call(p, &session(302, FROM_CALLER, 0, &uplink(100)));
         assert!(
@@ -1693,13 +1771,16 @@ fn a_brokered_row_expires_on_the_tick_clock_with_no_ceiling() {
 /// to the live call was refused. Both ways, through `on_piece` and `cancel`.
 #[test]
 fn a_sideband_reconnect_after_a_sideband_close_is_admitted() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = host();
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-        let brokered = broker(p, 310, "/v1/realtime/calls/rtc_back0310", CALLER_REF);
-        assert!(brokered.contains("status=201"), "{brokered}");
-        let target = "/v1/realtime/sideband/rtc_back0310";
+        let target = sideband_to(&broker(
+            p,
+            310,
+            "/v1/realtime/calls/rtc_back0310",
+            CALLER_REF,
+        ));
         let mut b = Bufs::with_units(1 << 18, 8);
 
         assert_eq!(arrive_sideband(p, 311, target), Outcome::Ready);
@@ -1778,7 +1859,8 @@ fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
 
         assert_eq!(
             arrive_at(p, 2, 51, "/v1/realtime/sideband/rtc_plain0051"),
-            Outcome::Ready
+            Outcome::Refused,
+            "a call no offer placed is no door's"
         );
         let sideband = b.call(p, &session(51, FROM_CALLER, 0, &audio));
         assert!(
@@ -1851,21 +1933,48 @@ fn a_plain_session_dials_the_session_models_upstream_name() {
 
 /// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on Part 2 #51): EVERY
 /// upstream-facing model field carries the resolved upstream model, never the catalog alias: the
-/// mint request's locked `session.model`, the locked `model` a caller's `session.update` is spliced
+/// locked `session.model` of busbar's own call for an SDP door's session (and of the ticket the
+/// mint locks it with), the locked `model` a caller's `session.update` is spliced
 /// with on its way to the provider, and the `model` of a Gemini Live caller's `setup`. RED: each
 /// named the catalog name (`m-cap`), which reaches the provider as an unknown model. Both ways.
 #[test]
 fn every_upstream_facing_model_field_names_the_upstream_model() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let (d, host) = ticket_host();
     let doors = vec![linked(&d), dropped(&d)];
     let mut transcripts = Vec::new();
     for p in &doors {
         assert_eq!(open(p, 1, KEYED_UPSTREAM, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::with_units(1 << 18, 8);
-        let mint = b.call(p, &attempt(70, 0));
+        let ticket = b.call(p, &push(69, 0, FROM_CALLER, PIECE_LAST, &[]));
+        assert!(ticket.contains("status=200"), "{ticket}");
+        let record = String::from_utf8(
+            host.minted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )
+        .expect("utf-8");
+        assert!(
+            record.contains(r#""model":"gpt-realtime-wire""#) && !record.contains("m-cap"),
+            "the ticket locks the upstream model: {record}"
+        );
+        let _ = b.call(
+            p,
+            &Push {
+                stream: 70,
+                ..push(70, 1, FROM_CALLER, 0, &[])
+            },
+        );
+        let mint = b.call(
+            p,
+            &Push {
+                stream: 70,
+                ..push(70, 1, FROM_KERNEL, 0, &[])
+            },
+        );
         assert!(
             mint.contains(r#""model":"gpt-realtime-wire""#) && !mint.contains("m-cap"),
-            "the mint request names the upstream model: {mint}"
+            "busbar's call names the upstream model: {mint}"
         );
 
         assert_eq!(
@@ -1914,6 +2023,186 @@ fn every_upstream_facing_model_field_names_the_upstream_model() {
     );
 }
 
+/// THE SDP DOOR'S OPEN (row 132): the 201 and busbar's call in `Location`, first; then busbar's own
+/// call to the provider, one form carrying the session the ticket locked and naming the caller for
+/// the provider's attribution; the provider's answer names its call, which the sideband door
+/// resolves busbar's call id to, for the offer's own caller. RED: a call busbar does not know is no
+/// door's. Both ways.
+#[test]
+fn the_sdp_door_places_busbars_call_locked_to_its_ticket_and_the_sideband_resolves_it() {
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::with_units(1 << 16, 8);
+        // The open: the association's empty piece.
+        let opened = b.call(
+            p,
+            &Push {
+                stream: 50,
+                ..push(50, 1, FROM_CALLER, 0, &[])
+            },
+        );
+        let id = opened
+            .split("location=/v1/realtime/calls/")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or_else(|| panic!("the open names busbar's call: {opened}"))
+            .to_string();
+        assert!(
+            id.starts_with("rtc_") && id.len() == 36,
+            "busbar's own opaque call id: {opened}"
+        );
+        assert_eq!(
+            opened,
+            format!(
+                "Ready emitted= more=0 far=false done=false status=201 verb= target= \
+                 fields=[\"location=/v1/realtime/calls/{id}\"]"
+            )
+        );
+        // The collection: busbar's own call, owed the far end before anything else.
+        let call = b.call(
+            p,
+            &Push {
+                stream: 50,
+                ..push(50, 1, FROM_KERNEL, 0, &[])
+            },
+        );
+        assert!(call.contains("far=true"), "{call}");
+        assert!(
+            call.contains("verb=POST target=/v1/realtime/calls "),
+            "{call}"
+        );
+        assert!(
+            call.contains("content-type=multipart/form-data; boundary=busbar-call-form"),
+            "{call}"
+        );
+        assert!(
+            call.contains(&format!("OpenAI-Safety-Identifier={CALLER_REF}")),
+            "the caller is named for the provider's attribution: {call}"
+        );
+        assert!(
+            call.contains("from-ticket") && call.contains(r#""type":"realtime""#),
+            "the session the ticket locked, in the GA shape: {call}"
+        );
+        assert_eq!(b.last_need, rides("webrtc", "bearer"));
+        // The provider's answer to busbar's call names its own call.
+        let upstream = [Field {
+            name: text("location"),
+            value: text("/v1/realtime/calls/rtc_upstream0001"),
+        }];
+        let answered = b.call(
+            p,
+            &Push {
+                stream: 50,
+                status: 201,
+                head: &upstream,
+                ..push(50, 1, FROM_FAR_END, PIECE_HAS_STATUS, &[])
+            },
+        );
+        assert!(answered.starts_with("Ready"), "{answered}");
+        assert_eq!(b.last_units, "8:1=1", "the call's one fee: {answered}");
+        // The sideband door resolves busbar's call id to the provider's.
+        let sideband = sideband_to(&id);
+        assert_eq!(arrive_at(p, 2, 60, sideband), Outcome::Ready);
+        let control = b.call(p, &session(60, FROM_CALLER, 0, &uplink(100)));
+        assert!(
+            control.contains("target=/v1/realtime?call_id=rtc_upstream0001 "),
+            "{control}"
+        );
+        // Another caller naming the same call is refused.
+        assert_eq!(arrive_at(p, 2, 62, sideband), Outcome::Ready);
+        b.caller = "beef";
+        let foreign = b.call(p, &session(62, FROM_CALLER, 0, &uplink(100)));
+        assert!(foreign.starts_with("Refused"), "{foreign}");
+        // RED: a call busbar does not know is no door's.
+        assert_eq!(
+            arrive_at(p, 2, 61, "/v1/realtime/sideband/rtc_unknown"),
+            Outcome::Refused
+        );
+        // The session's end frees busbar's call: a sideband to it is no door's.
+        b.caller = CALLER_REF;
+        let ended = b.call(
+            p,
+            &Push {
+                stream: 50,
+                ..push(50, 1, FROM_CALLER, PIECE_LAST, &[])
+            },
+        );
+        assert!(ended.contains("done=true"), "{ended}");
+        assert_eq!(arrive_at(p, 2, 63, sideband), Outcome::Refused);
+    }
+}
+
+/// THE MINT DOOR'S TICKET, in the shape SDKs read: busbar mints it, dials nothing and reports no
+/// units (row 132). Both ways.
+#[test]
+fn the_mint_door_answers_the_ticket_busbar_minted() {
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(256);
+        let answer = b.call(p, &push(70, 0, FROM_CALLER, PIECE_LAST, &[]));
+        let emitted = answer
+            .strip_prefix("Ready emitted=")
+            .and_then(|rest| rest.split(" more=").next())
+            .expect("answered");
+        let read: serde_json::Value = serde_json::from_str(emitted).expect("json");
+        assert_eq!(
+            read,
+            serde_json::json!({"value": TICKET, "expires_at_unix": TICKET_EXPIRES})
+        );
+        assert!(
+            answer.ends_with(&format!(
+                "more=0 far=false done=true status=200 verb= target= \
+                 fields=[\"content-type=application/json\", \"content-length={}\"]",
+                emitted.len()
+            )),
+            "{answer}"
+        );
+        assert_eq!(b.last_units, "", "a ticket bills nothing");
+        assert_eq!(b.last_need, 0, "and dials nothing");
+    }
+}
+
+/// RED-BEFORE-GREEN (THE DESIGN: admission bounds live work, nothing evicts it): an instance holding
+/// as many live calls as it admits refuses the next SDP offer at its arrival, before any ticket is
+/// taken or call placed: a 429 worded by the door, and no other caller's call is dropped for it.
+/// RED: the offer was taken and placed, and the call it displaced was another caller's. Both ways.
+#[test]
+fn an_sdp_offer_at_the_call_bound_is_refused_at_its_arrival() {
+    const MAX_BROKERED_CALLS: u64 = 4096;
+    const MAX_CALLS_PER_CALLER: u64 = MAX_BROKERED_CALLS / 64;
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let first = broker(p, 1_000, "/v1/realtime/calls/rtc_bound0000", "caller-0");
+        for i in 1..MAX_BROKERED_CALLS {
+            let caller = leak(format!("caller-{}", i / MAX_CALLS_PER_CALLER));
+            let _ = broker(p, 1_000 + i, "/v1/realtime/calls/rtc_bound0001", caller);
+        }
+        let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
+        a.input.head = in_head();
+        (a.input.unit, a.input.claim) = (900, 1);
+        a.input.target = text("/v1/realtime/calls");
+        a.out.head = out_head();
+        let c = p.call(slot::ARRIVE, &mut a);
+        assert_eq!(c.outcome, Outcome::Refused);
+        assert_eq!(a.out.refusal_status, 429);
+        assert_eq!(
+            read(a.out.head.error),
+            "busbar is holding as many realtime calls as it admits at once; retry once one has ended"
+        );
+        assert_eq!(
+            arrive_sideband(p, 901, sideband_to(&first)),
+            Outcome::Ready,
+            "the oldest caller's call is kept"
+        );
+    }
+}
+
 // ── AN UNREADABLE USAGE, AND THE HOST LOG ─────────────────────────────────────────────────────────
 
 /// The host's envelope sink, keeping the text of every diagnostic and log record a call carried:
@@ -1943,7 +2232,8 @@ const USAGE_UNREADABLE: &[u8] =
 /// before: the session ended unmetered and billed nothing for the turn.
 #[test]
 fn an_unreadable_usage_bills_the_floor_and_its_line_reaches_the_host_log() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    // The sideband attaches to a call busbar placed: its host serves tickets and randomness.
+    let d = host();
     let floor = (USAGE_UNREADABLE.len() as u64 / 4).max(1);
     let stated = row().statement;
     let path = {
@@ -1976,12 +2266,7 @@ fn an_unreadable_usage_bills_the_floor_and_its_line_reaches_the_host_log() {
         };
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         assert_eq!(
-            attach_sideband(
-                &p,
-                70,
-                "/v1/realtime/calls/rtc_both0070",
-                "/v1/realtime/sideband/rtc_both0070"
-            ),
+            attach_sideband(&p, 70, "/v1/realtime/calls/rtc_both0070"),
             Outcome::Ready
         );
         let mut b = Bufs::with_units(1 << 18, 8);
