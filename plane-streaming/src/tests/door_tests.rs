@@ -65,9 +65,7 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         let declared = &NEEDS[need as usize - 1];
         assert_eq!(declared.direction, DIRECTION_OUTBOUND, "{door:?}");
         assert_eq!(declared.egress_class, EGRESS_PROVIDER, "{door:?}");
-        let attempt = door
-            .route(&cfg.session, None, &[])
-            .expect("a session door dials");
+        let attempt = door.route(None).expect("a session door dials");
         assert_eq!(
             attempt.target, path,
             "{door:?} dials its own provider's socket"
@@ -82,6 +80,13 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         Door::Gemini.rides(),
         RIDES_REALTIME_SOCKET,
         "a Gemini Live session never rides the first-declared provider's socket"
+    );
+    // Row 132: the SDP door's far request is busbar's own call to OpenAI Realtime (the browser's
+    // media ends at busbar), on the outbound call need, never a socket's.
+    assert_eq!(Door::Sdp.rides(), RIDES_REALTIME_CALL);
+    assert_eq!(
+        NEEDS[RIDES_REALTIME_CALL as usize - 1].direction,
+        DIRECTION_OUTBOUND
     );
 
     // Metered on the serving provider's own report: a Gemini Live usage frame counts on the
@@ -204,7 +209,6 @@ fn held_mint() -> Held {
         unit: RequestUnit::open(
             Door::Mint,
             crate::codec::ir::config::SessionConfig::default(),
-            None,
         )
         .expect("a one-request door"),
         owed: Owed::default(),
@@ -252,6 +256,7 @@ fn plane() -> Plane {
         units: Mutex::new(Units::default()),
         calls: Mutex::new(PendingCalls::default()),
         brokered: Mutex::new(Brokered::default()),
+        services: None,
         sessions: Mutex::new(Sessions::default()),
         wake: None,
         driver: Mutex::new((Ticket::NONE, 0)),
@@ -472,11 +477,10 @@ fn full_instance() -> Brokered {
 fn the_instance_429_clears_once_rows_expire() {
     let mut brokered = full_instance();
     assert!(!brokered.admits(0), "a full instance refuses");
-    let reply = calls_full_reply();
-    assert_eq!(u32::from(reply.status), STATUS_CALLS_FULL);
-    assert_eq!(reply.rtc_call_id, None, "a refused offer brokers no call");
+    assert_eq!(STATUS_CALLS_FULL, 429);
     let body: serde_json::Value =
-        serde_json::from_slice(&crate::tests::body_bytes(reply.body)).expect("json");
+        serde_json::from_slice(&refusal_body(STATUS_CALLS_FULL as u16, CALLS_FULL_TEXT))
+            .expect("json");
     assert_eq!(body["error"]["type"], "rate_limit_error");
     assert_eq!(body["error"]["message"], CALLS_FULL_TEXT);
     // The clock moves past the reading the rows were recorded at: their age counts from here.
@@ -516,8 +520,9 @@ fn an_expired_row_frees_room_for_another_caller() {
     assert_eq!(brokered.owners.len(), 2);
 }
 
-/// RED-BEFORE-GREEN: a brokered call the far end ends, as its sideband sees it (an accepted
-/// upgrade whose answer ends whole: its last piece, not cut), has ended, and its row is freed. A
+/// RED-BEFORE-GREEN: a call busbar placed that the far end ends, as its sideband sees it on the
+/// provider's call it resolved to (an accepted upgrade whose answer ends whole: its last piece, not
+/// cut), has ended, and busbar's call's row is freed. A
 /// far end whose connection was cut, or a piece that is not its last, frees nothing. RED: the row
 /// was freed only when the sideband itself closed, never on the far end's end.
 #[test]
@@ -525,8 +530,9 @@ fn an_ended_call_frees_its_row() {
     let p = plane();
     for i in 0..2 {
         lock(&p.brokered).record(format!("rtc_{i}"), "tenant-a".to_string(), 0);
+        lock(&p.brokered).named(&format!("rtc_{i}"), format!("rtc_up{i}"));
     }
-    let call = Some("rtc_0");
+    let call = Some("rtc_up0");
     p.far_end_ended(Door::Sideband, 0, call, true);
     assert!(
         lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
@@ -557,9 +563,60 @@ fn an_ended_call_frees_its_row() {
 fn a_refused_sideband_upgrade_frees_no_live_call() {
     let p = plane();
     lock(&p.brokered).record("rtc_0".to_string(), "tenant-a".to_string(), 0);
-    p.far_end_ended(Door::Sideband, PIECE_LAST, Some("rtc_0"), false);
+    lock(&p.brokered).named("rtc_0", "rtc_up0".to_string());
+    p.far_end_ended(Door::Sideband, PIECE_LAST, Some("rtc_up0"), false);
     assert!(
         lock(&p.brokered).owns("rtc_0", "tenant-a", 0),
         "the refused upgrade frees nothing"
     );
+}
+
+/// RED-BEFORE-GREEN (row 132, a sideband attaches only to its own caller's call): busbar's call
+/// resolves to the provider's only once the provider named it, and only for the caller whose offer
+/// placed it; another caller, or a call no offer placed, resolves to nothing. RED: the sideband
+/// resolved any caller's call by busbar's id alone.
+#[test]
+fn busbars_call_resolves_for_its_own_caller_once_named() {
+    let mut brokered = Brokered::default();
+    brokered.record("rtc_ours".to_string(), "tenant-a".to_string(), 0);
+    assert!(brokered.holds("rtc_ours"));
+    assert_eq!(
+        brokered.upstream_of("rtc_ours", "tenant-a", 0),
+        None,
+        "the provider has not named its call yet"
+    );
+    brokered.named("rtc_ours", "rtc_provider".to_string());
+    assert_eq!(
+        brokered.upstream_of("rtc_ours", "tenant-a", 0).as_deref(),
+        Some("rtc_provider")
+    );
+    assert_eq!(
+        brokered.upstream_of("rtc_ours", "tenant-b", 0),
+        None,
+        "another caller's sideband never reaches the call"
+    );
+    assert!(!brokered.holds("rtc_unknown"));
+    assert_eq!(brokered.upstream_of("rtc_unknown", "tenant-a", 0), None);
+    brokered.end_upstream("rtc_provider");
+    assert!(!brokered.holds("rtc_ours"), "the provider's end frees it");
+}
+
+/// RED-BEFORE-GREEN (row 132): a session that placed busbar's call frees the call's row when it
+/// ends, so a call that is over neither holds the instance's room nor takes a sideband. RED: rows
+/// were freed only on the provider's end or past the call's lifetime.
+#[test]
+fn an_ended_sdp_session_frees_its_call() {
+    let p = plane();
+    let cfg = StreamsCfg::default();
+    lock(&p.brokered).record("rtc_placed".to_string(), "tenant-a".to_string(), 0);
+    {
+        let mut sessions = lock(&p.sessions);
+        let live = sessions
+            .get_or_open(9, Door::Sdp, &cfg)
+            .expect("the SDP door opens a session");
+        live.place("rtc_placed".to_string());
+        sessions.close(9);
+        p.end_calls(&mut sessions);
+    }
+    assert!(!lock(&p.brokered).holds("rtc_placed"));
 }
