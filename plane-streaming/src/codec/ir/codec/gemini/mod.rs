@@ -37,6 +37,7 @@
 //! clear, item delete/truncate, per-response overrides) — frames NOTHING (`write_up` answers `None`),
 //! because a stand-in frame carrying none of the semantics reads upstream as the concept surviving.
 
+use super::peek::{base64_len, Head, Lite};
 use super::{billed_count, usage_floor};
 use super::{decode_audio, encode_audio, parse, str_at, wire_of, DecodeState};
 use super::{DuplexReader, DuplexWriter, WireEvent, WireRef};
@@ -711,6 +712,39 @@ impl DuplexReader for GeminiLiveCodec {
             ));
         }
         out
+    }
+
+    /// Only a frame naming `usageMetadata` or `toolCall` carries what a session meters.
+    fn meters_down(&self, frame: &[u8]) -> bool {
+        Head::read(frame).is_none_or(|h| {
+            h.keys
+                .iter()
+                .any(|k| k == wire::USAGE_METADATA || k == wire::TOOL_CALL)
+        })
+    }
+
+    /// `realtimeInput`'s GA `audio` blob, else each legacy `mediaChunks[]` blob, at the format its
+    /// mime states; a frame that is a `setup` or a `clientContent` carries none.
+    fn uplink_audio(&self, top: &Lite<'_>, admit: &mut dyn FnMut(Option<AudioFormat>, usize)) {
+        if top.get(wire::SETUP).is_some() || top.get(wire::CLIENT_CONTENT).is_some() {
+            return;
+        }
+        let Some(ri) = top.get(wire::REALTIME_INPUT) else {
+            return;
+        };
+        let mut blob = |b: &Lite<'_>| {
+            if let (Some(format), Some(len)) = (
+                audio_format_from_mime(b.str_at("mimeType"), UpDown::Up),
+                base64_len(b.str_at("data")),
+            ) {
+                admit(Some(format), len);
+            }
+        };
+        match (ri.get("audio"), ri.get("mediaChunks")) {
+            (Some(audio), _) => blob(audio),
+            (None, Some(Lite::Arr(chunks))) => chunks.iter().for_each(blob),
+            _ => {}
+        }
     }
 }
 
