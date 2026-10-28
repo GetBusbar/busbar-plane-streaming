@@ -9,9 +9,9 @@
 //! provider key authenticates only the busbar-to-provider hop and never enters anything built or
 //! returned here.
 
-use busbar_contract::abi::sdk::cred::{
-    json_reply, Cred, JsonReplyError, NotJsonText, SealedJson, SealedWrite,
-};
+use core::fmt;
+
+use busbar_contract::abi::sdk::cred::{Cred, NotJsonText, SealedJson, SealedWrite};
 
 use crate::codec::ir::config::SessionConfig;
 
@@ -67,6 +67,62 @@ impl std::fmt::Debug for Minted {
     }
 }
 
+/// The class of a reply that did not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsonFailure {
+    /// The body could not be read.
+    Io,
+    /// The body is not well-formed JSON.
+    Syntax,
+    /// A member is missing or has the wrong type.
+    Data,
+    /// The body ends before the JSON does.
+    Eof,
+}
+
+/// Why a reply did not read: the class of the failure and where it sits, never the decoder's own
+/// text (a data error quotes the offending value, which may be the credential).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JsonReplyError {
+    failure: JsonFailure,
+    line: usize,
+    column: usize,
+}
+
+/// `<the class> (line <l>, column <c>; the decoder's text is withheld)`.
+impl fmt::Display for JsonReplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let class = match self.failure {
+            JsonFailure::Io => "the body could not be read",
+            JsonFailure::Syntax => "it is not well-formed JSON",
+            JsonFailure::Data => "a field is missing or has the wrong type",
+            JsonFailure::Eof => "it ends before the JSON does",
+        };
+        write!(
+            f,
+            "{class} (line {}, column {}; the decoder's text is withheld)",
+            self.line, self.column
+        )
+    }
+}
+
+/// Read a JSON reply `body` into `T`. Every [`Cred`] member of `T` is captured as it is read (from
+/// the body straight into the credential's zeroizing buffer); the error names a class and a
+/// position, never a value.
+fn json_reply<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, JsonReplyError> {
+    use serde_json::error::Category;
+    serde_json::from_slice(body).map_err(|e| JsonReplyError {
+        failure: match e.classify() {
+            Category::Io => JsonFailure::Io,
+            Category::Syntax => JsonFailure::Syntax,
+            Category::Data => JsonFailure::Data,
+            Category::Eof => JsonFailure::Eof,
+        },
+        line: e.line(),
+        column: e.column(),
+    })
+}
+
 /// The provider's mint answer, as the SDK reads it: the secret captured straight into a [`Cred`].
 #[derive(serde::Deserialize)]
 struct ClientSecretResponse {
@@ -79,7 +135,7 @@ struct ClientSecretResponse {
 /// # Errors
 /// A body that does not parse, a value that is not an `ek_` ephemeral secret, or a secret with no
 /// stated expiry, each with the text the caller reports. A body that does not parse is described
-/// by its class and position only ([`JsonReplyError`]): the decoder's own text would quote the
+/// by its class and position only (`JsonReplyError`): the decoder's own text would quote the
 /// value it met, and the body carries the secret.
 ///
 /// The expiry is part of the secret. A browser holds an `ek_` only for as long as it says
@@ -87,8 +143,8 @@ struct ClientSecretResponse {
 /// `expires_at_unix: 0`, a figure that is not an instant, so a client could neither schedule its
 /// refresh nor tell the secret was already past. An answer with no `expires_at`, or `0`, is refused.
 pub fn read_minted(body: &[u8]) -> Result<Minted, String> {
-    let parsed: ClientSecretResponse = json_reply(body)
-        .map_err(|e: JsonReplyError| format!("client-secret response did not parse: {e}"))?;
+    let parsed: ClientSecretResponse =
+        json_reply(body).map_err(|e| format!("client-secret response did not parse: {e}"))?;
     if !parsed.value.starts_with(EK_PREFIX.as_bytes()) {
         return Err("client-secret response value is not an ek_ ephemeral secret".into());
     }
