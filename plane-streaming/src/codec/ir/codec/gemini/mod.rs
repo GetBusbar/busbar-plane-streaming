@@ -37,7 +37,7 @@
 //! clear, item delete/truncate, per-response overrides) — frames NOTHING (`write_up` answers `None`),
 //! because a stand-in frame carrying none of the semantics reads upstream as the concept surviving.
 
-use super::{billed_count, usage_refusal};
+use super::{billed_count, usage_floor};
 use super::{decode_audio, encode_audio, parse, str_at, wire_of, DecodeState};
 use super::{DuplexReader, DuplexWriter, WireEvent, WireRef};
 use crate::codec::ir::config::{MaxOutputTokens, SessionConfig};
@@ -452,6 +452,7 @@ fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
         image_in,
         video_in,
         cached: billed_count(Some(u), "cachedContentTokenCount")?,
+        floor: false,
     })
 }
 
@@ -604,6 +605,7 @@ impl DuplexReader for GeminiLiveCodec {
     }
 
     fn read_down_ref(&self, wire: WireRef<'_>, st: &mut DecodeState) -> Vec<IrServerEvent> {
+        let report_len = wire.0.len();
         let Some(v) = parse(wire) else {
             return Vec::new();
         };
@@ -702,11 +704,11 @@ impl DuplexReader for GeminiLiveCodec {
         };
 
         if let Some(um) = v.get(wire::USAGE_METADATA) {
-            // A present-but-unreadable billed count REFUSES the turn (#42), never meters it at zero.
-            out.push(match usage_from_metadata(um) {
-                Ok(usage) => IrServerEvent::Usage(usage),
-                Err(message) => usage_refusal(message),
-            });
+            // A present-but-unreadable billed count bills the plane's floor and says so (#42),
+            // never meters it at zero.
+            out.push(IrServerEvent::Usage(
+                usage_from_metadata(um).unwrap_or_else(|message| usage_floor(report_len, &message)),
+            ));
         }
         out
     }

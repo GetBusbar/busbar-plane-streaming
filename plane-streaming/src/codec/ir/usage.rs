@@ -33,6 +33,9 @@ pub struct IrDuplexUsage {
     pub video_in: u64,
     /// Cached tokens billed at the cache rate this turn.
     pub cached: u64,
+    /// The far end's report could not be read: these counts are the plane's FLOOR over the report's
+    /// bytes, never the far end's own (owner ruling 2026-10-27, the llm plane's floor).
+    pub floor: bool,
 }
 
 /// THE ONE SEAM every BILLED count read in this crate goes through.
@@ -63,8 +66,8 @@ pub struct IrDuplexUsage {
 /// information) all read as `None`. Rounding would invent a quantity the provider never reported.
 ///
 /// A refused value is never read as zero: every billed count in this crate is read through the
-/// codecs' `billed_count`, which turns a present-but-unreadable count into a refusal of the usage
-/// report (decision #81), and a live session that meets one ends rather than serve unmetered.
+/// codecs' `billed_count`, which LOCATES a present-but-unreadable count (decision #81): the report
+/// then bills the plane's floor and says so in one log line, and the session goes on.
 #[must_use]
 pub fn read_count_u64(v: &serde_json::Value) -> Option<u64> {
     if let Some(u) = v.as_u64() {
