@@ -1,9 +1,11 @@
-//! ITEM 133 (the duplex twin) — A PRESENT-BUT-UNREADABLE BILLED COUNT REFUSES THE TURN (#42).
+//! ITEM 133 (the duplex twin) — A PRESENT-BUT-UNREADABLE BILLED COUNT BILLS THE FLOOR (#42; owner
+//! ruling 2026-10-27).
 //!
 //! Both duplex dialects read every billed count as `read_count_u64(..).unwrap_or_default()`, so a
 //! stringified count metered a real turn at ZERO. Each test drives the real `read_down` path: an
-//! unreadable count now surfaces as a session `Error` (the plane closes the turn as failed and
-//! records the error), never a `Usage` event carrying zero; an ABSENT count keeps meaning zero.
+//! unreadable count now bills the llm plane's floor over the report's bytes (one output token per
+//! four bytes, at least one), marked as the floor, never a `Usage` event carrying zero; an ABSENT
+//! count keeps meaning zero.
 use super::gemini::GeminiLiveCodec;
 use super::*;
 
@@ -11,12 +13,15 @@ fn wire(v: &Value) -> WireEvent {
     WireEvent(Bytes::from(v.to_string().into_bytes()))
 }
 
-fn refused(ir: &[IrServerEvent]) -> bool {
-    matches!(ir, [IrServerEvent::Error { code, .. }] if code == "usage_unreadable")
+/// Whether `ir` is one usage report billing the floor over a report of `src`'s bytes.
+fn floored(ir: &[IrServerEvent], src: &Value) -> bool {
+    let floor = (src.to_string().len() as u64 / 4).max(1);
+    matches!(ir, [IrServerEvent::Usage(u)] if u.floor && u.text_out == floor
+        && (u.audio_in, u.audio_out, u.text_in, u.image_in, u.video_in, u.cached) == (0, 0, 0, 0, 0, 0))
 }
 
 #[test]
-fn openai_realtime_refuses_a_stringified_count() {
+fn openai_realtime_bills_the_floor_for_a_stringified_count() {
     let mut st = DecodeState::default();
     for usage in [
         json!({"input_tokens": "1500", "output_tokens": 9}),
@@ -25,7 +30,10 @@ fn openai_realtime_refuses_a_stringified_count() {
     ] {
         let src = json!({"type": "response.done", "response": {"usage": usage}});
         let ir = OpenAiRealtimeCodec.read_down(wire(&src), &mut st);
-        assert!(refused(&ir), "{usage} must refuse, not meter zero: {ir:?}");
+        assert!(
+            floored(&ir, &src),
+            "{usage} bills the floor, never zero: {ir:?}"
+        );
     }
 }
 
@@ -41,7 +49,7 @@ fn openai_realtime_absent_counts_still_read_as_zero() {
 }
 
 #[test]
-fn gemini_live_refuses_a_stringified_count() {
+fn gemini_live_bills_the_floor_for_a_stringified_count() {
     let mut st = DecodeState::default();
     for um in [
         json!({"promptTokenCount": "95", "responseTokenCount": 50}),
@@ -50,7 +58,10 @@ fn gemini_live_refuses_a_stringified_count() {
     ] {
         let src = json!({"usageMetadata": um});
         let ir = GeminiLiveCodec.read_down(wire(&src), &mut st);
-        assert!(refused(&ir), "{um} must refuse, not meter zero: {ir:?}");
+        assert!(
+            floored(&ir, &src),
+            "{um} bills the floor, never zero: {ir:?}"
+        );
     }
 }
 

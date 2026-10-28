@@ -36,6 +36,10 @@ pub const CLASSES: [busbar_contract::ids::MeterClassId; 8] = [
     meta::CLASS_VIDEO_TOKENS_IN,
 ];
 
+/// The index of the output text tokens in [`CLASSES`]: the class an unreadable usage report's floor
+/// bills.
+pub const TEXT_TOKENS_OUT: u32 = 3;
+
 /// The session's units so far, per class: every closed turn adds to them, and the session always
 /// continues (the kernel owns the cut).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,9 +92,11 @@ pub struct SessionUnit<C> {
     twilio: Option<TwilioBridge>,
     /// The far end has been sent the locked session the telephony carrier's start called for.
     locked_told: bool,
-    /// The far end reported usage the reader could not read, and the session ended on it; not yet
-    /// reported to the kernel.
-    unmetered: bool,
+    /// The far end reported usage the reader could not read; not yet reported to the kernel.
+    unreadable: bool,
+    /// A turn of the session billed the plane's floor (its output tokens): the far end's usage
+    /// report could not be read.
+    floored: bool,
     ended: bool,
 }
 
@@ -106,7 +112,8 @@ where
             units: CumulativeUnits::default(),
             twilio: telephony.then(TwilioBridge::default),
             locked_told: false,
-            unmetered: false,
+            unreadable: false,
+            floored: false,
             ended: false,
         }
     }
@@ -183,10 +190,9 @@ where
     /// A piece from the far end. A tool call in it is relayed to the caller as-is: the
     /// caller runs the tool (Law 11).
     ///
-    /// A usage report the reader cannot read (a billed count present but not a count) is REFUSED:
-    /// the turn's tokens cannot be metered, so the session is not served on unmetered. The far end's
-    /// frame still reaches the caller, the caller is told why in its dialect, and the session ends;
-    /// [`Self::take_unmetered`] reports it to the kernel once.
+    /// A usage report the reader cannot read (a billed count present but not a count) bills the
+    /// plane's floor for the turn and the session goes on (owner ruling 2026-10-27: spend is always
+    /// attributed); [`Self::take_unreadable`] reports it to the kernel once.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8]) -> Plan {
         if self.ended {
@@ -195,14 +201,10 @@ where
         let out = self
             .pump
             .on_server_frame(WireEvent(Bytes::copy_from_slice(bytes)), &mut self.units);
-        let mut to_caller = self.caller_frames(out.downlink);
+        let to_caller = self.caller_frames(out.downlink);
         if out.usage_unreadable {
-            self.unmetered = true;
-            let told = self.pump.unmetered_error();
-            to_caller.extend(self.caller_frames(told.into_iter().collect()));
-            let mut plan = self.end();
-            plan.to_caller = to_caller;
-            return plan;
+            self.unreadable = true;
+            self.floored = true;
         }
         Plan {
             to_far_end: out.upstream.into_iter().map(|w| w.0.to_vec()).collect(),
@@ -211,10 +213,16 @@ where
         }
     }
 
-    /// Whether the session ended on a usage report it could not read and the kernel has not been
+    /// Whether the far end sent a usage report the reader could not read and the kernel has not been
     /// told; telling clears it, so it is reported once.
-    pub fn take_unmetered(&mut self) -> bool {
-        std::mem::take(&mut self.unmetered)
+    pub fn take_unreadable(&mut self) -> bool {
+        std::mem::take(&mut self.unreadable)
+    }
+
+    /// Whether a turn of the session billed the plane's floor: its output tokens are the floor's.
+    #[must_use]
+    pub fn floored(&self) -> bool {
+        self.floored
     }
 
     /// The session reached the wall-clock ceiling of `ceiling_secs` its host measured: it is told

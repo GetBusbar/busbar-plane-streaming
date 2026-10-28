@@ -276,27 +276,34 @@ fn every_emitted_frame_is_a_text_message_and_either_opcode_is_read() {
     }
 }
 
-/// RED-BEFORE-GREEN (MONEY, #42: a present-but-unreadable billed count is a refusal, never a zero):
-/// a far-end usage report the reader cannot read ends the session rather than serve it on
-/// unmetered: the report still reaches the caller, the caller is told why in its dialect, the
-/// session ends, and the door is told once so the kernel counts the refusal. RED: the reader's
-/// refusal was folded into a plain turn close, the turn's tokens billed zero and the session ran on
-/// with nothing surfaced anywhere.
+/// RED-BEFORE-GREEN (MONEY, #42 and the owner ruling of 2026-10-27: a present-but-unreadable
+/// billed count is never a zero, and spend is always attributed): a far-end usage report the reader
+/// cannot read bills the plane's floor for the turn (its output tokens) and the session goes on; the
+/// report reaches the caller as sent, and the door is told once so the kernel counts the reader's
+/// fault. RED before the ruling: the session ended unmetered.
 #[test]
-fn an_unreadable_usage_report_ends_the_session_and_is_reported_once() {
+fn an_unreadable_usage_report_bills_the_floor_and_is_reported_once() {
     let mut s = SessionUnit::open(OpenAiRealtimeCodec, SessionConfig::default(), false);
-    let done = json(
-        serde_json::json!({"type":"response.done","response":{"usage":{
-        "input_tokens":"1500","output_tokens":9}}}),
-    );
+    let report = serde_json::json!({"type":"response.done","response":{"usage":{
+        "input_tokens":"1500","output_tokens":9}}});
+    let floor = (report.to_string().len() as u64 / 4).max(1);
+    let done = json(report);
     let plan = s.from_far_end(&done);
-    assert!(plan.end, "the session ends: {plan:?}");
+    assert!(!plan.end, "the session goes on: {plan:?}");
     let down = text(&plan.to_caller);
     assert!(
-        down.contains("response.done") && down.contains("usage_unreadable"),
-        "the report and why the session ends reach the caller: {down}"
+        down.contains("response.done"),
+        "the report reaches the caller: {down}"
     );
-    assert!(s.ended());
-    assert!(s.take_unmetered(), "the door is told");
-    assert!(!s.take_unmetered(), "once");
+    assert!(!s.ended());
+    assert!(s.floored(), "the turn billed the floor");
+    assert!(
+        s.units()
+            .reported()
+            .contains(&(crate::session_unit::TEXT_TOKENS_OUT, floor)),
+        "{:?}",
+        s.units()
+    );
+    assert!(s.take_unreadable(), "the door is told");
+    assert!(!s.take_unreadable(), "once");
 }

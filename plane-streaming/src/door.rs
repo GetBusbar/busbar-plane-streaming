@@ -62,7 +62,7 @@ use busbar_contract::abi::plane::{
     EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION,
     INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
     PIECE_REFUSED, PRINCIPAL_REQUIRED, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT,
-    TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_REPORTED,
+    TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_FLOOR, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
@@ -1348,10 +1348,14 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         }
     };
     let (fields, mut units, mut arena) = (input.fields_buf(), input.units_buf(), input.arena_buf());
+    // A session a turn of which billed the plane's floor states its output tokens as the floor's
+    // (`UNITS_FLOOR`), never as the far end's report.
+    let floored = live.floored();
     for (class, amount) in live.units() {
+        let floor = floored && class == crate::session_unit::TEXT_TOKENS_OUT;
         units.push(UnitCount {
             class,
-            source: UNITS_REPORTED,
+            source: if floor { UNITS_FLOOR } else { UNITS_REPORTED },
             amount,
         });
     }
@@ -1396,9 +1400,9 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         }
         None => false,
     };
-    // A session that ended on a usage report it could not read is reported to the kernel once,
-    // as the reader's refusal of the far end's body.
-    if live.take_unmetered() {
+    // A usage report the reader could not read is reported to the kernel once, as the reader's
+    // fault on the far end's body (the turn billed the plane's floor).
+    if live.take_unreadable() {
         out.set(|o| &o.tap_fault, TAP_FAULT_DECODE);
     }
     let owes = live.ready();

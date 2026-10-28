@@ -377,8 +377,9 @@ fn u64_at(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(Value::as_u64).unwrap_or_default()
 }
 
-/// The wire error code a present-but-unreadable BILLED count surfaces as on the session.
-pub(crate) const USAGE_UNREADABLE: &str = "usage_unreadable";
+/// One output token per this many bytes of an unreadable usage report: the llm plane's floor
+/// estimate (`TRUNCATED_TAIL_BYTES_PER_TOKEN`).
+const FLOOR_BYTES_PER_TOKEN: u64 = 4;
 
 /// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity
 /// was reported), a readable count is the count (through the crate's one seam,
@@ -397,13 +398,20 @@ fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     }
 }
 
-/// The session event a refused usage report becomes: an upstream error on the turn — whose message,
-/// naming the field and its spelling, the plane records as the turn's error fact — never a `Usage`
-/// event carrying zero for work that happened.
-fn usage_refusal(message: String) -> IrServerEvent {
-    IrServerEvent::Error {
-        code: USAGE_UNREADABLE.to_string(),
-        message,
+/// WHAT AN UNREADABLE USAGE REPORT BILLS (owner ruling 2026-10-27: spend is always attributed and
+/// nothing is silent): the llm plane's floor, one output token per [`FLOOR_BYTES_PER_TOKEN`] bytes
+/// of the report and at least one, marked as the plane's floor. Its one log line names the field and
+/// its spelling; the door's call capture carries it to the plugin's host log.
+pub(crate) fn usage_floor(report_len: usize, message: &str) -> IrDuplexUsage {
+    busbar_contract::diag_warn!(
+        busbar_contract::diagnostic::USAGE_TAP_DECODE_FAILED,
+        delivered = report_len,
+        "{message}: usage is unreadable; billing the floor estimate, never 0"
+    );
+    IrDuplexUsage {
+        text_out: (report_len as u64 / FLOOR_BYTES_PER_TOKEN).max(1),
+        floor: true,
+        ..IrDuplexUsage::default()
     }
 }
 
@@ -638,6 +646,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
     }
 
     fn read_down_ref(&self, wire: WireRef<'_>, st: &mut DecodeState) -> Vec<IrServerEvent> {
+        let report_len = wire.0.len();
         let Some(v) = parse(wire) else {
             return Vec::new();
         };
@@ -731,7 +740,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
             }
             wire::RESPONSE_DONE => {
                 // An absent `usage` is no report (zero, as before); a present-but-unreadable billed
-                // count REFUSES the turn (#42) instead of metering it at zero.
+                // count bills the plane's floor and says so (#42: never metered at zero).
                 match v
                     .get("response")
                     .and_then(|r| r.get("usage"))
@@ -739,7 +748,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
                     .transpose()
                 {
                     Ok(usage) => vec![IrServerEvent::Usage(usage.unwrap_or_default())],
-                    Err(message) => vec![usage_refusal(message)],
+                    Err(message) => vec![IrServerEvent::Usage(usage_floor(report_len, &message))],
                 }
             }
             wire::RATE_LIMITS_UPDATED => vec![IrServerEvent::RateLimits],
@@ -771,7 +780,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
 /// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` (`gemini/mod.rs`).
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
-/// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
+/// present-but-unreadable one is an `Err` the caller bills the floor for ([`usage_floor`], #42).
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     let ind = u.get("input_token_details");
     let outd = u.get("output_token_details");
@@ -793,6 +802,7 @@ fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
         image_in,
         video_in: 0,
         cached: billed_count(ind, "cached_tokens")?,
+        floor: false,
     })
 }
 
