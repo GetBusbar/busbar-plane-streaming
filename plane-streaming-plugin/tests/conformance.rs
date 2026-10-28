@@ -18,7 +18,7 @@ fn loaded_door() -> LoadedDoor {
     LoadedDoor::from(door)
 }
 
-busbar_plugin_loader::conformance_suite! {
+busbar_test_kit::conformance_suite! {
     loaded: loaded_door(),
     cdylib: "busbar_plane_streaming_plugin",
     inputs: include_str!("conformance.json"),

@@ -26,7 +26,8 @@ busbar-contract = { workspace = true }
 [dev-dependencies]
 # The published suite (`tests/conformance.rs`, `conformance_suite!`) loads the linked door and
 # dlopens the built cdylib over busbar's REAL loader: dev-only, never in the shipped artifact.
-busbar-plugin-loader = { workspace = true, features = ["conformance"] }
+busbar-plugin-loader = { workspace = true }
+busbar-test-kit = { workspace = true }
 # The op-by-op both-ways script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-streaming) builds the openai-realtime wire frames it pushes as JSON.
 serde_json = { workspace = true }
