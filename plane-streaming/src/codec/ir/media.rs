@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! MEDIA — the audio formats a session meters in. Design `BUSBAR-1.6.0.md` #18/#45.
+//! Media: the audio formats a session meters in.
 //!
 //! Audio frames (`input_audio_buffer.append` up; `response.output_audio.delta` down) are relayed
 //! VERBATIM; the meter counts the uplink's decoded bytes at the format they are in.
 
-/// THE NEGOTIATED PCM WIRE FORMAT (`BUSBAR-1.6.0.md` #18/#45 audio-format field). Two dialect-normalized shapes
+/// The negotiated PCM wire format. Two dialect-normalized shapes
 /// a session negotiates: signed-16-bit little-endian PCM at 24 kHz (the Realtime default) and G.711
 /// µ-law at 8 kHz (the telephony format); and a third a frame's own wire states: signed-16-bit PCM
 /// at 16 kHz (the Gemini Live uplink). The plane needs this to turn a byte count into a millisecond position — the
-/// barge-in truncate math (`BUSBAR-1.6.0.md` #18/#45) — because raw PCM carries no timestamps.
+/// barge-in truncate math — because raw PCM carries no timestamps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioFormat {
     /// Signed 16-bit little-endian PCM, 24 kHz, mono — the Realtime default (`pcm16`).

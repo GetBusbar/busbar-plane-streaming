@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! ONE REQUEST UNIT AS THE KERNEL'S ROUTE PUMP DRIVES IT (`BUSBAR-1.6.0.md` Part 3, section 12):
+//! One request unit as the kernel's route pump drives it:
 //! the pieces of a one-request door (the ephemeral-secret mint, the SDP offer), in the order the
 //! pump pushes them, and what the plane answers each with.
 //!

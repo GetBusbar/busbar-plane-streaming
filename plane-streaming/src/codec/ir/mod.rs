@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE PLANE-4 DUPLEX / SESSION VOCABULARY — the plane's OWN nouns (`BUSBAR-1.6.0.md` #18/#45).
+//! The duplex / session vocabulary: the plane's own nouns.
 //!
 //! A live session is a relay: frames pass as they came, under the governed splice, and the plane
 //! reads them only to meter. So what is modelled here is what a session locks and meters:

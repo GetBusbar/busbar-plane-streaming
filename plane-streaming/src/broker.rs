@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE TWO ONE-SHOT PASSES THE PLANE BROKERS TO ITS PROVIDER, what it says and what it reads: the
+//! The two one-shot passes the plane brokers to its provider, what it says and what it reads: the
 //! ephemeral client-secret mint a browser session is handed, and the SDP offer it relays.
 //!
 //! Pure. Nothing here sends a request, reads a clock or holds a key: the caller carries the bytes
@@ -82,7 +82,7 @@ struct ClientSecretResponse {
 /// by its class and position only ([`JsonReplyError`]): the decoder's own text would quote the
 /// value it met, and the body carries the secret.
 ///
-/// THE EXPIRY IS PART OF THE SECRET (X-2204). A browser holds an `ek_` only for as long as it says
+/// The expiry is part of the secret. A browser holds an `ek_` only for as long as it says
 /// it lives; one the provider minted without saying when it dies was carried out as
 /// `expires_at_unix: 0`, a figure that is not an instant, so a client could neither schedule its
 /// refresh nor tell the secret was already past. An answer with no `expires_at`, or `0`, is refused.

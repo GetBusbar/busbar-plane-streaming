@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! LAYER 4 — USAGE / RATE-LIMIT (EXTRACTION only). Design `BUSBAR-1.6.0.md` #18/#45.
+//! Usage and rate-limit extraction.
 //!
 //! `response.done.usage` (audio vs text are SEPARATE token classes, audio dominates) and
 //! `rate_limits.updated` are EXTRACTED, never client-translated. This is the metering/audit tap that
 //! the plane folds into counts per class (whose labels core never interprets) for the kernel's
 //! metering + `journal_append_scoped`. The same move the LLM reader makes with `IrUsage`.
 
-/// THE NEUTRAL USAGE CARRIER — token classes the plane extracts from a duplex turn. Folded into a
+/// The neutral usage carrier: token classes the plane extracts from a duplex turn. Folded into a
 /// `CostBreakdown` whose top-level components sum to `total` (the one invariant core enforces), with
 /// audio/text as labeled opaque components core never interprets.
 ///
@@ -34,30 +34,20 @@ pub struct IrDuplexUsage {
     /// Cached tokens billed at the cache rate this turn.
     pub cached: u64,
     /// The far end's report could not be read: these counts are the plane's FLOOR over the report's
-    /// bytes, never the far end's own (owner ruling 2026-10-27, the llm plane's floor).
+    /// bytes, never the far end's own (the llm plane's floor).
     pub floor: bool,
 }
 
-/// THE ONE SEAM every BILLED count read in this crate goes through.
+/// The one seam every billed count read in this crate goes through.
 ///
-/// # Why this exists here, beside the carrier it fills
-///
-/// [`serde_json::Value::as_u64`] returns `None` for ANY float-backed `Number` — including `27.0`,
-/// which is exactly an integer. The house idiom in the duplex dialects was
-/// `.and_then(Value::as_u64).unwrap_or_default()`, so a provider that spells a count as a float
-/// turned a real count of 27 into a recorded count of ZERO. That is not a money bug, it is a
-/// LEDGER bug, which is worse: money is a view over `ledger × ratecard` and cannot be wrong on its
-/// own, so a zeroed count is faithfully reported as nothing at every layer below and is invisible
-/// everywhere except here, at the read.
+/// [`serde_json::Value::as_u64`] returns `None` for any float-backed `Number`, including `27.0`,
+/// which is exactly an integer; reading with `.unwrap_or_default()` would turn a provider's real
+/// count of 27 into a recorded count of zero, invisible at every layer below the read.
 ///
 /// The LLM codec crate carries the identical seam (`busbar_llm_codec::usage_count::read_count_u64`)
-/// and this is deliberately a SEPARATE copy, not an import: the two crates are per-plane codecs and
-/// a codec→codec edge is a lateral plugin edge (BUSBAR-1.6.0 Law 2), which no convenience justifies.
-/// The honest single home for both is a neutral crate, and consolidating them there is OWED — it is
-/// tracked with the decimal-count work (decision #81), which replaces the `u64` return type here
-/// with an exact fixed-point decimal read from the JSON number's TEXT. Until that lands this
-/// function is the one place in this crate a count is read, so that swap is a one-function change
-/// rather than a hunt through five call sites.
+/// and this is deliberately a separate copy, not an import: the two crates are per-plane codecs and
+/// a codec→codec edge is a lateral plugin edge. This function is the one place in this crate a
+/// count is read.
 ///
 /// # What is rejected, and why
 ///
@@ -66,7 +56,7 @@ pub struct IrDuplexUsage {
 /// information) all read as `None`. Rounding would invent a quantity the provider never reported.
 ///
 /// A refused value is never read as zero: every billed count in this crate is read through the
-/// codecs' `billed_count`, which LOCATES a present-but-unreadable count (decision #81): the report
+/// codecs' `billed_count`, which locates a present-but-unreadable count: the report
 /// then bills the plane's floor and says so in one log line, and the session goes on.
 #[must_use]
 pub fn read_count_u64(v: &serde_json::Value) -> Option<u64> {

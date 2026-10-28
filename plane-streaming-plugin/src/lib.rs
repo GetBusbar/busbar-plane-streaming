@@ -6,7 +6,6 @@
 //! (`busbar_plane_streaming::door`, the one a busbar build links) exported as this image's
 //! ONE symbol, `busbar_plugin_door`, with `busbar_contract::export_door!`, so the library carries
 //! exactly the door a busbar build links and is no second path to the plane's Rust items
-//! (`BUSBAR-1.6.0.md` l.3560: the thin cdylib crate holds one line).
 //!
 //! This crate is `deny`, not `forbid`: the export macro's `#[unsafe(no_mangle)]` is the one
 //! reviewed exemption (a `forbid` cannot be lifted for it). No other `unsafe` exists here.

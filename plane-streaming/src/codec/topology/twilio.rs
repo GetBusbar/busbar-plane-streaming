@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE TWILIO MEDIA STREAMS ENVELOPE for the telephony topology.
+//! The Twilio Media Streams envelope for the telephony topology.
 //!
 //! Twilio speaks a JSON-over-WS protocol on its Media Streams leg: lifecycle events (`connected`,
 //! `start`, `mark`, `dtmf`, `stop` — the whole set Twilio sends TO the socket, because an event
@@ -22,11 +22,8 @@
 
 use serde::Serialize;
 
-// The crate's ONE base64 implementation. This module used to carry its own copy, justified as
-// keeping the envelope free of a new dependency — a justification the crate split retired:
-// the contract's `media` codec is already an unconditional dependency and `ir/codec` already decodes
-// audio through it. Two implementations of one wire primitive in one crate is a drift hazard with
-// nothing bought for it, and this is the primitive that turns bytes on a phone call into audio.
+// The crate's one base64 implementation: the contract's `media` codec, which `ir/codec` also
+// decodes audio through.
 use busbar_contract::media::{base64_decode, base64_encode};
 
 use crate::codec::ir::codec::WireEvent;
@@ -139,7 +136,7 @@ pub enum TwilioEvent {
     Stop,
 }
 
-/// THE TWILIO ENVELOPE CODEC — stateless decode/encode between Twilio's JSON Media Streams frames and
+/// The Twilio envelope codec: stateless decode/encode between Twilio's JSON Media Streams frames and
 /// the raw µ-law `Vec<u8>` the telephony proxy carries.
 pub struct TwilioEnvelope;
 
@@ -351,7 +348,7 @@ pub fn assert_g711_ulaw(fmt: &MediaFormat) -> Result<(), TwilioError> {
     }
 }
 
-/// THE TELEPHONY CARRIER'S ENVELOPE around a session: the caller speaks Twilio Media Streams, the
+/// The telephony carrier's envelope around a session: the caller speaks Twilio Media Streams, the
 /// far end the realtime dialect locked to `g711_ulaw` both ways, so the audio passes through
 /// unchanged and only the envelope is rewritten.
 #[derive(Debug, Default)]
