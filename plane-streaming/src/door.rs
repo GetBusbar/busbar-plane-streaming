@@ -828,13 +828,17 @@ impl Brokered {
     }
 }
 
+/// One live generation: its section, the session params a request unit under it mints over (built
+/// once, at its publish), and its answers.
+type Published = (Arc<StreamsCfg>, Arc<SessionConfig>, Generation);
+
 /// One open plane instance.
 pub struct Plane {
     /// The deployment's public base URL, as `open` read it; a refresh keeps it.
     public_url: Option<String>,
     /// The live generations' settings, the session params a request unit under each mints over
     /// (built once, at its publish), and their answers, oldest first (control lane only).
-    generations: Mutex<Vec<(Arc<StreamsCfg>, Arc<SessionConfig>, Generation)>>,
+    generations: Mutex<Vec<Published>>,
     /// The published snapshots, held by the SDK until their generation's `retire`.
     snapshots: Generations<PlaneSnapshot>,
     /// The request units in flight.
