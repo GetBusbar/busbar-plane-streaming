@@ -41,12 +41,10 @@
 # `VOICE_CONFORM_RED=1` makes the planted answers the subject, and every leg must then go RED). Each
 # leg judges the DOOR'S half of its seam and names the half that is the kernel's (lib/conform-bin.sh):
 #
-#   spec-per-dialect   every fixture, per dialect (MATRIX: openai, gemini, twilio): codec round trip, and the
-#                      door's relay of it by the session rules, byte for byte.
-#   replay             each captured transcript through one session: codec skeleton, and the door's
-#                      relay and skeleton in emitted order.
-#   cross-parity       the 4 ORDERED OpenAI<->Gemini pairs (oo, og, go, gg): the codec bridge per the
-#                      cross-dialect map, and the bridged wire through the destination dialect's door.
+#   spec-per-dialect   every fixture, per dialect (MATRIX: openai, gemini, twilio): what it decodes to,
+#                      and the door's relay of it by the session rules, byte for byte.
+#   replay             each captured transcript through one session: its decoded skeleton, and the
+#                      door's relay and skeleton in emitted order.
 #   provider-credential every far request rides a declared outbound need; none carries a credential.
 #   metering-lease     a session's units, reported per declared class, once per turn; fee once answered.
 #   session-scope      the `session` grant kind; every door asks for a principal; 404 off the guest list.
@@ -68,8 +66,6 @@
 #
 # THE INPUTS LATER LEGS CONSUME (authored by another agent; referenced, not created, here):
 #   testing/voice-conformance/fixtures/{openai,gemini}/   captured transcripts + spec fixtures
-#   docs/evidence/voice-cross-dialect-mapping.*             the OpenAI<->Gemini equivalence the
-#                                                         cross-parity leg is judged against
 #
 # MODES
 #   --selftest                 prove the scaffold's OWN accounting bites (coverage, floor, the
@@ -100,8 +96,7 @@ VOICE_LEGS_DIR="${VOICE_LEGS_DIR:-$HERE/legs}"
 
 # A FLOOR on the declared-leg count, for the same reason the python verdict linter has one: every
 # equality below would hold for a battery that had been gutted to a single leg, so the count is
-# checked first. Seventeen legs ship today (spec-per-dialect, replay, cross-parity,
-# provider-credential, metering-lease, session-scope, gemini-live-route, provider-dial,
+# checked first. Sixteen legs ship today (spec-per-dialect, replay, provider-credential, metering-lease, session-scope, gemini-live-route, provider-dial,
 # admit-refusal, route-failover, audit-record, exit-terminal, tool-reply, twilio-route, twilio-media,
 # twilio-metering, plus governance).
 MIN_LEGS="${VOICE_MIN_LEGS:-3}"

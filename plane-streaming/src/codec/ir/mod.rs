@@ -1,43 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE PLANE-4 DUPLEX / SESSION IR — the plane's OWN vocabulary.
+//! THE PLANE-4 DUPLEX / SESSION VOCABULARY — the plane's OWN nouns (`BUSBAR-1.6.0.md` #18/#45).
 //!
-//! These are the nouns that live ONLY in this plane
-//! (`docs/design/BUSBAR-1.6.0.md` #18/#45): the four-layer duplex/session IR and its
-//! reader/writer pair. Per `BUSBAR-1.6.0.md` #18/#45 "pass-through is still an IR" — the layers differ in HOW MUCH the IR
-//! reshapes the wire, from full normalization (tool-call) to identity (media):
+//! A live session is a relay: frames pass as they came, under the governed splice, and the plane
+//! reads them only to meter. So what is modelled here is what a session locks and meters:
 //!
-//! | Layer | Concern | Posture | Module |
-//! |---|---|---|---|
-//! | 1 | tool-call | FULL normalization (the moat) | [`tool`] |
-//! | 2 | control / config | translatable, cross-dialect only | [`control`] |
-//! | 3 | media / audio-frame | VERBATIM byte-relay = identity IR | [`media`] |
-//! | 4 | usage / rate-limit | EXTRACTION only, not client-facing | [`usage`] |
-//!
-//! The IR is the plane's OWN — a cross-dialect SUPERSET both dialects (OpenAI Realtime + Gemini Live)
-//! read and write, earned at the plane's second wire format (the A2A rule: a superset IR is earned
-//! at the SECOND wire format and not before). `DECLS` stays `codec: None` because the plane realizes that
-//! superset as these shared IR types, not the LLM `DialectCodec` facade. It is NOT and does not extend
-//! `busbar-llm`'s chat IR — the load-bearing delta is a client→server event vocabulary
-//! ([`event::IrClientEvent`]) the LLM `IrStreamEvent` structurally lacks (`BUSBAR-1.6.0.md` #18/#45).
-//!
-//! Both dialect codecs ([`OpenAiRealtimeCodec`], [`GeminiLiveCodec`]) implement the reader/writer pair
-//! over these types; the T2 session pump and session store live in `crate::codec::runtime` behind the `runtime`
-//! feature. The shapes mirror `BUSBAR-1.6.0.md` #18/#45.
+//! | Concern | Module |
+//! |---|---|
+//! | the session config a session is locked to | [`config`] |
+//! | the audio formats uplink audio is metered at | [`media`] |
+//! | the usage a far end reports | [`usage`] |
+//! | the meter's reads of each dialect ([`codec::OpenAiRealtimeCodec`], [`GeminiLiveCodec`]) | [`codec`] |
 
 pub mod codec;
 pub mod config;
-pub mod control;
-pub mod event;
 pub mod media;
-pub mod tool;
 pub mod usage;
 
 pub use codec::gemini::GeminiLiveCodec;
 pub use media::AudioFormat;
 pub use usage::IrDuplexUsage;
-
-// The codec's names in one place for the crate's alloc gate; shipped code names each by its module.
-#[cfg(test)]
-pub use codec::{DecodeState, DuplexReader, OpenAiRealtimeCodec, WireEvent, WireRef};

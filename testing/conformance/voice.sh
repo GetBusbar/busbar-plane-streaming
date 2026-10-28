@@ -4,7 +4,7 @@
 # The voice suites of the conformance check: `voice.sh openai` (voice-openai-realtime) and
 # `voice.sh gemini` (voice-gemini-live). Tier spec-conformant: no vendor kit exists, so the suite is
 # this repo's own spec battery (testing/voice-conformance: every fixture of the dialect, the captured
-# transcripts, the cross-dialect bridge and the door's seams), driving the plane's door BOTH WAYS,
+# transcripts and the door's seams), driving the plane's door BOTH WAYS,
 # linked and dropped in, through busbar's loader at the pin ($BUSBAR_CHECKOUT).
 #
 # THE THREE LEGS, as the brief states them:
@@ -77,8 +77,6 @@ def who(leg, slice_, detail):
         return {"twilio"}
     if leg in ("spec-per-dialect",):
         return {slice_} if slice_ in both else both
-    if leg == "cross-parity":
-        return {"oo": {"openai"}, "gg": {"gemini"}}.get(slice_, both)
     if leg == "gemini-live-route":
         return {"gemini"}
     if leg in ("replay", "tool-reply"):

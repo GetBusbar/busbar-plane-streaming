@@ -27,12 +27,3 @@ sed -i.bak -e 's/^mod \([a-z_]*\);/pub mod \1;/' -e 's/^#!\[deny(missing_docs)\]
 find "$src" -name '*.rs' ! -path "$src/tests/*" -print0 \
   | xargs -0 perl -0pi -e 's/^[ \t]*#\[cfg\(test\)\][ \t]*\n(?![ \t]*(pub )?mod tests;)//mg'
 find "$dest" -name '*.bak' -delete
-# the IR names the plane's crate trimmed to what its own gate reads (c3a51d5), which the harness names
-cat >> "$src/codec/ir/mod.rs" <<'R'
-pub use codec::DuplexWriter;
-pub use config::{MaxOutputTokens, SessionConfig};
-pub use control::{Eagerness, IrDuplexControl, IrVad};
-pub use event::{IrClientEvent, IrServerEvent};
-pub use media::{IrAudioFrame, UpDown};
-pub use tool::{CallRef, IrDuplexTool};
-R

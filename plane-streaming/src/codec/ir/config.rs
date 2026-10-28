@@ -15,7 +15,6 @@
 //! decode→encode round-trip is JSON-stable (opaque `tools` / `tool_choice` ride as `serde_json::Value`;
 //! the plane locks and reconciles them but never reshapes them).
 
-use crate::codec::ir::control::IrVad;
 use crate::codec::ir::media::AudioFormat;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -250,4 +249,64 @@ impl SessionConfig {
         }
         s
     }
+}
+
+/// SEMANTIC-VAD EAGERNESS — how eagerly the model judges end-of-turn. The GA `semantic_vad` knob,
+/// a closed set of dialect tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Eagerness {
+    /// Waits longest before closing a turn.
+    Low,
+    /// The middle setting.
+    Medium,
+    /// Closes a turn quickly.
+    High,
+    /// Let the model pick.
+    Auto,
+}
+
+fn default_threshold() -> f32 {
+    0.5
+}
+fn default_prefix_padding_ms() -> u32 {
+    300
+}
+fn default_silence_duration_ms() -> u32 {
+    200
+}
+fn default_true() -> bool {
+    true
+}
+
+/// VOICE-ACTIVITY-DETECTION config — the plane's neutral VAD surface. Its serde shape IS the GA
+/// `turn_detection` object (tagged on `type`): `server_vad` with the threshold/padding/silence knobs,
+/// or `semantic_vad` with an eagerness. VAD DISABLED is not a variant here — it is the ABSENCE of a
+/// `turn_detection` (a `null` on the wire, `None` at [`SessionConfig::turn_detection`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum IrVad {
+    /// Server-side voice-activity detection with amplitude threshold and silence windows.
+    ServerVad {
+        /// Activation threshold (0.0–1.0).
+        #[serde(default = "default_threshold")]
+        threshold: f32,
+        /// Audio (ms) retained BEFORE detected speech, folded into the turn.
+        #[serde(default = "default_prefix_padding_ms")]
+        prefix_padding_ms: u32,
+        /// Trailing silence (ms) that ends a turn.
+        #[serde(default = "default_silence_duration_ms")]
+        silence_duration_ms: u32,
+        /// Whether the server auto-issues `response.create` at end-of-turn.
+        #[serde(default = "default_true")]
+        create_response: bool,
+        /// Whether a new detected turn interrupts an in-flight response (barge-in).
+        #[serde(default = "default_true")]
+        interrupt_response: bool,
+    },
+    /// Semantic (model-judged) end-of-turn detection with an eagerness knob.
+    SemanticVad {
+        /// How eagerly the model closes a turn.
+        eagerness: Eagerness,
+    },
 }

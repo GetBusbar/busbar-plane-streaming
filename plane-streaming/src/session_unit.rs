@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 
-use crate::codec::ir::codec::{DuplexReader, DuplexWriter, WireEvent};
+use crate::codec::ir::codec::{DuplexReader, WireEvent};
 use crate::codec::ir::config::SessionConfig;
 use crate::codec::ir::usage::IrDuplexUsage;
 use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
@@ -102,7 +102,7 @@ pub struct SessionUnit<C> {
 
 impl<C> SessionUnit<C>
 where
-    C: DuplexReader + DuplexWriter + LockedKeys,
+    C: DuplexReader + LockedKeys,
 {
     /// A session over `codec`, locked to `locked`. `telephony` puts the telephony carrier's
     /// envelope on the caller's side.

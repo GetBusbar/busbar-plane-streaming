@@ -3,11 +3,9 @@
 
 //! THE VOICE DUPLEX CODECS — the pure half of the voice protocol plugin.
 //!
-//! The retired `busbar-voice` crate held two things behind one name: these codecs — the plane-4
-//! duplex/session intermediate representation (media frames, control, events, tools, session
-//! config, usage), the
-//! shared duplex reader/writer over it, the Gemini Live dialect and the Twilio Media Streams
-//! grammar — and the runtime that carries them over a live socket (the axum mount, the WebSocket
+//! The retired `busbar-voice` crate held two things behind one name: these codecs — the session
+//! config, the audio formats and usage a session meters, the meter's reads of each dialect and the
+//! Twilio Media Streams grammar — and the runtime that carries them over a live socket (the axum mount, the WebSocket
 //! accept, the tokio session tasks, the telephony dial, the HTTPS token minter). The plane crate
 //! `busbar-plane-streaming` adapts the codecs and must not link the runtime: a plane is a PURE kind
 //! whose whole transitive closure is scanned, and the runtime put `hyper`, `reqwest`, `axum`,

@@ -13,7 +13,7 @@ use crate::meta;
 /// barge-in supersedes the open turn, because a superseded turn is never answered and nothing else
 /// would ever state what it served. These are the quantities [`crate::codec::ir::usage::IrDuplexUsage`] does not carry and this plane must
 /// derive itself: `audio_seconds_in` from the byte counts of ingress audio frames, `tool_calls` from
-/// counting `IrDuplexTool::CallOpen` events as they are decoded.
+/// counting the tool calls the far end opens as they are read.
 ///
 /// **The session is one unit, so its uplink audio is converted ONCE (MONEY-AUDIT STR-2).** Two
 /// positions are carried from turn to turn rather than reset with the turn's counts: the bytes of

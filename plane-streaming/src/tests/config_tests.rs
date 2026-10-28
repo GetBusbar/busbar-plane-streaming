@@ -52,8 +52,8 @@ fn an_unknown_key_inside_the_locked_session_is_refused_with_its_path() {
 /// a new one fails to compile here first).
 #[test]
 fn the_strict_key_lists_are_the_session_objects_own_members() {
+    use crate::codec::ir::config::Eagerness;
     use crate::codec::ir::config::MaxOutputTokens;
-    use crate::codec::ir::control::Eagerness;
     use crate::codec::ir::media::AudioFormat;
     let keys = |v: serde_json::Value| -> Vec<String> {
         let mut k: Vec<String> = v.as_object().expect("object").keys().cloned().collect();
