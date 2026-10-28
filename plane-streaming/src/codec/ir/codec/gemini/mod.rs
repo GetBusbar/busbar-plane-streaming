@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE SECOND DIALECT — Google **Gemini Live** (`BidiGenerateContent`): what a session meters off
-//! it, and the `setup` a locked session is told. Design `BUSBAR-1.6.0.md` #18/#45.
+//! The second dialect, Google **Gemini Live** (`BidiGenerateContent`): what a session meters off
+//! it, and the `setup` a locked session is told.
 //!
 //! WIRE SHAPE. Gemini Live is a JSON duplex where each message is an object with ONE top-level key
 //! naming its kind (`setup` / `clientContent` / `realtimeInput` / `toolResponse` client→server;
@@ -179,7 +179,7 @@ pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
 /// The modality split of a Gemini `*TokensDetails` array (`[{modality, tokenCount}]`): its AUDIO,
 /// IMAGE and VIDEO entries, and the sum of every entry. BILLED COUNTS, read through
 /// [`billed_count`]: an absent array, modality or count is zero, a present but unreadable count is
-/// an `Err` the caller turns into a refusal (#42).
+/// an `Err` the caller turns into a refusal.
 #[derive(Default)]
 struct Split {
     audio: u64,
@@ -211,11 +211,11 @@ fn modality_split(details: Option<&Value>) -> Result<Split, String> {
     Ok(split)
 }
 
-/// Extract the split token classes from a Gemini `usageMetadata` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
-/// SEPARATE classes; extraction-only, never client-translated).
+/// Extract the split token classes from a Gemini `usageMetadata` object (audio vs text are
+/// separate classes; extraction-only, never client-translated).
 ///
-/// GOOGLE'S TOTAL IS BILLED (the owner's gemini-tool-use-billing ruling, `BUSBAR-1.6.0.md`: "a
-/// grounded Gemini turn bills Google's total, tool-use prompt tokens included"). Input is the
+/// Google's total is billed: a grounded Gemini turn bills Google's total, tool-use prompt tokens
+/// included. Input is the
 /// prompt (the larger of `promptTokenCount` and the sum of every `promptTokensDetails` entry, so
 /// IMAGE, VIDEO and DOCUMENT tokens bill beside AUDIO and TEXT) plus the tool-use prompt (the larger
 /// of `toolUsePromptTokenCount` and its `toolUsePromptTokensDetails`); output is the response (the
@@ -226,7 +226,7 @@ fn modality_split(details: Option<&Value>) -> Result<Split, String> {
 /// passthrough of the wire figures, no rate lookup or multiply.
 ///
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
-/// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
+/// present-but-unreadable one is an `Err` the caller turns into a refusal.
 fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
     let prompt = modality_split(u.get("promptTokensDetails"))?;
     let tool = modality_split(u.get("toolUsePromptTokensDetails"))?;
@@ -285,7 +285,7 @@ impl DuplexReader for GeminiLiveCodec {
         };
         let mut out = vec![Metered::ToolOpen; opened];
         if let Some(um) = v.get(wire::USAGE_METADATA) {
-            // A present-but-unreadable billed count bills the plane's floor and says so (#42),
+            // A present-but-unreadable billed count bills the plane's floor and says so,
             // never meters it at zero.
             out.push(Metered::Usage(
                 usage_from_metadata(um)
