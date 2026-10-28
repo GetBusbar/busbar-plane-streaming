@@ -1866,3 +1866,113 @@ fn every_upstream_facing_model_field_names_the_upstream_model() {
         "the two doors must answer identically"
     );
 }
+
+// ── AN UNREADABLE USAGE, AND THE HOST LOG ─────────────────────────────────────────────────────────
+
+/// The host's envelope sink, keeping the text of every diagnostic and log record a call carried:
+/// what the host writes to the plugin's own log file.
+#[derive(Default)]
+struct HostLog(std::sync::Mutex<Vec<String>>);
+
+impl busbar_plugin_loader::dispatch::EnvelopeSink for HostLog {
+    fn metric(&self, _: busbar_plugin_loader::dispatch::Metric<'_>) {}
+    fn diag(&self, d: busbar_plugin_loader::dispatch::Diagnostic<'_>) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(String::from_utf8_lossy(d.text).into_owned());
+    }
+    fn dropped(&self, _: busbar_plugin_loader::dispatch::Dropped) {}
+}
+
+/// A far end's usage report whose input count is a string, not a count.
+const USAGE_UNREADABLE: &[u8] =
+    br#"{"type":"response.done","response":{"usage":{"input_tokens":"1500","output_tokens":9}}}"#;
+
+/// RED (owner ruling 2026-10-27: spend is always attributed and nothing is silent): a usage report
+/// the reader cannot read bills the llm plane's floor (output tokens, one per four bytes of the
+/// report, at least one; `UNITS_FLOOR`), the session goes on, and one line saying so reaches the
+/// HOST's log from the DROPPED-IN door as from the linked one (the door's call capture). RED
+/// before: the session ended unmetered and billed nothing for the turn.
+#[test]
+fn an_unreadable_usage_bills_the_floor_and_its_line_reaches_the_host_log() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let floor = (USAGE_UNREADABLE.len() as u64 / 4).max(1);
+    let stated = row().statement;
+    let path = {
+        let exe = std::env::current_exe().expect("the test binary has a path");
+        let deps = exe.parent().expect("target/<profile>/deps").to_path_buf();
+        let profile = deps.parent().expect("target/<profile>").to_path_buf();
+        let file = busbar_plugin_loader::plugin_library_filename("busbar_plane_streaming_plugin");
+        [profile.join(&file), deps.join(&file)]
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"))
+    };
+    for dropped_in in [false, true] {
+        let log = Arc::new(HostLog::default());
+        let bound = Bind {
+            sink: log.clone(),
+            ..bind(
+                &d,
+                if dropped_in {
+                    "dropped-log"
+                } else {
+                    "linked-log"
+                },
+            )
+        };
+        let p = if dropped_in {
+            load_dropped::<Plane>(&path, &stated, bound).expect("the dropped streaming door loads")
+        } else {
+            load_linked::<Plane>(&row(), bound).expect("the linked streaming door loads")
+        };
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(
+            attach_sideband(
+                &p,
+                70,
+                "/v1/realtime/calls/rtc_both0070",
+                "/v1/realtime/sideband/rtc_both0070"
+            ),
+            Outcome::Ready
+        );
+        let mut b = Bufs::with_units(1 << 18, 8);
+        b.call(&p, &session(70, FROM_CALLER, 0, &uplink(100)));
+        b.call(
+            &p,
+            &Push {
+                attempt_no: 1,
+                ..session(70, FROM_KERNEL, 0, &[])
+            },
+        );
+        let far = Push {
+            status: 101,
+            ..session(70, FROM_FAR_END, PIECE_HAS_STATUS, USAGE_UNREADABLE)
+        };
+        let answer = b.call(&p, &far);
+        assert!(
+            answer.contains("done=false"),
+            "dropped-in {dropped_in}: the session goes on: {answer}"
+        );
+        assert!(
+            b.last_units
+                .split(' ')
+                .any(|u| u == format!("3:{}={floor}", busbar_contract::abi::plane::UNITS_FLOOR)),
+            "dropped-in {dropped_in}: the turn's output tokens are the floor: {}",
+            b.last_units
+        );
+        let lines = log
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.contains("usage is unreadable"))
+                .count(),
+            1,
+            "dropped-in {dropped_in}: one line reaches the host log: {lines:?}"
+        );
+    }
+}
