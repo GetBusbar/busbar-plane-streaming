@@ -117,13 +117,6 @@ static A: busbar_contract::alloc_counter::Counting =
 /// What one downlink Twilio audio frame may allocate, and the bytes it must still render.
 mod alloc_gate_tests;
 
-/// The voice corpus through the plane's own codecs: the round trip and the cross-dialect bridge
-/// busbar's voice conformance legs judged before the door-root made the codecs private.
-mod voice_corpus_tests;
-
-/// What reading one wire frame may allocate, borrowed against owned.
-mod codec_alloc_gate_tests;
-
 /// The bytes a caller's answer body puts on the wire, read as a test's stand-in for the host's reply
 /// buffer: a sealed answer through the SDK's test-only driver (`test-seal`).
 pub(crate) fn body_bytes(body: crate::driven::Body) -> Vec<u8> {

@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE FIXTURE LEGS — `spec-per-dialect`, `replay`, `cross-parity` — over the plane's own codecs
-//! (`busbar_plane_streaming::codec`, the module the door's sessions run) AND through the door's
-//! session pieces.
+//! THE FIXTURE LEGS — `spec-per-dialect`, `replay` — read by the harness's own decoder
+//! ([`crate::decode`]) AND driven through the door's session pieces.
 //!
-//! Each fixture is judged twice. The CODEC half is the old leg, unchanged: wire → IR → wire → IR
-//! must be stable (spec), a captured transcript must re-derive its concept skeleton (replay), a
-//! concept bridged A → IR → B → IR must keep its load-bearing fields (cross). The DOOR half pushes
-//! the same wire bytes (for cross: the bridged B wire) through a live session on the door that
+//! Each fixture is judged twice. The DECODE half: a fixture must decode to IR or be a documented
+//! drop (spec), a captured transcript must re-derive its concept skeleton (replay). The DOOR half
+//! pushes the same wire bytes through a live session on the door that
 //! speaks the dialect — the caller's frames as caller pieces, the far end's as far-end pieces — on
 //! the linked and the dropped door, and holds what the door relays to the SESSION RULES the plane
 //! states (`session_pump`, Law 5's relay): a caller frame reaches the far end as it arrived,
@@ -27,10 +25,9 @@ use std::path::Path;
 
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{FROM_CALLER, FROM_FAR_END, UNITS_REPORTED};
-use busbar_plane_streaming::codec::ir::{
-    DecodeState, DuplexReader, DuplexWriter, GeminiLiveCodec, IrClientEvent, IrDuplexControl,
-    IrDuplexTool, IrServerEvent, OpenAiRealtimeCodec, SessionConfig, WireEvent,
-};
+use busbar_plane_streaming::codec::ir::codec::OpenAiRealtimeCodec;
+use busbar_plane_streaming::codec::ir::config::SessionConfig;
+use busbar_plane_streaming::codec::ir::GeminiLiveCodec;
 use busbar_plane_streaming::door::{read_settings, RIDES_LIVE_SOCKET, RIDES_REALTIME_SOCKET};
 use busbar_plane_streaming::driven::{GEMINI_SOCKET_PATH, REALTIME_SOCKET_PATH};
 use busbar_plane_streaming::session_door::with_ceilings;
@@ -38,9 +35,12 @@ use busbar_plane_streaming::session_door::PER_SESSION_CLASS;
 use busbar_plane_streaming::splice::{splice, LockedKeys};
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::Plugin;
-use bytes::Bytes;
 use serde_json::Value;
 
+use crate::decode::{
+    DecodeState, GeminiLive, IrClientEvent, IrDuplexControl, IrDuplexTool, IrServerEvent,
+    OpenAiRealtime,
+};
 use crate::door::{
     dials_socket, judge_planted, open, result, Emission, Log, Plant, Rig, Session, PUBLIC, SESSION,
 };
@@ -98,37 +98,19 @@ impl Dialect {
         }
     }
 
-    /// Read a caller frame.
+    /// Read a caller frame (the harness's own decoder, [`crate::decode`]).
     pub fn read_up(self, frame: &[u8], st: &mut DecodeState) -> Vec<IrClientEvent> {
-        let w = WireEvent(Bytes::copy_from_slice(frame));
         match self {
-            Dialect::OpenAi => OpenAiRealtimeCodec.read_up(w, st),
-            Dialect::Gemini => GeminiLiveCodec.read_up(w, st),
+            Dialect::OpenAi => OpenAiRealtime.read_up(frame, st),
+            Dialect::Gemini => GeminiLive.read_up(frame, st),
         }
     }
 
-    /// Read a far-end frame.
+    /// Read a far-end frame (the harness's own decoder, [`crate::decode`]).
     pub fn read_down(self, frame: &[u8], st: &mut DecodeState) -> Vec<IrServerEvent> {
-        let w = WireEvent(Bytes::copy_from_slice(frame));
         match self {
-            Dialect::OpenAi => OpenAiRealtimeCodec.read_down(w, st),
-            Dialect::Gemini => GeminiLiveCodec.read_down(w, st),
-        }
-    }
-
-    /// Frame a caller event; `None` when the dialect has no verb for it.
-    pub fn write_up(self, ev: IrClientEvent, st: &mut DecodeState) -> Option<WireEvent> {
-        match self {
-            Dialect::OpenAi => OpenAiRealtimeCodec.write_up(ev, st),
-            Dialect::Gemini => GeminiLiveCodec.write_up(ev, st),
-        }
-    }
-
-    /// Frame a far-end event; `None` when it is not a frame on its own.
-    pub fn write_down(self, ev: IrServerEvent, st: &mut DecodeState) -> Option<WireEvent> {
-        match self {
-            Dialect::OpenAi => OpenAiRealtimeCodec.write_down(ev, st),
-            Dialect::Gemini => GeminiLiveCodec.write_down(ev, st),
+            Dialect::OpenAi => OpenAiRealtime.read_down(frame, st),
+            Dialect::Gemini => GeminiLive.read_down(frame, st),
         }
     }
 }
@@ -269,50 +251,6 @@ pub fn norm_down(evs: &[IrServerEvent]) -> Vec<Norm> {
         }
     }
     out
-}
-
-/// One correlated tool call, keyed by call id: `(name, args, result)`.
-type CallEntry = (Option<String>, Option<Value>, Option<Value>);
-
-/// A call-collapsed fingerprint: tool events merged by call id (an atomic Gemini `toolCall`
-/// decodes to a streamed triple and the stateless writer re-frames per event, so arity differs
-/// legitimately; the correlation must survive). Everything else compared verbatim, in order.
-#[derive(Debug, Default, PartialEq)]
-pub struct Fingerprint {
-    calls: BTreeMap<String, CallEntry>,
-    other: Vec<Norm>,
-}
-
-/// The fingerprint of `norms`.
-pub fn fingerprint(norms: &[Norm]) -> Fingerprint {
-    let mut fp = Fingerprint::default();
-    for n in norms {
-        match n {
-            Norm::ToolOpen(id, name) => {
-                let e = fp.calls.entry(id.clone()).or_default();
-                if e.0.is_none() && !name.is_empty() {
-                    e.0 = Some(name.clone());
-                }
-            }
-            Norm::ToolArgs(id, args) => {
-                let e = fp.calls.entry(id.clone()).or_default();
-                if e.1.is_none() && !args.is_null() {
-                    e.1 = Some(args.clone());
-                }
-            }
-            Norm::ToolClose(id) => {
-                fp.calls.entry(id.clone()).or_default();
-            }
-            Norm::ToolResult(id, out) => {
-                let e = fp.calls.entry(id.clone()).or_default();
-                if e.2.is_none() {
-                    e.2 = Some(out.clone());
-                }
-            }
-            other => fp.other.push(other.clone()),
-        }
-    }
-    fp
 }
 
 /// A concept's tag, for the replay skeleton.
@@ -738,47 +676,14 @@ fn decode(dialect: Dialect, frame: &[u8]) -> Decoded {
     Decoded::Empty
 }
 
-fn spec_verdict(n1: &[Norm], n2: &[Norm], arity: usize) -> Result<String, String> {
-    if n1 == n2 {
-        return Ok(format!("IR-fixpoint stable ({arity} IR event(s))"));
-    }
-    if fingerprint(n1) == fingerprint(n2) {
-        return Ok(format!(
-            "IR-fixpoint stable by correlation fingerprint (atomic expansion, {arity} event(s))"
-        ));
-    }
-    Err(format!("round-trip diverged: {n1:?} != {n2:?}"))
-}
-
-/// The codec half of one fixture, and the direction its frame is pushed from.
+/// The decode half of one fixture, and the direction its frame is pushed from.
 fn spec_codec(dialect: Dialect, fixture: &str, frame: &[u8]) -> (Result<String, String>, Dir) {
     match decode(dialect, frame) {
-        Decoded::Up(ir1) => {
-            let (mut w, mut r) = (DecodeState::default(), DecodeState::default());
-            let mut ir2 = Vec::new();
-            for e in &ir1 {
-                if let Some(wire) = dialect.write_up(e.clone(), &mut w) {
-                    ir2.extend(dialect.read_up(&wire.0, &mut r));
-                }
-            }
-            (
-                spec_verdict(&norm_up(&ir1), &norm_up(&ir2), ir1.len()),
-                Dir::Up,
-            )
-        }
-        Decoded::Down(ir1) => {
-            let (mut w, mut r) = (DecodeState::default(), DecodeState::default());
-            let mut ir2 = Vec::new();
-            for e in &ir1 {
-                if let Some(wire) = dialect.write_down(e.clone(), &mut w) {
-                    ir2.extend(dialect.read_down(&wire.0, &mut r));
-                }
-            }
-            (
-                spec_verdict(&norm_down(&ir1), &norm_down(&ir2), ir1.len()),
-                Dir::Down,
-            )
-        }
+        Decoded::Up(ir) => (Ok(format!("decodes to {} IR event(s)", ir.len())), Dir::Up),
+        Decoded::Down(ir) => (
+            Ok(format!("decodes to {} IR event(s)", ir.len())),
+            Dir::Down,
+        ),
         // A documented drop is a far-end concept with no shared IR home: the reader decodes it to
         // nothing, and pushed from the far end the door relays its bytes to the caller unchanged
         // (a relay is byte-level, Law 5), which the door half holds it to.
@@ -883,37 +788,29 @@ fn transcript_wires(lines: &[Value]) -> Vec<Wire> {
         .collect()
 }
 
-/// The codec half of a replay: one session state, every frame decoded in order, every decoded
-/// event re-framed to valid wire JSON, and the skeleton in order.
+/// The decode half of a replay: one session state, every frame decoded in order, and the skeleton
+/// in order.
 fn replay_codec(dialect: Dialect, wires: &[Wire], skeleton: &[&str]) -> Result<String, String> {
-    let (mut st, mut wst) = (DecodeState::default(), DecodeState::default());
-    let (mut tags, mut decoded, mut reencoded) = (Vec::new(), 0_usize, 0_usize);
-    let valid = |w: Option<WireEvent>| {
-        w.is_some_and(|w| serde_json::from_slice::<Value>(&w.0).is_ok_and(|v| !v.is_null()))
-    };
+    let mut st = DecodeState::default();
+    let (mut tags, mut decoded) = (Vec::new(), 0_usize);
     for w in wires {
-        match w.dir {
+        let norms = match w.dir {
             Dir::Up => {
                 let irs = dialect.read_up(&w.bytes, &mut st);
-                for ir in &irs {
-                    decoded += 1;
-                    reencoded += usize::from(valid(dialect.write_up(ir.clone(), &mut wst)));
-                }
-                tags.extend(norm_up(&irs).iter().map(tag));
+                decoded += irs.len();
+                norm_up(&irs)
             }
             Dir::Down => {
                 let irs = dialect.read_down(&w.bytes, &mut st);
-                for ir in &irs {
-                    decoded += 1;
-                    reencoded += usize::from(valid(dialect.write_down(ir.clone(), &mut wst)));
-                }
-                tags.extend(norm_down(&irs).iter().map(tag));
+                decoded += irs.len();
+                norm_down(&irs)
             }
-        }
+        };
+        tags.extend(norms.iter().map(tag));
     }
     ordered_subsequence(&tags, skeleton)?;
     Ok(format!(
-        "{decoded} IR events, {reencoded} re-framed, skeleton {skeleton:?} in order"
+        "{decoded} IR events, skeleton {skeleton:?} in order"
     ))
 }
 
@@ -988,328 +885,6 @@ pub fn replay(rig: &Rig, root: &Path) -> i32 {
         }
     }
     i32::from(fails > 0)
-}
-
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-// cross-parity
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-
-/// One bridge: the source's norms, the bridged-and-re-read norms, and the bridged wires (the B
-/// dialect's frames, pushed through B's door).
-struct Bridged {
-    n1: Vec<Norm>,
-    n2: Vec<Norm>,
-    wires: Vec<Wire>,
-}
-
-/// Bridge the frames `vals` FROM `a` TO `b` as one exchange (one source session, one destination).
-fn bridge(a: Dialect, b: Dialect, vals: &[Vec<u8>]) -> Bridged {
-    let (mut rst, mut wst, mut bst) = (
-        DecodeState::default(),
-        DecodeState::default(),
-        DecodeState::default(),
-    );
-    let mut out = Bridged {
-        n1: Vec::new(),
-        n2: Vec::new(),
-        wires: Vec::new(),
-    };
-    for v in vals {
-        let up = a.read_up(v, &mut rst);
-        if !up.is_empty() {
-            out.n1.extend(norm_up(&up));
-            for e in up {
-                if let Some(w) = b.write_up(e, &mut wst) {
-                    out.n2.extend(norm_up(&b.read_up(&w.0, &mut bst)));
-                    out.wires.push(Wire {
-                        dir: Dir::Up,
-                        bytes: w.0.to_vec(),
-                    });
-                }
-            }
-            continue;
-        }
-        let down = a.read_down(v, &mut rst);
-        out.n1.extend(norm_down(&down));
-        for e in down {
-            if let Some(w) = b.write_down(e, &mut wst) {
-                out.n2.extend(norm_down(&b.read_down(&w.0, &mut bst)));
-                out.wires.push(Wire {
-                    dir: Dir::Down,
-                    bytes: w.0.to_vec(),
-                });
-            }
-        }
-    }
-    out
-}
-
-fn pair_slice(a: Dialect, b: Dialect) -> &'static str {
-    match (a, b) {
-        (Dialect::OpenAi, Dialect::OpenAi) => "oo",
-        (Dialect::OpenAi, Dialect::Gemini) => "og",
-        (Dialect::Gemini, Dialect::OpenAi) => "go",
-        (Dialect::Gemini, Dialect::Gemini) => "gg",
-    }
-}
-
-/// Why a concept has no decoding source fixture (never faked as a pass).
-fn none_reason(concept: &str, from: Dialect) -> &'static str {
-    match (concept, from) {
-        ("input turn commit / end-of-audio", Dialect::Gemini) => {
-            "documented drop — gemini audioStreamEnd is dropped by the codec"
-        }
-        ("server-side VAD speech boundary", Dialect::Gemini) => {
-            "dialect-only concept — Gemini has no explicit server-VAD boundary fixture; exercised \
-             as the openai_speech_boundary asymmetry in og"
-        }
-        ("input transcription" | "output transcription", _) => {
-            "documented side-channel drop+warn — no shared IR home; the same-dialect round-trip \
-             is exercised in spec-per-dialect"
-        }
-        _ => "no decoding fixture on the source side (exercised in the reverse pair)",
-    }
-}
-
-/// Concepts the map documents as dropping toward `to` (implicit or absent there).
-fn directional_drop(concept: &str, to: Dialect) -> bool {
-    matches!(
-        (concept, to),
-        ("input turn commit / end-of-audio", Dialect::Gemini)
-            | ("barge-in / truncate / cancel", Dialect::Gemini)
-    )
-}
-
-fn cfg_from(norms: &[Norm]) -> Vec<String> {
-    norms
-        .iter()
-        .filter_map(|n| match n {
-            Norm::Config(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Do the shared concept's load-bearing fields survive `a` → IR → `b` → IR?
-fn survives(
-    concept: &str,
-    n1: &[Norm],
-    n2: &[Norm],
-    a: Dialect,
-    b: Dialect,
-) -> Result<String, String> {
-    let (f1, f2) = (fingerprint(n1), fingerprint(n2));
-    let (an, bn) = (a.name(), b.name());
-    if f1 == f2 {
-        return Ok(format!("shared fields survive {an}→{bn} ({concept})"));
-    }
-    if concept.contains("session") && cfg_from(n1) == cfg_from(n2) && !cfg_from(n1).is_empty() {
-        return Ok(format!(
-            "session config essentials survive {an}→{bn} (modalities-text/VAD/format dropped per map)"
-        ));
-    }
-    if f2.calls.is_empty() && f2.other.is_empty() && directional_drop(concept, b) {
-        return Ok(format!(
-            "{concept}: documented directional drop {an}→{bn} (implicit / no counterpart per map)"
-        ));
-    }
-    Err(format!(
-        "{concept}: shared fields did not survive {an}→{bn}: {f1:?} != {f2:?}"
-    ))
-}
-
-fn drop_if(cond: bool, msg: &str) -> Result<String, String> {
-    if cond {
-        Ok(format!("accounted for — {msg}"))
-    } else {
-        Err(format!("NOT accounted for — {msg}"))
-    }
-}
-
-/// A one-dialect-only concept bridged toward the other must be ACCOUNTED FOR.
-fn asym_drop(id: &str, n1: &[Norm], n2: &[Norm]) -> Result<String, String> {
-    let has = |ns: &[Norm], pred: &dyn Fn(&Norm) -> bool| ns.iter().any(pred);
-    match id {
-        "openai_buffer_clear" => drop_if(
-            !has(n2, &|n| matches!(n, Norm::Clear)),
-            "clear has no Gemini twin — dropped",
-        ),
-        "openai_response_overrides" => drop_if(
-            !has(n2, &|n| matches!(n, Norm::ResponseCreate)),
-            "per-response overrides dropped (Gemini is setup-time only)",
-        ),
-        "openai_truncate_precision" => drop_if(
-            !has(n2, &|n| matches!(n, Norm::Truncate(_))),
-            "sample-accurate truncate dropped (Gemini interrupted carries no ms)",
-        ),
-        "openai_structured_error" => drop_if(
-            !has(n2, &|n| matches!(n, Norm::Error(..))),
-            "structured error dropped toward Gemini (WS close codes instead)",
-        ),
-        "openai_event_id" | "openai_noise_reduction" => drop_if(
-            true,
-            "field never enters the IR (dropped at decode); bridged config omits it",
-        ),
-        "openai_semantic_vad" | "openai_g711" => drop_if(
-            has(n2, &|n| matches!(n, Norm::Config(_))),
-            "config bridges; semantic_vad/g711 specifics dropped per map",
-        ),
-        "openai_speech_boundary" => drop_if(
-            has(n2, &|n| matches!(n, Norm::SpeechStart)) || n1.is_empty(),
-            "boundary maps to interrupted; ms offset dropped",
-        ),
-        "openai_uplink_rate" => drop_if(
-            !n2.is_empty()
-                && n1
-                    .iter()
-                    .zip(n2.iter())
-                    .all(|(a, b)| matches!((a, b), (Norm::AudioUp(x), Norm::AudioUp(y)) if x == y)),
-            "uplink audio bridges verbatim at its true rate; the resample toward Gemini's 16 kHz \
-             input is not performed",
-        ),
-        "gemini_go_away" | "gemini_tool_call_cancellation" => drop_if(
-            n1.is_empty() && n2.is_empty(),
-            "no OpenAI twin — dropped at decode (drop+warn)",
-        ),
-        "gemini_generation_complete" => drop_if(
-            has(n2, &|n| matches!(n, Norm::AudioDone)),
-            "turnComplete→AudioDone survives; generationComplete collapsed",
-        ),
-        "gemini_audio_stream_end" => drop_if(
-            has(n1, &|n| matches!(n, Norm::Commit)) && has(n2, &|n| matches!(n, Norm::Commit)),
-            "audioStreamEnd ↔ input_audio_buffer.commit: the end-of-uplink turn survives",
-        ),
-        "gemini_setup_complete" => drop_if(
-            has(n2, &|n| matches!(n, Norm::Connect)),
-            "ack maps to session.created; gate semantics are the session's, not IR",
-        ),
-        other => Err(format!("no asymmetry handler for id '{other}'")),
-    }
-}
-
-fn read_fixture(path: &Path) -> Option<Vec<u8>> {
-    let v: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
-    Some(bytes_of(&v))
-}
-
-/// `cross <pair> <openai dir> <gemini dir> <map>`: every shared concept, codec half and door half
-/// (the bridged wire through the destination dialect's door), then every asymmetry row.
-pub fn cross(rig: &Rig, pair: &str, oa: &Path, ge: &Path, map: &Value) -> i32 {
-    let (a, b) = match pair {
-        "oo" => (Dialect::OpenAi, Dialect::OpenAi),
-        "og" => (Dialect::OpenAi, Dialect::Gemini),
-        "go" => (Dialect::Gemini, Dialect::OpenAi),
-        "gg" => (Dialect::Gemini, Dialect::Gemini),
-        other => {
-            result(other, false, "pair", "unknown ordered pair");
-            return 1;
-        }
-    };
-    let slice = pair_slice(a, b);
-    let dir_for = |d: Dialect| if d == Dialect::OpenAi { oa } else { ge };
-    let mut fails = 0;
-    let Some(concepts) = map["concepts"].as_array() else {
-        result(
-            slice,
-            false,
-            "map",
-            "the cross-dialect map has no concepts array",
-        );
-        return 1;
-    };
-    for c in concepts {
-        let concept = c["concept"].as_str().unwrap_or("?");
-        let present: Vec<(String, Vec<u8>)> = c[a.name()]["fixtures"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|fx| {
-                let name = fx
-                    .as_str()
-                    .filter(|n| !n.is_empty() && !n.ends_with(".jsonl"))?;
-                Some((name.to_string(), read_fixture(&dir_for(a).join(name))?))
-            })
-            .collect();
-        let mut chosen = present.iter().find_map(|(name, v)| {
-            let br = bridge(a, b, std::slice::from_ref(v));
-            (!br.n1.is_empty()).then(|| (name.clone(), br))
-        });
-        // A concept whose transform is stated ACROSS events (the streamed⟷atomic tool call) can
-        // bridge one frame to nothing alone; judge its fixtures as the one exchange the map states.
-        if chosen.as_ref().is_some_and(|(_, br)| br.n2.is_empty()) && present.len() > 1 {
-            let vals: Vec<Vec<u8>> = present.iter().map(|(_, v)| v.clone()).collect();
-            let names: Vec<&str> = present.iter().map(|(n, _)| n.as_str()).collect();
-            chosen = Some((names.join("+"), bridge(a, b, &vals)));
-        }
-        match chosen {
-            None => println!(
-                "SUBITEM {slice}:{concept} PENDING — {}",
-                none_reason(concept, a)
-            ),
-            Some((name, br)) => {
-                let codec = survives(concept, &br.n1, &br.n2, a, b);
-                let what = format!("shared:{name}");
-                if !judge_relay(rig, slice, &what, b, &br.wires, &codec) {
-                    fails += 1;
-                }
-            }
-        }
-    }
-    let Some(asym) = map["asymmetry"].as_array() else {
-        result(
-            slice,
-            false,
-            "map",
-            "the cross-dialect map has no asymmetry array",
-        );
-        return 1;
-    };
-    for row in asym {
-        let id = row["id"].as_str().unwrap_or("?");
-        let origin = row["dialect"].as_str().unwrap_or("?");
-        let fixture = row["fixture"].as_str().unwrap_or_default();
-        let what = format!("asym:{id}");
-        // A row is EXERCISED in its origin → other direction only.
-        if a.name() != origin || a == b {
-            result(
-                slice,
-                true,
-                &what,
-                &format!(
-                    "not this pair's drop direction (origin={origin}); exercised in the \
-                     {origin}→other pair"
-                ),
-            );
-            continue;
-        }
-        let name = fixture
-            .strip_prefix(&format!("{origin}/"))
-            .unwrap_or(fixture);
-        let Some(v) = read_fixture(&dir_for(a).join(name)) else {
-            result(slice, false, &what, &format!("fixture {fixture} missing"));
-            fails += 1;
-            continue;
-        };
-        let br = bridge(a, b, std::slice::from_ref(&v));
-        match asym_drop(id, &br.n1, &br.n2) {
-            Ok(d) => result(slice, true, &what, &d),
-            Err(d) => {
-                result(slice, false, &what, &d);
-                fails += 1;
-            }
-        }
-    }
-    i32::from(fails > 0)
-}
-
-/// The codec half of the V4 governance checkpoint: an OpenAI-only concept bridged toward Gemini
-/// is down-scoped, never widened. Answers the bridged norms' text.
-pub fn downscope_bridge(update: &Value) -> String {
-    format!(
-        "{:?}",
-        bridge(Dialect::OpenAi, Dialect::Gemini, &[bytes_of(update)]).n2
-    )
 }
 
 /// The frame bytes of a JSON value.

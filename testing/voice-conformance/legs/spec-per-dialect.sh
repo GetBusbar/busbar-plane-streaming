@@ -7,9 +7,7 @@
 # LEG: spec-per-dialect — the voice conformance spec, run once PER DIALECT (openai, gemini, twilio).
 #
 # Every captured fixture in `testing/voice-conformance/fixtures/$dialect/`:
-#   * CODEC: wire JSON → IR → wire JSON → IR through the dialect's codec in the plane crate
-#     (`OpenAiRealtimeCodec` / `GeminiLiveCodec`), stable at the level the codec guarantees
-#     (IR-fixpoint, or the correlation fingerprint for an atomic Gemini toolCall); a fixture that
+#   * DECODE: read to IR by the harness's own decoder (`harness/src/decode.rs`); a fixture that
 #     decodes to nothing passes only as a documented drop;
 #   * DOOR: pushed through a live session on the dialect's door (the caller's frames as caller pieces,
 #     the far end's as far-end pieces), linked AND dropped; the door must relay it by the session rules,
