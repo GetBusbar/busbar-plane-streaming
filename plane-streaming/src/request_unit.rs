@@ -118,6 +118,12 @@ impl RequestUnit {
         })
     }
 
+    /// `true` once the far end has begun its answer (its first piece named a status).
+    #[must_use]
+    pub const fn far_answered(&self) -> bool {
+        self.status.is_some()
+    }
+
     /// `true` once the caller's answer has been given.
     #[cfg(test)]
     #[must_use]
