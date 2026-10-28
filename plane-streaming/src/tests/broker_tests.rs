@@ -207,3 +207,67 @@ fn a_minted_secret_debugs_its_expiry_only() {
     let m = read_minted(br#"{"value":"ek_CANARY51","expires_at":9}"#).expect("reads");
     assert_eq!(format!("{m:?}"), "Minted { expires_at_unix: 9, .. }");
 }
+
+const CANARY: &str = "ek_CANARY-json-7d21b0";
+
+#[test]
+fn a_reply_captures_its_credential_and_reads_its_public_members() {
+    let body = format!(r#"{{"value":"{CANARY}","expires_at":1700000600,"session":{{"x":[1]}}}}"#);
+    let m: ClientSecretResponse = json_reply(body.as_bytes()).expect("reads");
+    assert!(m.value == cred(CANARY));
+    assert_eq!(m.expires_at, Some(1_700_000_600));
+}
+
+#[test]
+fn an_escaped_credential_is_captured_unescaped() {
+    let m: ClientSecretResponse =
+        json_reply(br#"{"value":"ek_A\n\"\\/","expires_at":null}"#).expect("reads");
+    assert!(m.value == cred("ek_A\n\"\\/"));
+    assert_eq!(m.expires_at, None);
+}
+
+/// RED: the decoder's own text quotes the value it met (`invalid type: string "<value>"`); the
+/// reply error names the class and the position only, the position serde_json states.
+#[test]
+fn a_reply_error_names_its_class_and_position_never_a_value() {
+    let cases: [(String, JsonFailure); 4] = [
+        (
+            format!(r#"{{"value":"{CANARY}","expires_at":"{CANARY}"}}"#),
+            JsonFailure::Data,
+        ),
+        (
+            format!(r#"{{"value":7,"other":"{CANARY}"}}"#),
+            JsonFailure::Data,
+        ),
+        (format!("not json {CANARY}"), JsonFailure::Syntax),
+        (format!(r#"{{"value":"{CANARY}""#), JsonFailure::Eof),
+    ];
+    for (body, failure) in cases {
+        let Err(e) = json_reply::<ClientSecretResponse>(body.as_bytes()) else {
+            panic!("refused: {body}");
+        };
+        let raw = serde_json::from_slice::<ClientSecretResponse>(body.as_bytes())
+            .err()
+            .expect("serde_json refuses it too");
+        assert_eq!(e.failure, failure, "{body}");
+        assert_eq!((e.line, e.column), (raw.line(), raw.column()), "{body}");
+        let text = e.to_string();
+        assert!(!text.contains("CANARY"), "{text}");
+        assert!(!format!("{e:?}").contains("CANARY"));
+    }
+    let e = json_reply::<ClientSecretResponse>(br#"{"value":5}"#)
+        .err()
+        .expect("refused");
+    assert_eq!(
+        e.to_string(),
+        "a field is missing or has the wrong type (line 1, column 10; the decoder's text is \
+         withheld)"
+    );
+    let e = json_reply::<ClientSecretResponse>(b"not json")
+        .err()
+        .expect("refused");
+    assert_eq!(
+        e.to_string(),
+        "it is not well-formed JSON (line 1, column 2; the decoder's text is withheld)"
+    );
+}
