@@ -33,6 +33,9 @@ use bytes::Bytes;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 
+pub mod peek;
+use peek::{base64_len, Head, Lite};
+
 /// The dialect wire `type` tokens — named once here so the reader's dispatch and the writer's framing
 /// never drift. These are the plane's OWN vocabulary (it owns 100% of its protocol nouns, `BUSBAR-1.6.0.md` #18/#45).
 mod wire {
@@ -513,6 +516,14 @@ pub trait DuplexReader {
     /// Server→client events, threading per-session decode state (barge-in position, `CallRef` map).
     fn read_down_ref(&self, wire: WireRef<'_>, st: &mut DecodeState) -> Vec<IrServerEvent>;
 
+    /// Whether a far-end frame can carry what a session meters (a usage report, an error, a tool
+    /// call's open): `false` only where [`Self::read_down_ref`] reads none of them from it.
+    fn meters_down(&self, frame: &[u8]) -> bool;
+
+    /// The uplink audio of a caller frame read whole as `top`, as [`Self::read_up_ref`] reads it:
+    /// each blob's stated format (`None`: it states none) and the length its audio decodes to.
+    fn uplink_audio(&self, top: &Lite<'_>, admit: &mut dyn FnMut(Option<AudioFormat>, usize));
+
     /// The uplink read, over bytes the caller owns.
     #[cfg(test)]
     fn read_up(&self, evt: WireEvent, st: &mut DecodeState) -> Vec<IrClientEvent> {
@@ -760,6 +771,26 @@ impl DuplexReader for OpenAiRealtimeCodec {
                 }]
             }
             _ => Vec::new(),
+        }
+    }
+
+    /// Only a `response.done`, an `error` and a `response.output_item.added` carry what a session
+    /// meters; a frame whose head names another `type` is not read.
+    fn meters_down(&self, frame: &[u8]) -> bool {
+        Head::read(frame).is_none_or(|h| {
+            matches!(
+                h.ty.as_deref(),
+                Some(wire::RESPONSE_DONE | wire::ERROR | wire::OUTPUT_ITEM_ADDED)
+            )
+        })
+    }
+
+    /// An `input_audio_buffer.append`'s `audio`, which states no format.
+    fn uplink_audio(&self, top: &Lite<'_>, admit: &mut dyn FnMut(Option<AudioFormat>, usize)) {
+        if top.str_at("type") == wire::INPUT_AUDIO_APPEND {
+            if let Some(len) = base64_len(top.str_at("audio")) {
+                admit(None, len);
+            }
         }
     }
 }
@@ -1025,3 +1056,7 @@ mod tests;
 #[cfg(test)]
 #[path = "usage_refusal_tests.rs"]
 mod usage_refusal_tests;
+
+#[cfg(test)]
+#[path = "peek_tests.rs"]
+mod peek_tests;
