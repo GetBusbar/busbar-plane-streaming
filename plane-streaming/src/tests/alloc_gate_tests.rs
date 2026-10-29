@@ -14,7 +14,7 @@
 
 use crate::codec::topology::twilio::TwilioEnvelope;
 
-use busbar_contract::alloc_counter::allocations_of;
+use busbar_test_kit::alloc_counter::allocations_of;
 
 /// The identifier a `start` event binds, in the shape this dialect mints them.
 const SID: &str = "MZ18ad3ab5a668481ce02b83e7395059f0";
