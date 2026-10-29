@@ -120,3 +120,39 @@ fn a_session_door_opens_no_request_unit_and_a_far_end_never_answers_the_mint() {
         Answer::Refused
     ));
 }
+
+/// RED: A KEY OUTSIDE THE SESSION MODEL'S GRANT GETS NO TICKET (R10 grant ruling): the mint is
+/// refused before anything is minted, with an explained refusal in the caller's dialect, the
+/// OpenAI REST error envelope (`permission_error`, 403), naming the entry the grant does not
+/// reach. The unit is answered: nothing more is asked of the host for it.
+#[test]
+fn a_key_outside_the_session_models_grant_gets_no_ticket() {
+    let mut unit = RequestUnit::open(Door::Mint, locked()).expect("a request door");
+    let Answer::Mint { .. } = unit.on_piece(piece(From::Caller, b"", true)) else {
+        panic!("the caller's last piece asks for the ticket");
+    };
+    let Answer::ToCaller(reply) = unit.not_granted("m-cap") else {
+        panic!("answered");
+    };
+    assert_eq!(reply.status, 403);
+    assert_eq!(
+        reply.fields,
+        vec![("content-type", "application/json".to_string())]
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&crate::tests::body_bytes(reply.body)).expect("json");
+    assert_eq!(
+        v,
+        serde_json::json!({"error": {
+            "message": "this key is not granted the session's model `m-cap`, so no ephemeral secret is minted for it",
+            "type": "permission_error",
+            "param": null,
+            "code": "not_granted"
+        }})
+    );
+    assert!(unit.answered());
+    assert!(matches!(
+        unit.on_piece(piece(From::Caller, b"", true)),
+        Answer::Nothing
+    ));
+}
