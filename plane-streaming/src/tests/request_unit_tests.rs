@@ -63,6 +63,11 @@ fn a_minted_ticket_is_answered_in_the_shape_sdks_read() {
         matches!(reply.body, crate::driven::Body::Sealed(_)),
         "the ticket goes out sealed"
     );
+    assert_eq!(
+        reply.body.public(),
+        None,
+        "a sealed answer has no public bytes to read"
+    );
     let v: serde_json::Value =
         serde_json::from_slice(&crate::tests::body_bytes(reply.body)).expect("json");
     assert_eq!(
@@ -85,6 +90,13 @@ fn a_refused_mint_keeps_the_served_text() {
         panic!("answered");
     };
     assert_eq!(reply.status, 502);
+    assert_eq!(
+        reply.body.public(),
+        Some(
+            &b"streaming ephemeral-secret mint failed: ephemeral token mint failed: no principal"[..]
+        ),
+        "a refusal's text is public"
+    );
     assert_eq!(
         String::from_utf8(crate::tests::body_bytes(reply.body)).expect("utf-8"),
         "streaming ephemeral-secret mint failed: ephemeral token mint failed: no principal"

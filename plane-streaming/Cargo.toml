@@ -72,9 +72,10 @@ tracing = { workspace = true }
 # The TEST-ONLY seal (#65). `busbar_contract::plugin::TestKernelSeal` is the one blessed
 # fixture implementor of the SEALED `KernelSeal` trait; this crate's test harnesses used to
 # forge their own. Dev-only and feature-gated, so it is absent from every release build.
-# `alloc-counter` is the counting `GlobalAlloc` the alloc gates install (ARCHITECT ruling
-# 2026-10-21): dev-only, so the crate root keeps the literal `#![forbid(unsafe_code)]`.
-busbar-contract = { workspace = true, features = ["test-seal", "alloc-counter"] }
+busbar-contract = { workspace = true, features = ["test-seal"] }
+# The counting `GlobalAlloc` the alloc gates install (`busbar_test_kit::alloc_counter`):
+# dev-only, so the crate root keeps the literal `#![forbid(unsafe_code)]`.
+busbar-test-kit = { workspace = true }
 # THE DOOR, BOTH WAYS lives in the cdylib twin (`plane-streaming-plugin/tests/both_ways.rs`): the
 # loader is that crate's dev-dependency, never this one's, so the logic crate's one busbar edge is
 # the contract (the fleet's twin rule, as mcp, a2a and decisions hold it). The voice conformance

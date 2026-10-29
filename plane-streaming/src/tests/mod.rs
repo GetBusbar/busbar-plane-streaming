@@ -107,12 +107,11 @@ mod style {
     }
 }
 
-/// The one counting allocator the crate's alloc gates read: busbar-contract's test-only
-/// `alloc-counter` (a dev-dependency feature), so this crate holds no `unsafe` and its root keeps
-/// the literal `#![forbid(unsafe_code)]`.
+/// The one counting allocator the crate's alloc gates read: the test kit's (a dev-dependency), so
+/// this crate holds no `unsafe` and its root keeps the literal `#![forbid(unsafe_code)]`.
 #[global_allocator]
-static A: busbar_contract::alloc_counter::Counting =
-    busbar_contract::alloc_counter::Counting::new();
+static A: busbar_test_kit::alloc_counter::Counting =
+    busbar_test_kit::alloc_counter::Counting::new();
 
 /// What one downlink Twilio audio frame may allocate, and the bytes it must still render.
 mod alloc_gate_tests;
