@@ -131,9 +131,17 @@ fn a_key_outside_the_session_models_grant_gets_no_ticket() {
     let Answer::Mint { .. } = unit.on_piece(piece(From::Caller, b"", true)) else {
         panic!("the caller's last piece asks for the ticket");
     };
-    let Answer::ToCaller(reply) = unit.not_granted("m-cap") else {
-        panic!("answered");
+    let Answer::Rejected(reply, row) = unit.not_granted("m-cap") else {
+        panic!("answered, refused");
     };
+    // The refusal is the unit's audit row too, naming the pool and never the key.
+    assert_eq!(
+        row,
+        crate::driven::Rejected {
+            action: "realtime_ticket.mint",
+            resource: "pool:m-cap".to_string()
+        }
+    );
     assert_eq!(reply.status, 403);
     assert_eq!(
         reply.fields,

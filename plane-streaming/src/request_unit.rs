@@ -17,7 +17,10 @@ use std::sync::Arc;
 use busbar_contract::abi::sdk::Minted;
 
 use crate::codec::ir::config::SessionConfig;
-use crate::driven::{mint_failed, mint_not_granted, minted, Door, Reply};
+use crate::driven::{
+    mint_failed, mint_not_granted, minted, pool_resource, sdp_plain_request, Door, Rejected, Reply,
+    MINT_AUDIT_ACTION, OFFER_AUDIT_ACTION,
+};
 use crate::ticket::{ticket_record, TTL_SECS};
 
 /// Who pushed a piece.
@@ -56,6 +59,9 @@ pub enum Answer {
     },
     /// The caller's whole answer: the unit is done.
     ToCaller(Reply),
+    /// The caller's whole answer to a unit the door refuses itself, and the unit's audit row
+    /// saying why: the unit is done.
+    Rejected(Reply, Rejected),
     /// The piece is one this door never takes.
     Refused,
 }
@@ -66,6 +72,9 @@ pub struct RequestUnit {
     locked: Arc<SessionConfig>,
     asked: bool,
     answered: bool,
+    /// An SDP offer that arrived as a plain request: the pool it was for, when one is configured
+    /// ([`RequestUnit::plain_offer`]).
+    offer: Option<Option<String>>,
 }
 
 impl RequestUnit {
@@ -81,7 +90,22 @@ impl RequestUnit {
             locked: locked.into(),
             asked: false,
             answered: false,
+            offer: None,
         })
+    }
+
+    /// AN SDP OFFER THAT ARRIVED AS A PLAIN REQUEST (coordinator ruling 3, R10): the SDP door opens
+    /// a call session over the WebRTC carrier, so a one-request unit on it is refused on its first
+    /// piece, 501 explained and audited against `entry`'s pool (the session's model), whatever piece
+    /// that is. Nothing is dialled and no units are reported.
+    #[must_use]
+    pub fn plain_offer(locked: impl Into<Arc<SessionConfig>>, entry: Option<String>) -> Self {
+        Self {
+            locked: locked.into(),
+            asked: false,
+            answered: false,
+            offer: Some(entry),
+        }
     }
 
     /// `true` once the far end has begun its answer: never, for a unit that dials nothing, so a
@@ -109,6 +133,17 @@ impl RequestUnit {
         if self.answered || self.asked {
             return Answer::Nothing;
         }
+        if let Some(entry) = self.offer.take() {
+            self.answered = true;
+            let resource = entry.as_deref().map(pool_resource).unwrap_or_default();
+            return Answer::Rejected(
+                sdp_plain_request(),
+                Rejected {
+                    action: OFFER_AUDIT_ACTION,
+                    resource,
+                },
+            );
+        }
         match piece.from {
             From::Caller if piece.last => match ticket_record(&self.locked) {
                 Ok(record) => {
@@ -127,8 +162,17 @@ impl RequestUnit {
 
     /// The key's grant does not reach `entry`, the model the ticket's call would be routed to: the
     /// caller is refused, explained, and no ticket is asked for (R10 grant ruling).
+    /// The refusal is the unit's audit row too, naming the pool the grant does not reach (never
+    /// the key).
     pub fn not_granted(&mut self, entry: &str) -> Answer {
-        self.answer(mint_not_granted(entry))
+        self.answered = true;
+        Answer::Rejected(
+            mint_not_granted(entry),
+            Rejected {
+                action: MINT_AUDIT_ACTION,
+                resource: pool_resource(entry),
+            },
+        )
     }
 
     /// The host answered the mint: the caller's answer, the ticket (sealed: R7) and its expiry, or
