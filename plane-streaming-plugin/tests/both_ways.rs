@@ -106,10 +106,10 @@ fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     .expect("the envelope serializes")
 }
 
-/// The served plane's 502 for a mint the host served no ticket for (the logic crate's
-/// `driven_tests` pins `mint_failed`'s text to this shape, and its `door` names the reason).
-const MINT_FAILED: &str =
-    "streaming ephemeral-secret mint failed: ephemeral token mint failed: the host minted no ticket";
+/// The mint door's 403 when the host does not entitle the key to the session's model (R10 grant
+/// ruling): a host that serves no `entitlement.check` entitles nothing, so no ticket is asked for
+/// (the logic crate's `request_unit_tests` pins the envelope).
+const MINT_NOT_GRANTED: &str = r#"{"error":{"code":"not_granted","message":"this key is not granted the session's model `m-cap`, so no ephemeral secret is minted for it","param":null,"type":"permission_error"}}"#;
 
 /// THE STATEMENT CARRIES THE DECLARES DOCUMENT (BUSBAR-1.6.0.md l.246, ARCHITECT ruling
 /// 2026-10-21): the door's Statement, read back, holds `declares.json` byte for byte under
@@ -658,9 +658,9 @@ fn unit_expected() -> Vec<String> {
         "open Ready".to_string(),
         format!("mint attempt Ready emitted= more=0 far=false done=false status=0 {none}"),
         format!(
-            "mint caller Ready emitted={MINT_FAILED} more=0 far=false done=true status=502 \
-             verb= target= fields=[\"content-length={}\"]",
-            MINT_FAILED.len()
+            "mint caller Ready emitted={MINT_NOT_GRANTED} more=0 far=false done=true status=403 \
+             verb= target= fields=[\"content-type=application/json\", \"content-length={}\"]",
+            MINT_NOT_GRANTED.len()
         ),
         "mint units []".to_string(),
         format!("sdp request Refused emitted= more=0 far=false done=false status=0 {none}"),
@@ -760,12 +760,28 @@ struct TicketHost {
     draws: std::sync::atomic::AtomicU64,
     /// The record the last mint stored beside its ticket.
     minted: std::sync::Mutex<Vec<u8>>,
+    /// The `pool:<entry>` targets the key is granted (`entitlement.check`).
+    granted: &'static [&'static str],
 }
 
 /// The record unit 50's ticket locks: a session config naming its instructions.
 const TICKET_RECORD: &[u8] = br#"{"instructions":"from-ticket"}"#;
 
 impl busbar_contract::services::double::ServicesDouble for TicketHost {
+    fn entitlement_check(
+        &self,
+        _caller: &busbar_contract::services::Caller,
+        _unit: Option<u64>,
+        target: &str,
+    ) -> busbar_contract::services::Stored {
+        use busbar_contract::abi::host::service::{ENTITLED, NOT_ENTITLED};
+        busbar_contract::services::Stored::ready(if self.granted.contains(&target) {
+            ENTITLED
+        } else {
+            NOT_ENTITLED
+        })
+    }
+
     fn ticket_mint(
         &self,
         _caller: &busbar_contract::services::Caller,
@@ -816,11 +832,18 @@ impl busbar_contract::services::double::ServicesDouble for TicketHost {
     }
 }
 
-/// A dispatcher whose host serves tickets and randomness ([`TicketHost`]), and that host.
+/// A dispatcher whose host serves tickets and randomness ([`TicketHost`]) to a key granted the
+/// session's model (`pool:m-cap`), and that host.
 fn ticket_host() -> (Dispatcher, Arc<TicketHost>) {
+    ticket_host_granting(&["pool:m-cap"])
+}
+
+/// [`ticket_host`] for a key granted exactly `granted`.
+fn ticket_host_granting(granted: &'static [&'static str]) -> (Dispatcher, Arc<TicketHost>) {
     let host = Arc::new(TicketHost {
         draws: std::sync::atomic::AtomicU64::new(0xa0),
         minted: std::sync::Mutex::new(Vec::new()),
+        granted,
     });
     let d = Dispatcher::with_services(DispatchConfig::default(), host.clone());
     (d, host)
@@ -2162,6 +2185,34 @@ fn the_mint_door_answers_the_ticket_busbar_minted() {
         assert_eq!(b.last_units, "", "a ticket bills nothing");
         assert_eq!(b.last_need, 0, "and dials nothing");
     }
+}
+
+/// A KEY OUTSIDE THE SESSION MODEL'S GRANT GETS NO TICKET (R10 grant ruling): the mint door asks
+/// `entitlement.check` for `pool:<the session's model>` before it mints, and a key the host does not
+/// entitle is refused 403 in the OpenAI error envelope: nothing minted, no record stored, nothing
+/// dialled, no units. Both ways.
+#[test]
+fn a_mint_for_a_key_outside_the_session_models_grant_is_refused() {
+    let (d, host) = ticket_host_granting(&["pool:another-model"]);
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(512);
+        let answer = b.call(p, &push(71, 0, FROM_CALLER, PIECE_LAST, &[]));
+        assert!(answer.contains("status=403"), "{answer}");
+        assert!(answer.contains("not_granted"), "{answer}");
+        assert!(answer.contains("m-cap"), "{answer}");
+        assert!(!answer.contains(TICKET), "no ticket: {answer}");
+        assert_eq!(b.last_units, "", "a refusal bills nothing");
+        assert_eq!(b.last_need, 0, "and dials nothing");
+    }
+    assert!(
+        host.minted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "nothing was minted"
+    );
 }
 
 /// RED-BEFORE-GREEN (THE DESIGN: admission bounds live work, nothing evicts it): an instance holding
