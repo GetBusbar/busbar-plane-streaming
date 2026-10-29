@@ -191,7 +191,11 @@ const DIALECT_AUTH: &[DialectAuth] = &[
     dialect_auth(4, LIVE_STYLE),
 ];
 
-const SCOPE_KINDS: &[AbiStr] = &[abi_str(SCOPE)];
+/// The scope kind the kernel's pool guard judges a routed entry by (a key's `allowed_pools`), which
+/// the mint door asks `entitlement.check` over for the entry its ticket's call will be routed to.
+const POOL_SCOPE: &str = "pool";
+
+const SCOPE_KINDS: &[AbiStr] = &[abi_str(SCOPE), abi_str(POOL_SCOPE)];
 
 /// The one operation every door serves: a session open (or the ticket one is opened with).
 const OP_CLASSES: &[OpClass] = &[OpClass {
@@ -956,6 +960,30 @@ impl Plane {
             .map_err(|_| MINTED_NONE.to_string())
     }
 
+    /// THE ENTRY A MINT'S GRANT MUST REACH: the session's model as the newest generation names it,
+    /// the DIRECT entry an SDP offer on the minted ticket is routed to (`Arrive`). `None` = the
+    /// section names no model, so the call has no entry and the mint none to judge.
+    fn mint_entry(&self) -> Option<String> {
+        let generations = lock(&self.generations);
+        generations
+            .last()
+            .and_then(|(cfg, _, _)| cfg.session.model.clone())
+    }
+
+    /// WHETHER THE UNIT'S KEY IS GRANTED `entry` (`entitlement.check` over the pool scope, the one
+    /// the kernel's pool guard judges a routed entry by): a mint routes nowhere (it dials nothing),
+    /// so the plane asks before it mints, never after. Anything but the host's "entitled" is a
+    /// refusal: a declined or broken check (R10 grant ruling: refuse, never default open). An
+    /// instance the host lent no services can mint nothing at all, so its mint answers that
+    /// failure ([`MINTED_NONE`]) and not a grant it was never asked about.
+    fn mint_granted(&self, entry: &str) -> bool {
+        self.services.as_ref().is_none_or(|services| {
+            services
+                .entitled(UNTICKETED, &format!("{POOL_SCOPE}:{entry}"))
+                .unwrap_or(false)
+        })
+    }
+
     /// TAKE what admitted the unit this crossing serves (`ticket.take`): `Some` a ticket's record,
     /// `None` a key, or the host's refusal (no such unit, or taken already).
     fn take_ticket(&self) -> Result<Option<Vec<u8>>, ()> {
@@ -1418,8 +1446,13 @@ fn answer_piece(
         Answer::Nothing => (Outcome::Ready, false),
         Answer::Refused => (Outcome::Refused, true),
         Answer::Mint { ttl_secs, record } => {
-            let minted = held.unit.minted(p.mint_ticket(ttl_secs, &record));
-            answer_piece(p, held, minted, input, out)
+            // THE GRANT FIRST (R10 grant ruling): a key outside the session model's grant gets no
+            // ticket; nothing is minted and nothing is dialled.
+            let answer = match p.mint_entry() {
+                Some(entry) if !p.mint_granted(&entry) => held.unit.not_granted(&entry),
+                _ => held.unit.minted(p.mint_ticket(ttl_secs, &record)),
+            };
+            answer_piece(p, held, answer, input, out)
         }
         Answer::ToCaller(reply) => {
             // A ticket placed no call on the operator's account: the mint reports no units. The

@@ -280,6 +280,30 @@ pub fn mint_failed(reason: &str) -> Reply {
     }
 }
 
+/// The status a mint for a key outside the session model's grant is refused with.
+pub const MINT_NOT_GRANTED_STATUS: u16 = 403;
+
+/// The refusal of a mint whose key's grant does not reach `entry`, the model the ticket's call
+/// would be routed to (R10 grant ruling): the OpenAI REST error envelope the realtime SDKs read
+/// (`permission_error`, code `not_granted`), naming the entry and never the key.
+#[must_use]
+pub fn mint_not_granted(entry: &str) -> Reply {
+    let body = serde_json::json!({"error": {
+        "message": format!(
+            "this key is not granted the session's model `{entry}`, so no ephemeral secret is \
+             minted for it"
+        ),
+        "type": "permission_error",
+        "param": null,
+        "code": "not_granted"
+    }});
+    Reply {
+        status: MINT_NOT_GRANTED_STATUS,
+        fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
+        body: Body::Public(serde_json::to_vec(&body).unwrap_or_default()),
+    }
+}
+
 /// Why a minted ticket was not answered: it is not text.
 pub const MINTED_NOT_TEXT: &str = "the minted ticket is not text";
 

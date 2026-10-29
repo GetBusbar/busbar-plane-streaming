@@ -17,7 +17,7 @@ use std::sync::Arc;
 use busbar_contract::abi::sdk::Minted;
 
 use crate::codec::ir::config::SessionConfig;
-use crate::driven::{mint_failed, minted, Door, Reply};
+use crate::driven::{mint_failed, mint_not_granted, minted, Door, Reply};
 use crate::ticket::{ticket_record, TTL_SECS};
 
 /// Who pushed a piece.
@@ -123,6 +123,12 @@ impl RequestUnit {
             From::Caller | From::Kernel => Answer::Nothing,
             From::FarEnd => Answer::Refused,
         }
+    }
+
+    /// The key's grant does not reach `entry`, the model the ticket's call would be routed to: the
+    /// caller is refused, explained, and no ticket is asked for (R10 grant ruling).
+    pub fn not_granted(&mut self, entry: &str) -> Answer {
+        self.answer(mint_not_granted(entry))
     }
 
     /// The host answered the mint: the caller's answer, the ticket (sealed: R7) and its expiry, or
