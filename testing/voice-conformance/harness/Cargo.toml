@@ -18,18 +18,18 @@ name = "voice_conform"
 path = "src/main.rs"
 
 [dependencies]
-busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "5445b5cd61b9fbd1cd6278293c8ce0f1fbb5073a" }
+busbar-contract = { git = "https://github.com/GetBusbar/busbar", rev = "e171ea95260a76ba3cd7156dab480fe4cae60747" }
 # THE KERNEL'S STATUS CHOICE (`plane_driver::refusal_status`): the status the plane driver hands a
 # refusal of a plane that states no row of its own, which the admit-refusal slice renders through
 # the door (a policy refusal answers its 4xx, never `server_error`).
-busbar-kernel = { git = "https://github.com/GetBusbar/busbar", rev = "5445b5cd61b9fbd1cd6278293c8ce0f1fbb5073a", default-features = false }
+busbar-kernel = { git = "https://github.com/GetBusbar/busbar", rev = "e171ea95260a76ba3cd7156dab480fe4cae60747", default-features = false }
 # THE PLANE UNDER TEST: its linked door (`busbar_plane_streaming::door::door`) and its codecs, which
 # compute every expectation from the wire, at the rev the root pins (GetBusbar/busbar-plane-streaming,
 # row 106). The dropped-in door is that repo's cdylib twin, `busbar-plane-streaming-plugin`, at the
 # same rev, built in this workspace (the dev edge below; `lib/conform-bin.sh`).
 busbar-plane-streaming = { workspace = true }
 # THE ONE LOADER both doors are loaded through (`load_linked`, `load_dropped`).
-busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "5445b5cd61b9fbd1cd6278293c8ce0f1fbb5073a" }
+busbar-plugin-loader = { git = "https://github.com/GetBusbar/busbar", rev = "e171ea95260a76ba3cd7156dab480fe4cae60747" }
 serde_json = { workspace = true }
 bytes = { workspace = true }
 
