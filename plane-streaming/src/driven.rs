@@ -1,25 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The plane's answers to the kernel plane driver for its two one-request doors: the
-//! ephemeral-secret mint and the SDP offer. Each answer is plain data, in
-//! the plane's own vocabulary; writing it into the host's buffers is the door's job.
+//! The plane's answers to the kernel plane driver: which door a claim is, and the request each
+//! session door sends its far end. Each answer is plain data, in the plane's own vocabulary;
+//! writing it into the host's buffers is the door's job.
 //!
 //! | driver crossing | here |
 //! |---|---|
 //! | `arrive` | [`arrive`]: which door the claim is, its dialect and its principal need |
-//! | `on_piece`, ATTEMPT | [`mint_attempt`], [`sdp_attempt`]: the request bound for the far end |
-//! | `on_piece`, from the far end | [`mint_reply`], [`sdp_reply`]: what the caller is answered |
+//! | the mint door's caller body | [`minted`], [`mint_failed`]: the ticket busbar minted, or why not |
+//! | a session's far-end turn | [`Door::route`]: the request bound for the far end |
 //!
-//! The caller's texts are the served plane's, byte for byte, where the far end answered. A far end
-//! that could not be reached is the kernel's route terminal and is not answered here.
+//! Busbar terminates the browser's media (row 132): the mint door answers a ticket busbar mints
+//! itself and dials nothing; the SDP door is a datagram session whose far end is busbar's own call.
 
-use crate::broker::{
-    mint_request_body, minted_answer, read_minted, rtc_call_id_of, CALLS_PATH, CLIENT_SECRETS_PATH,
-    SAFETY_IDENTIFIER_HEADER, SDP_CONTENT_TYPE,
-};
-use crate::codec::ir::config::SessionConfig;
-use busbar_contract::abi::sdk::cred::SealedWrite;
+use busbar_contract::abi::sdk::cred::{Cred, SealedWrite};
+
+use crate::ticket::{minted_answer, CALLS_PATH, CALL_FORM_TYPE, SAFETY_IDENTIFIER_HEADER};
 
 /// The media type of a JSON body.
 pub const JSON_CONTENT_TYPE: &str = "application/json";
@@ -33,9 +30,9 @@ pub const FIELD_CONTENT_LENGTH: &str = "content-length";
 /// The door a claim is, by its index in the snapshot's claims (`crate::door::ROUTES`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Door {
-    /// `POST /v1/realtime/client_secrets`: one ephemeral secret for a browser session.
+    /// `POST /v1/realtime/client_secrets`: one ticket for a browser session, minted by busbar.
     Mint,
-    /// `POST /v1/realtime/calls`: one SDP offer, relayed to the provider.
+    /// `POST /v1/realtime/calls`: one SDP offer, answered by busbar, which terminates the media.
     Sdp,
     /// The browser's sideband socket.
     Sideband,
@@ -80,20 +77,23 @@ impl Door {
     pub const fn is_session(self) -> bool {
         matches!(
             self,
-            Door::Sideband | Door::Gemini | Door::Twilio | Door::Realtime
+            Door::Sdp | Door::Sideband | Door::Gemini | Door::Twilio | Door::Realtime
         )
     }
 
     /// The outbound need a far request on this door rides (`OnPieceOut::need`): the socket of the
     /// provider the door's session dials (Gemini Live's for the Gemini door, OpenAI Realtime's for
-    /// the sideband, telephony and plain realtime doors), and OpenAI Realtime's one-shot pass for the mint and the
-    /// SDP offer.
+    /// the sideband, telephony and plain realtime doors), and busbar's own call to OpenAI Realtime
+    /// for the SDP door (row 132: busbar terminates the browser's media). The mint door dials
+    /// nothing (`ROUTE_LOCAL`).
     #[must_use]
     pub const fn rides(self) -> u32 {
         match self {
             Door::Gemini => crate::door::RIDES_LIVE_SOCKET,
-            Door::Sideband | Door::Twilio | Door::Realtime => crate::door::RIDES_REALTIME_SOCKET,
-            Door::Mint | Door::Sdp => crate::door::RIDES_REALTIME_PASS,
+            Door::Sdp => crate::door::RIDES_REALTIME_CALL,
+            Door::Mint | Door::Sideband | Door::Twilio | Door::Realtime => {
+                crate::door::RIDES_REALTIME_SOCKET
+            }
         }
     }
 }
@@ -109,8 +109,8 @@ pub struct Arrival {
     pub dialect: u32,
 }
 
-/// `arrive` for claim `claim`: every keyed door opens a session (or brokers one) for a known
-/// principal.
+/// `arrive` for claim `claim`: every keyed door opens a session (or mints the ticket one opens
+/// with) for a known principal.
 #[must_use]
 pub const fn arrive(claim: u32) -> Option<Arrival> {
     match Door::of(claim) {
@@ -124,27 +124,20 @@ pub const fn arrive(claim: u32) -> Option<Arrival> {
 }
 
 impl Door {
-    /// The request an attempt on this door sends the far end: the session doors dial the dialect's
-    /// realtime socket (the credential is the kernel's, never in the target); the mint and SDP
-    /// doors send their one request.
-    ///
-    /// # Errors
-    /// The mint request body's serializer text.
-    pub fn route(
-        self,
-        config: &SessionConfig,
-        caller_ref: Option<&str>,
-        body: &[u8],
-    ) -> Result<Attempt, String> {
+    /// The request a session's far-end turn on this door sends: the socket doors dial the
+    /// dialect's realtime socket (the credential is the kernel's, never in the target); the SDP
+    /// door places busbar's own call ([`call_attempt`]), its caller named by `caller_ref` for
+    /// attribution; the mint door dials nothing (`None`).
+    #[must_use]
+    pub fn route(self, caller_ref: Option<&str>) -> Option<Attempt> {
         let socket = |target| Attempt {
             verb: "GET",
             target,
             fields: Vec::new(),
-            body: Vec::new(),
         };
-        Ok(match self {
-            Door::Mint => mint_attempt(config, caller_ref)?,
-            Door::Sdp => sdp_attempt(body),
+        Some(match self {
+            Door::Mint => return None,
+            Door::Sdp => call_attempt(caller_ref),
             Door::Sideband | Door::Twilio | Door::Realtime => socket(REALTIME_SOCKET_PATH),
             Door::Gemini => socket(GEMINI_SOCKET_PATH),
         })
@@ -162,10 +155,10 @@ pub const REALTIME_SOCKET_PATH: &str = "/v1/realtime";
 /// The sideband door's path, before its `{call_id}` segment.
 pub const SIDEBAND_PREFIX: &str = "/v1/realtime/sideband/";
 
-/// The provider call a sideband arrival's `target` names: its `{call_id}` segment, less any query
-/// or fragment. `None` for a segment that is empty or holds anything but ASCII letters, digits, `_`
-/// and `-` (the provider's call ids, `rtc_…`): the id is dialled as a query value, so nothing that
-/// could carry another parameter into it is taken.
+/// Busbar's call a sideband arrival's `target` names: its `{call_id}` segment, less any query or
+/// fragment. `None` for a segment that is empty or holds anything but ASCII letters, digits, `_`
+/// and `-` (busbar's call ids and the provider's, `rtc_…`): nothing that could carry another
+/// parameter into a dialled query is taken.
 #[must_use]
 pub fn sideband_call_id(target: &str) -> Option<&str> {
     let id = target.strip_prefix(SIDEBAND_PREFIX)?;
@@ -181,7 +174,7 @@ pub fn sideband_call_id(target: &str) -> Option<&str> {
 pub const GEMINI_SOCKET_PATH: &str =
     "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
-/// A request bound for the far end: verb and target explicit, then its head fields and body. The
+/// A request head bound for the far end: verb and target explicit, then its head fields. The
 /// kernel adds the credential and sends it; the target is under the member's base URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attempt {
@@ -191,44 +184,30 @@ pub struct Attempt {
     pub target: &'static str,
     /// The head fields, in order.
     pub fields: Vec<(&'static str, String)>,
-    /// The body.
-    pub body: Vec<u8>,
 }
 
-/// The mint's ATTEMPT: the locked session params the browser's session is bound to, the secret's
-/// lifetime, and the caller named for attribution.
-///
-/// # Errors
-/// The body's serializer text.
-pub fn mint_attempt(config: &SessionConfig, caller: Option<&str>) -> Result<Attempt, String> {
-    let mut fields = vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())];
+/// The SDP door's far-end request head: busbar's own call to the provider, one form
+/// ([`crate::ticket::call_form`]) carrying the locked session and busbar's description, and the
+/// caller named for the provider's attribution of the session (`OpenAI-Safety-Identifier`, the
+/// kernel's caller reference, never the principal).
+#[must_use]
+pub fn call_attempt(caller: Option<&str>) -> Attempt {
+    let mut fields = vec![(FIELD_CONTENT_TYPE, CALL_FORM_TYPE.to_string())];
     if let Some(r) = caller.filter(|r| !r.is_empty()) {
         fields.push((SAFETY_IDENTIFIER_HEADER, r.to_string()));
     }
-    Ok(Attempt {
-        verb: "POST",
-        target: CLIENT_SECRETS_PATH,
-        fields,
-        body: mint_request_body(config)?,
-    })
-}
-
-/// The SDP offer's ATTEMPT: the caller's offer, relayed as it arrived.
-#[must_use]
-pub fn sdp_attempt(offer: &[u8]) -> Attempt {
     Attempt {
         verb: "POST",
         target: CALLS_PATH,
-        fields: vec![(FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string())],
-        body: offer.to_vec(),
+        fields,
     }
 }
 
-/// A caller's answer body: public bytes, or a mint's answer sealed by the SDK (it carries the live
-/// `ek_` secret, which this plane never holds as text and cannot read back).
+/// A caller's answer body: public bytes, or a mint's answer sealed by the SDK (it carries busbar's
+/// bearer ticket, which this plane never holds as text and cannot read back: R7).
 #[allow(missing_debug_implementations)]
 pub enum Body {
-    /// Public bytes (a refusal's text, the far end's SDP answer).
+    /// Public bytes (a refusal's text).
     Public(Vec<u8>),
     /// The SDK's sealed write: the door moves it into the host's reply buffer
     /// (`SealedWrite::stream_into`).
@@ -244,9 +223,21 @@ impl Body {
             Self::Sealed(w) => w.len(),
         }
     }
+
+    /// The public bytes; `None` for a sealed answer, which this plane never reads. (Read by the
+    /// voice battery, whose overlay lifts this `cfg(test)` fence.)
+    #[cfg(test)]
+    #[must_use]
+    pub fn public(&self) -> Option<&[u8]> {
+        match self {
+            Self::Public(b) => Some(b),
+            Self::Sealed(_) => None,
+        }
+    }
 }
 
-/// What the caller is answered. Its `Debug` prints the body's length, never its bytes.
+/// What the caller is answered. Its `Debug` prints the body's length, never its bytes: a mint
+/// answer's body is the live `ek_` ticket.
 pub struct Reply {
     /// The status.
     pub status: u16,
@@ -254,9 +245,6 @@ pub struct Reply {
     pub fields: Vec<(&'static str, String)>,
     /// The body.
     pub body: Body,
-    /// For an SDP answer that names its call: the provider's `rtc_` call id, read off its
-    /// `Location`: the call the caller's own sideband may attach to.
-    pub rtc_call_id: Option<String>,
 }
 
 impl std::fmt::Debug for Reply {
@@ -265,13 +253,11 @@ impl std::fmt::Debug for Reply {
             status,
             fields,
             body,
-            rtc_call_id,
         } = self;
         f.debug_struct("Reply")
             .field("status", status)
             .field("fields", fields)
             .field("body", &format_args!("<redacted {} bytes>", body.len()))
-            .field("rtc_call_id", rtc_call_id)
             .finish()
     }
 }
@@ -291,140 +277,23 @@ pub fn mint_failed(reason: &str) -> Reply {
             )
             .into_bytes(),
         ),
-        rtc_call_id: None,
     }
 }
 
-/// The caller's answer to the far end's mint answer (`status`, `body`): the secret and its expiry on
-/// a success that carries one, else the served plane's 502 and its text.
+/// Why a minted ticket was not answered: it is not text.
+pub const MINTED_NOT_TEXT: &str = "the minted ticket is not text";
+
+/// The caller's answer to a mint busbar answered: the ticket, sealed, and its expiry.
 #[must_use]
-pub fn mint_reply(status: u16, body: &[u8]) -> Reply {
-    if !(200..300).contains(&status) {
-        return mint_failed(&format!(
-            "client-secret endpoint returned {}",
-            status_text(status)
-        ));
-    }
-    let minted = match read_minted(body) {
-        Ok(minted) => minted,
-        Err(reason) => return mint_failed(&reason),
-    };
-    match minted_answer(&minted) {
+pub fn minted(ticket: &Cred, expires_at_unix: u64) -> Reply {
+    match minted_answer(ticket, expires_at_unix) {
         Ok(answer) => Reply {
             status: 200,
             fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
             body: Body::Sealed(answer),
-            rtc_call_id: None,
         },
-        Err(_) => mint_failed("client-secret response value is not text"),
+        Err(_) => mint_failed(MINTED_NOT_TEXT),
     }
-}
-
-/// The caller's answer to the far end's SDP answer: its status and body, and its `Location` when it
-/// named one (the call id in that `Location` is the call the caller's sideband may attach to). A
-/// success is an SDP answer and says so; any other status relays the far end's own `Content-Type`
-/// (`content_type`, a JSON error body is not an SDP answer), and states none where the far end
-/// stated none.
-#[must_use]
-pub fn sdp_reply(
-    status: u16,
-    location: Option<&str>,
-    content_type: Option<&str>,
-    body: &[u8],
-) -> Reply {
-    let mut fields = Vec::new();
-    if (200..300).contains(&status) {
-        fields.push((FIELD_CONTENT_TYPE, SDP_CONTENT_TYPE.to_string()));
-    } else if let Some(ct) = content_type {
-        fields.push((FIELD_CONTENT_TYPE, ct.to_string()));
-    }
-    if let Some(loc) = location {
-        fields.push((FIELD_LOCATION, loc.to_string()));
-    }
-    Reply {
-        status,
-        fields,
-        body: Body::Public(body.to_vec()),
-        rtc_call_id: location.and_then(rtc_call_id_of),
-    }
-}
-
-/// A status as the served plane printed it: the number and its canonical reason phrase, or the
-/// number alone for one with none.
-#[must_use]
-pub fn status_text(status: u16) -> String {
-    match reason_phrase(status) {
-        Some(reason) => format!("{status} {reason}"),
-        None => status.to_string(),
-    }
-}
-
-/// The canonical reason phrase of a registered status (RFC 9110 and its registry).
-#[must_use]
-pub const fn reason_phrase(status: u16) -> Option<&'static str> {
-    Some(match status {
-        100 => "Continue",
-        101 => "Switching Protocols",
-        102 => "Processing",
-        200 => "OK",
-        201 => "Created",
-        202 => "Accepted",
-        203 => "Non Authoritative Information",
-        204 => "No Content",
-        205 => "Reset Content",
-        206 => "Partial Content",
-        207 => "Multi-Status",
-        208 => "Already Reported",
-        226 => "IM Used",
-        300 => "Multiple Choices",
-        301 => "Moved Permanently",
-        302 => "Found",
-        303 => "See Other",
-        304 => "Not Modified",
-        305 => "Use Proxy",
-        307 => "Temporary Redirect",
-        308 => "Permanent Redirect",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        402 => "Payment Required",
-        403 => "Forbidden",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        406 => "Not Acceptable",
-        407 => "Proxy Authentication Required",
-        408 => "Request Timeout",
-        409 => "Conflict",
-        410 => "Gone",
-        411 => "Length Required",
-        412 => "Precondition Failed",
-        413 => "Payload Too Large",
-        414 => "URI Too Long",
-        415 => "Unsupported Media Type",
-        416 => "Range Not Satisfiable",
-        417 => "Expectation Failed",
-        418 => "I'm a teapot",
-        421 => "Misdirected Request",
-        422 => "Unprocessable Entity",
-        423 => "Locked",
-        424 => "Failed Dependency",
-        426 => "Upgrade Required",
-        428 => "Precondition Required",
-        429 => "Too Many Requests",
-        431 => "Request Header Fields Too Large",
-        451 => "Unavailable For Legal Reasons",
-        500 => "Internal Server Error",
-        501 => "Not Implemented",
-        502 => "Bad Gateway",
-        503 => "Service Unavailable",
-        504 => "Gateway Timeout",
-        505 => "HTTP Version Not Supported",
-        506 => "Variant Also Negotiates",
-        507 => "Insufficient Storage",
-        508 => "Loop Detected",
-        510 => "Not Extended",
-        511 => "Network Authentication Required",
-        _ => return None,
-    })
 }
 
 #[cfg(test)]

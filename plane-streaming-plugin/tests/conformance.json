@@ -77,6 +77,7 @@
     ],
     "member": "m-cap",
     "caller_ref": "c0ffee",
+    "request_unit": false,
     "claimed": {
       "unit": 7,
       "claim": 1,
@@ -96,39 +97,11 @@
       "target": "/v1/unpublished",
       "status": 404
     },
-    "request": "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=oracle-offer\r\nt=0 0\r\n",
-    "request_out": "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=oracle-offer\r\nt=0 0\r\n",
-    "far_end": {
-      "status": 201,
-      "fields": [
-        [
-          "location",
-          "/v1/realtime/calls/rtc_oracle0001"
-        ]
-      ],
-      "answer": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
-      "answer_out": "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=oracle-answer\r\nt=0 0\r\n",
-      "units": [
-        [
-          8,
-          1
-        ]
-      ]
-    },
-    "narrow": {
-      "unit": 9,
-      "reply_cap": 16,
-      "more": 3
-    },
-    "short": {
-      "unit": 11,
-      "buffer": "fields"
-    },
     "sessions": [
       {
         "name": "live",
         "unit": 20,
-        "claim": 2,
+        "claim": 5,
         "stream": 20,
         "reply_cap": 262144,
         "steps": [
@@ -136,7 +109,7 @@
             "label": "arrive",
             "arrive": {
               "method": "GET",
-              "target": "/v1/realtime/sideband/rtc_oracle0001"
+              "target": "/v1/realtime?model=m-cap"
             },
             "want": {
               "outcome": "Ready"
@@ -159,7 +132,7 @@
               "outcome": "Ready",
               "to_far_end": true,
               "verb": "GET",
-              "target": "/v1/realtime?call_id=rtc_oracle0001"
+              "target": "/v1/realtime?model=m-cap"
             }
           },
           {

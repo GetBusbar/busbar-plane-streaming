@@ -72,8 +72,10 @@ fn z<T>() -> T {
 const SESSION: &[u8] = br#"{"session":{"model":"m-cap"}}"#;
 /// The section of an instance with no model: its doors name no route.
 const BARE: &[u8] = b"{}";
-/// The sideband door's claim: a door that reaches the far end.
-const SIDEBAND: u32 = 2;
+/// The plain Realtime socket's claim (`GET /v1/realtime`): a door that reaches the far end and
+/// attaches to no call, so an arrival on it needs nothing held (the sideband, claim 2, attaches only
+/// to a call busbar placed, row 132, and refuses an arrival naming none).
+const REALTIME: u32 = 5;
 
 fn linked(d: &Dispatcher, instance: &str, settings: &'static [u8]) -> Plugin<Plane> {
     let row = LinkedRow::of(door).expect("the streaming door states itself");
@@ -125,13 +127,13 @@ fn naming_a_kept_route_costs_a_ready_arrival_no_allocation() {
     let bare = linked(&d, "bare", BARE);
 
     // The first arrival keeps the name; every later one names the kept copy.
-    assert_eq!(arrive(&named, SIDEBAND).0, Outcome::Ready);
-    assert_eq!(arrive(&bare, SIDEBAND).0, Outcome::Ready);
+    assert_eq!(arrive(&named, REALTIME).0, Outcome::Ready);
+    assert_eq!(arrive(&bare, REALTIME).0, Outcome::Ready);
 
     for _ in 0..3 {
-        let (outcome, route, baseline) = arrive(&bare, SIDEBAND);
+        let (outcome, route, baseline) = arrive(&bare, REALTIME);
         assert_eq!((outcome, route), (Outcome::Ready, ROUTE_POOL));
-        let (outcome, route, made) = arrive(&named, SIDEBAND);
+        let (outcome, route, made) = arrive(&named, REALTIME);
         assert_eq!((outcome, route), (Outcome::Ready, ROUTE_DIRECT));
         assert_eq!(
             made, baseline,
