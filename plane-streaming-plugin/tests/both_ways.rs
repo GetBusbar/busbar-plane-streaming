@@ -113,7 +113,7 @@ fn refusal_body(status: u16, text: &str) -> Vec<u8> {
 const MINT_AUDIT_ACTION: &str = "realtime_ticket.mint";
 /// The audit action an SDP offer's refusal is recorded under.
 const OFFER_AUDIT_ACTION: &str = "realtime_call.offer";
-/// THE SDP DOOR'S ANSWER TO A PLAIN REQUEST (RFC 9110 §15.6.2, 501 Not Implemented): the offer
+/// THE SDP DOOR'S ANSWER TO A PLAIN REQUEST (RFC 9110 section 15.6.2, 501 Not Implemented): the offer
 /// opens a call session over the WebRTC carrier; this listener does not carry one.
 const SDP_PLAIN_REQUEST: &str = r#"{"error":{"code":"session_carrier_required","message":"an SDP offer opens a realtime call over the WebRTC carrier, which this listener does not carry; send the offer to a listener serving WebRTC","param":null,"type":"server_error"}}"#;
 const MINT_NOT_GRANTED: &str = r#"{"error":{"code":"not_granted","message":"this key is not granted the session's model `m-cap`, so no ephemeral secret is minted for it","param":null,"type":"permission_error"}}"#;
@@ -2263,7 +2263,7 @@ fn a_mint_for_a_key_outside_the_session_models_grant_is_refused() {
 
 /// AN SDP OFFER THAT ARRIVES AS A PLAIN REQUEST (coordinator ruling 3, R10): the SDP door opens a
 /// call session over the WebRTC carrier; an offer reaching it as a one-request unit (no session)
-/// is refused on its first piece with 501 Not Implemented (RFC 9110 §15.6.2) and a body that says
+/// is refused on its first piece with 501 Not Implemented (RFC 9110 section 15.6.2) and a body that says
 /// why, never an empty answer the host reads as the plane's panic. The refusal is audited, nothing
 /// is dialled and no units are reported. RED: the door answered the piece Refused, with nothing.
 /// Both ways, on the caller's piece and on an ATTEMPT piece alike.

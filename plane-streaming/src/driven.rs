@@ -280,6 +280,52 @@ pub fn mint_failed(reason: &str) -> Reply {
     }
 }
 
+/// THE UNIT'S AUDIT ROW OF A REFUSAL the door answers itself (the plane's words for the kernel's
+/// audit chain, written under the unit's principal, which the plane never sees): an action and the
+/// resource it names. The row's outcome is `rejected`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejected {
+    /// The action refused.
+    pub action: &'static str,
+    /// The resource it names: the pool the refusal is about, never the caller's key.
+    pub resource: String,
+}
+
+/// The audit action a mint the door refuses is recorded under.
+pub const MINT_AUDIT_ACTION: &str = "realtime_ticket.mint";
+
+/// The audit action an SDP offer the door refuses is recorded under.
+pub const OFFER_AUDIT_ACTION: &str = "realtime_call.offer";
+
+/// The audit resource naming the pool of `entry` (the scope the grant is judged under).
+#[must_use]
+pub fn pool_resource(entry: &str) -> String {
+    format!("pool:{entry}")
+}
+
+/// The status an SDP offer arriving as a plain request is refused with: 501 Not Implemented
+/// (RFC 9110 section 15.6.2): the door serves the offer only as a call session over the WebRTC carrier,
+/// which this unit does not carry.
+pub const SDP_PLAIN_REQUEST_STATUS: u16 = 501;
+
+/// The refusal of an SDP offer that reached the SDP door as a plain request (coordinator ruling 3,
+/// R10): explained in the OpenAI REST error envelope, never an empty answer.
+#[must_use]
+pub fn sdp_plain_request() -> Reply {
+    let body = serde_json::json!({"error": {
+        "message": "an SDP offer opens a realtime call over the WebRTC carrier, which this \
+                    listener does not carry; send the offer to a listener serving WebRTC",
+        "type": "server_error",
+        "param": null,
+        "code": "session_carrier_required"
+    }});
+    Reply {
+        status: SDP_PLAIN_REQUEST_STATUS,
+        fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
+        body: Body::Public(serde_json::to_vec(&body).unwrap_or_default()),
+    }
+}
+
 /// The status a mint for a key outside the session model's grant is refused with.
 pub const MINT_NOT_GRANTED_STATUS: u16 = 403;
 
