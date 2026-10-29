@@ -22,8 +22,9 @@ sed -i.bak 's#^    "plane-streaming-plugin",#    "plane-streaming-plugin",\n    
 sed -i.bak 's#^\[workspace.dependencies\]#[workspace.dependencies]\nbusbar-plane-streaming = { path = "plane-streaming" }\nbusbar-plane-streaming-plugin = { path = "plane-streaming-plugin" }#' "$dest/Cargo.toml"
 src="$dest/plane-streaming/src"
 sed -i.bak -e 's/^mod \([a-z_]*\);/pub mod \1;/' -e 's/^#!\[deny(missing_docs)\]//' "$src/lib.rs"
-# the fence on an item is dropped; the fence on the plane's own unit-test module stays, and the
-# tests directory is not touched
+# the fence on an item is dropped; the fence on each of the plane's own unit-test modules stays
+# (an out-of-line `mod <name>;`, after any `#[path = ...]`: they read the contract's test-only SDK
+# and `crate::tests`), and the tests directory is not touched. `voice.sh --selftest` holds this.
 find "$src" -name '*.rs' ! -path "$src/tests/*" -print0 \
-  | xargs -0 perl -0pi -e 's/^[ \t]*#\[cfg\(test\)\][ \t]*\n(?![ \t]*(pub )?mod tests;)//mg'
+  | xargs -0 perl -0pi -e 's/^[ \t]*#\[cfg\(test\)\][ \t]*\n(?!(?:[ \t]*#\[[^\n]*\n)*[ \t]*(pub(\([a-z]+\))? )?mod [a-z_0-9]+;)//mg'
 find "$dest" -name '*.bak' -delete
