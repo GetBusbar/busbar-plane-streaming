@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# The voice suites of the conformance check: `voice.sh openai` (voice-openai-realtime) and
-# `voice.sh gemini` (voice-gemini-live). Tier spec-conformant: no vendor kit exists, so the suite is
+# The voice suites of the conformance check: `voice.sh openai` (voice-openai-realtime),
+# `voice.sh gemini` (voice-gemini-live) and `voice.sh twilio` (voice-twilio). Tier spec-conformant: no vendor kit exists, so the suite is
 # this repo's own spec battery (testing/voice-conformance: every fixture of the dialect, the captured
 # transcripts and the door's seams), driving the plane's door BOTH WAYS,
 # linked and dropped in, through busbar's loader at the pin ($BUSBAR_CHECKOUT).
@@ -16,8 +16,9 @@
 #   subject   the plane built from this checkout; one that cannot build is `fail`, armed
 #
 # The battery is run ONCE per check (normal, then RED) into a cache beside the verdicts, and each
-# suite id judges its own dialect's rows of it: a leg that judges both dialects counts for both, a
-# Twilio row (voice-twilio is its own row) is reported and counts for neither.
+# suite id judges its own dialect's rows of it: a leg that judges both realtime dialects counts for
+# both, a Twilio row (the `twilio-*` legs and the `twilio` fixture slice) counts for voice-twilio
+# alone, and each suite reports, never counts, the other dialects' failures.
 #
 # `voice.sh --selftest` holds the subject's overlay (voice-overlay.sh) to its promise without a
 # build: every `#[cfg(test)]` that fences one of the plane's own test modules stays (those modules
@@ -32,7 +33,10 @@ judge() {
 python3 -I - "$@" <<'PY'
 import json, os, sys
 dialect, run, out, suite = sys.argv[1:5]
-standard = {"openai": "OpenAI Realtime API", "gemini": "Google Gemini Live API"}[dialect]
+standard = {"openai": "OpenAI Realtime API", "gemini": "Google Gemini Live API",
+            "twilio": "Twilio Media Streams"}[dialect]
+# the legs a whole battery judges for each dialect: fewer is a gutted battery
+FLOOR = {"openai": 10, "gemini": 10, "twilio": 4}[dialect]
 
 def verdict(status, reason):
     v = {"suite": suite, "status": status, "armed": True, "standard": standard,
@@ -83,12 +87,12 @@ def mine(rs):
     return [r for r in rs if dialect in who(*r[:2], r[3])]
 
 bad = [r for r in mine(normal) if r[2] != "PASS"]
-twilio = [r for r in normal if who(r[0], r[1], r[3]) == {"twilio"} and r[2] != "PASS"]
+others = [r for r in normal if r[0] != "governance" and dialect not in who(*r[:2], r[3]) and r[2] != "PASS"]
 legs = sorted({r[0] for r in mine(normal)})
 if bad:
     ex = "; ".join(f"{r[0]}/{r[1]}: {r[3][:160]}" for r in bad[:6])
     verdict("fail", f"{len(bad)} of {len(mine(normal))} {dialect} assertion(s) failed: {ex}")
-if len(legs) < 10:
+if len(legs) < FLOOR:
     verdict("fail", f"only {len(legs)} legs judged {dialect}; the battery is gutted")
 # the negative control: every conformance leg that judges this dialect must go red under RED
 redrows = mine(red)
@@ -96,7 +100,7 @@ stayed = [l for l in legs if not any(r[0] == l and r[2] != "PASS" for r in redro
 if stayed:
     verdict("fail", "the RED arm did not bite on: " + ", ".join(stayed))
 verdict("pass", f"{len(mine(normal))} {dialect} assertions over {len(legs)} legs held on both doors (linked and dropped); "
-        f"the RED arm turned all {len(legs)} red; {len(twilio)} twilio failure(s) reported to voice-twilio, not counted here")
+        f"the RED arm turned all {len(legs)} red; {len(others)} other-dialect failure(s) judged by their own suite, not counted here")
 PY
 }
 
@@ -181,7 +185,7 @@ PY
 }
 [ "${1:-}" = --selftest ] && { selftest; exit $?; }
 
-dialect="${1:?usage: voice.sh openai|gemini | --selftest}"
+dialect="${1:?usage: voice.sh openai|gemini|twilio | --selftest}"
 : "${CONFORMANCE_SUITE:?}" "${CONFORMANCE_OUT:?}" "${BUSBAR_CHECKOUT:?}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/target}"
 run="$(dirname "$CONFORMANCE_OUT")/voice-run"
