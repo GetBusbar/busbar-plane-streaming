@@ -1,23 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE VOICE DUPLEX CODECS — the pure half of the voice protocol plugin.
+//! The voice duplex codecs: the pure half of the voice protocol plugin.
 //!
-//! The retired `busbar-voice` crate held two things behind one name: these codecs — the session
-//! config, the audio formats and usage a session meters, the meter's reads of each dialect and the
-//! Twilio Media Streams grammar — and the runtime that carries them over a live socket (the axum mount, the WebSocket
-//! accept, the tokio session tasks, the telephony dial, the HTTPS token minter). The plane crate
-//! `busbar-plane-streaming` adapts the codecs and must not link the runtime: a plane is a PURE kind
-//! whose whole transitive closure is scanned, and the runtime put `hyper`, `reqwest`, `axum`,
-//! `tokio-tungstenite` and a socket-capable `tokio` in it. (`busbar-plane-voice` was that adapter's
-//! earlier spelling and was DELETED into `busbar-plane-streaming` at `fbead1a31`, #18/#83.)
+//! They hold the session config, the audio formats and usage a session meters, the meter's reads
+//! of each dialect and the Twilio Media Streams grammar. A plane is a pure kind whose whole
+//! transitive closure is scanned, so these codecs link no runtime (no socket, HTTP client or
+//! socket-capable async runtime).
 //!
-//! So the codecs live here, naming only the plugin contract (`busbar-contract`, for the base64 media
-//! transcode, the billing carrier and its reserved unit names) plus serde and `bytes`. The split
-//! was a MOVE: no item changed shape crossing it. The runtime half was deleted at FLIP-STREAMING,
-//! once this plane's door served every route.
+//! They name only the plugin contract (`busbar-contract`, for the base64 media transcode, the
+//! billing carrier and its reserved unit names) plus serde and `bytes`.
 
-/// THE REGISTRY KEY THE STREAMING PLANE IS KNOWN BY — the string the composition root flips
+/// The registry key the streaming plane is known by: the string the composition root flips
 /// onto the unified kernel loop's session admit
 /// (`busbar_kernel::plane_host::register_session_runner`) and the same string the voice session
 /// gauntlet reports from its `GauntletPlane::capability_key`.
