@@ -19,16 +19,16 @@
 //! plane-imposed ceilings — session wall-clock, context window, per-response output tokens — as the
 //! sole NEW scalars. No second copy of the VAD grammar exists to drift from the wire one.
 //!
-//! The session wall-clock ceiling is OPTIONAL and has no default (OWNER RULING Q21a): absent, a session
-//! runs as long as its sockets stay up, exactly as in 1.5.5; present, it is a positive number of
-//! seconds and the plane closes a session at it.
+//! The session wall-clock ceiling is optional and has no default: absent, a session runs as long
+//! as its sockets stay up; present, it is a positive number of seconds and the plane closes a
+//! session at it.
 //!
-//! ## It IS in the config-schema tracked set
+//! ## Config-schema tracked set
 //!
-//! Exactly like `tools:`/`agents:`, this file is fingerprinted by `cargo xtask gate config-schema` (it is a
-//! `SOURCES` entry). Both the `streams` key of `DeployCfg`'s neutral declared-section carrier AND this
-//! per-key grammar — the three plane-imposed session ceilings — are covered by the additive-only gate,
-//! so a deployment's live-voice CEILINGS cannot be retyped or removed without the gate flagging it.
+//! Like `tools:`/`agents:`, this file is fingerprinted by `cargo xtask gate config-schema` (a
+//! `SOURCES` entry). Both the `streams` key of `DeployCfg`'s neutral declared-section carrier and
+//! this per-key grammar are covered by the additive-only gate, so a deployment's live-voice
+//! ceilings cannot be retyped or removed without the gate flagging it.
 
 use crate::codec::ir::config::{IrVad, SessionConfig};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -42,7 +42,7 @@ fn default_max_output_tokens() -> u32 {
     4096
 }
 
-/// THE LOCKED SESSION DEFAULTS an absent `streams.session:` opens with.
+/// The locked session defaults an absent `streams.session:` opens with.
 ///
 /// The IR's own `IrVad::ServerVad` wire default is `silence_duration_ms = 200` (`ir/control.rs`),
 /// which is what a RAW wire decode round-trip must keep. The `streams:`-LEVEL default is 500ms — a
@@ -146,7 +146,7 @@ pub struct StreamsCfg {
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
     /// The wire model a session's provider dial names, when the catalog entry `session.model`
-    /// names sets an `upstream_model` (Part 2 #51: a model entry's override, else its name). Read
+    /// names sets an `upstream_model` (a model entry's override, else its name). Read
     /// from the `models` section the host hands beside this one ([`crate::door::read_dealt`]), never
     /// a key of `streams:`.
     #[serde(skip)]
@@ -202,8 +202,8 @@ impl Default for StreamsCfg {
 
 impl StreamsCfg {
     /// `session` as a provider is told it: a `model` that is the session model this section names
-    /// carries that model's provider wire name (`upstream_model`; Part 2 #51, ARCHITECT ruling
-    /// 2026-10-23: a catalog alias never reaches a provider). Any other session is unchanged.
+    /// carries that model's provider wire name (`upstream_model`; a catalog alias never
+    /// reaches a provider). Any other session is unchanged.
     #[must_use]
     pub fn wire_session(&self, mut session: SessionConfig) -> SessionConfig {
         if let (Some(wire), Some(model)) = (&self.upstream_model, &self.session.model) {

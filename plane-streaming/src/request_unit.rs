@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! ONE REQUEST UNIT AS THE KERNEL'S ROUTE PUMP DRIVES IT (`BUSBAR-1.6.0.md` Part 3, section 12):
-//! the mint door's one request, and what the plane answers it with.
+//! One request unit as the kernel's route pump drives it: the mint door's one request, and what
+//! the plane answers it with.
 //!
 //! The mint door is answered by the plane itself (`ROUTE_LOCAL`): it dials nothing, so the pump
 //! pushes the caller's body alone, as one last piece. The plane answers it with a ticket busbar

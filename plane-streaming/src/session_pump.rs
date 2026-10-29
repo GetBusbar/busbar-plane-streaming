@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE SESSION PUMP: what one live session does with each frame, in both directions, sans I/O.
+//! The session pump: what one live session does with each frame, in both directions, sans I/O.
 //!
-//! A session's caller and far end speak the same dialect, so the pump is a RELAY (Law 5: "A RELAY
-//! (same dialect) runs the reader only as that read-only tap and sends the client's bytes with
-//! governed byte-level splices; a WRITER runs only when translating"). A frame from the far end
+//! A session's caller and far end speak the same dialect, so the pump is a relay: it
+//! runs the reader only as a read-only tap and sends the client's bytes with governed byte-level
+//! splices (a writer runs only when translating). A frame from the far end
 //! ([`SessionPump::on_server_frame`]) reaches the caller as the far end sent it; a frame from the
 //! caller ([`SessionPump::on_client_frame`]) reaches the far end as the caller sent it, except
 //! that a frame configuring the session, or asking for one response under its own settings, takes
@@ -56,7 +56,7 @@ pub trait TurnSink {
     fn turn_closed(&mut self, usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> bool;
 }
 
-/// THE SESSION PUMP over the session's codec `C`.
+/// The session pump over the session's codec `C`.
 #[derive(Debug)]
 pub struct SessionPump<C> {
     codec: C,
@@ -116,9 +116,8 @@ where
         Some(WireEvent(frame.into()))
     }
 
-    /// A FRAME FROM THE FAR END. It reaches the caller as the far end sent it: a tool call is part
-    /// of the model's response and the caller runs it, a barge-in is the caller's to act on (Law 11;
-    /// QUESTIONS Q98). The reader reads it only to meter: a usage report or an error closes the open
+    /// A frame from the far end. It reaches the caller as the far end sent it: a tool call is part
+    /// of the model's response and the caller runs it, a barge-in is the caller's to act on. The reader reads it only to meter: a usage report or an error closes the open
     /// turn, and a tool call the far end opens is counted ([`DuplexReader::meter_down`]: a frame
     /// whose head shows it carries none of these, the audio, is not read past its head).
     pub fn on_server_frame(&mut self, frame: WireEvent, sink: &mut dyn TurnSink) -> Outbound {
@@ -143,7 +142,7 @@ where
     /// A FRAME FROM THE CALLER. It reaches the far end as the caller sent it; uplink audio is
     /// counted. Under a lock it is governed by its BYTES, whatever its `type` says: every
     /// configuring object and per-response object in it takes the locked keys, and a frame that
-    /// authors an instructing item goes nowhere (Part 2 #45). A frame that configures an uplink
+    /// authors an instructing item goes nowhere. A frame that configures an uplink
     /// format the plane cannot meter, or one other than the session's locked format, goes nowhere:
     /// the far end would read the caller's audio at a rate the plane does not count it at. A frame
     /// that is not JSON goes nowhere: bytes the reader cannot read are never handed to a far end
