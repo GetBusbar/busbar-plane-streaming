@@ -18,9 +18,9 @@ use busbar_contract::abi::mechanism::lifecycle::{
 };
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneOpenIn, PlaneOpenOut,
-    PlaneRefreshOut, PlaneSnapshot, UnitCount, CANCEL_ABORTED, CANCEL_OK_PARTIAL, CLAIM_EXACT,
-    CLAIM_OPEN, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
-    PIECE_HAS_STATUS, PIECE_LAST,
+    PlaneRefreshOut, PlaneSnapshot, RecordWrite, UnitCount, AUDIT_REJECTED, CANCEL_ABORTED,
+    CANCEL_OK_PARTIAL, CLAIM_EXACT, CLAIM_OPEN, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END,
+    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, RECORD_AUDIT,
 };
 use busbar_plane_streaming::door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -109,6 +109,13 @@ fn refusal_body(status: u16, text: &str) -> Vec<u8> {
 /// The mint door's 403 when the host does not entitle the key to the session's model (R10 grant
 /// ruling): a host that serves no `entitlement.check` entitles nothing, so no ticket is asked for
 /// (the logic crate's `request_unit_tests` pins the envelope).
+/// The audit action a mint door's refusal is recorded under.
+const MINT_AUDIT_ACTION: &str = "realtime_ticket.mint";
+/// The audit action an SDP offer's refusal is recorded under.
+const OFFER_AUDIT_ACTION: &str = "realtime_call.offer";
+/// THE SDP DOOR'S ANSWER TO A PLAIN REQUEST (RFC 9110 §15.6.2, 501 Not Implemented): the offer
+/// opens a call session over the WebRTC carrier; this listener does not carry one.
+const SDP_PLAIN_REQUEST: &str = r#"{"error":{"code":"session_carrier_required","message":"an SDP offer opens a realtime call over the WebRTC carrier, which this listener does not carry; send the offer to a listener serving WebRTC","param":null,"type":"server_error"}}"#;
 const MINT_NOT_GRANTED: &str = r#"{"error":{"code":"not_granted","message":"this key is not granted the session's model `m-cap`, so no ephemeral secret is minted for it","param":null,"type":"permission_error"}}"#;
 
 /// THE STATEMENT CARRIES THE DECLARES DOCUMENT (BUSBAR-1.6.0.md l.246, ARCHITECT ruling
@@ -527,6 +534,10 @@ struct Bufs {
     last_units: String,
     /// The need the last answer named for its far request (`0` = none).
     last_need: u32,
+    records: [RecordWrite; 2],
+    /// The audit rows the last answer wrote (`outcome action resource`), or, short, the room it
+    /// needed.
+    last_audit: String,
     /// The caller reference the kernel lends each piece.
     caller: &'static str,
 }
@@ -558,6 +569,8 @@ impl Bufs {
             arena: [0; 256],
             last_units: String::new(),
             last_need: 0,
+            records: [z(); 2],
+            last_audit: String::new(),
             caller: CALLER_REF,
         }
     }
@@ -577,12 +590,33 @@ impl Bufs {
         (i.units_buf, i.units_cap) = (self.units.as_mut_ptr(), self.units.len());
         (i.fields_buf, i.fields_cap) = (self.fields.as_mut_ptr(), self.fields.len());
         (i.arena_buf, i.arena_cap) = (self.arena.as_mut_ptr(), self.arena.len());
+        (i.records_buf, i.records_cap) = (self.records.as_mut_ptr(), self.records.len());
         let mut o: OnPieceOut = z();
         o.head = out_head();
         let mut f = Frame::new(i, o);
         let c = p.call(slot::ON_PIECE, &mut f);
         let o = f.out;
         self.last_need = o.need;
+        self.last_audit = if o.records_needed != 0 {
+            format!("needed {}", o.records_needed)
+        } else {
+            self.records[..o.records_written as usize]
+                .iter()
+                .map(|r| {
+                    let outcome = if r.op == RECORD_AUDIT && r.kind == AUDIT_REJECTED {
+                        "rejected".to_string()
+                    } else {
+                        format!("op{}/kind{}", r.op, r.kind)
+                    };
+                    format!(
+                        "{outcome} {} {}",
+                        at(&self.arena, r.key),
+                        at(&self.arena, r.value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
         self.last_units = if o.units_needed != 0 {
             format!("needed {}", o.units_needed)
         } else {
@@ -635,7 +669,7 @@ const fn attempt(unit: u64, claim: u32) -> Push<'static> {
 
 /// THE UNIT SCRIPT: the mint (busbar mints the ticket itself and dials nothing; the dispatcher here
 /// serves no ticket, so the mint is the served plane's 502), the SDP door's request piece (it opens a
-/// session, so a request piece is refused), a session door's request piece and an unpublished
+/// session, so a plain request is refused 501, explained), a session door's request piece and an unpublished
 /// claim's (the metadata path among them: it is no claim, 1.5.5 parity).
 fn unit_script(p: &Plugin<Plane>) -> Vec<String> {
     let mut t = vec![format!("open {:?}", open(p, 1, SESSION, Some(PUBLIC)).0)];
@@ -663,7 +697,11 @@ fn unit_expected() -> Vec<String> {
             MINT_NOT_GRANTED.len()
         ),
         "mint units []".to_string(),
-        format!("sdp request Refused emitted= more=0 far=false done=false status=0 {none}"),
+        format!(
+            "sdp request Ready emitted={SDP_PLAIN_REQUEST} more=0 far=false done=true status=501 \
+             verb= target= fields=[\"content-type=application/json\", \"content-length={}\"]",
+            SDP_PLAIN_REQUEST.len()
+        ),
         format!("sideband Refused emitted= more=0 far=false done=false status=0 {none}"),
         format!("unpublished Refused emitted= more=0 far=false done=false status=0 {none}"),
         format!("metadata path Refused emitted= more=0 far=false done=false status=0 {none}"),
@@ -2205,6 +2243,14 @@ fn a_mint_for_a_key_outside_the_session_models_grant_is_refused() {
         assert!(!answer.contains(TICKET), "no ticket: {answer}");
         assert_eq!(b.last_units, "", "a refusal bills nothing");
         assert_eq!(b.last_need, 0, "and dials nothing");
+        // THE REFUSAL IS AUDITED WITH ITS REASON (R10 grant ruling 2): the unit's audit row names
+        // the pool the key is not granted, never the key.
+        assert_eq!(
+            b.last_audit,
+            format!("rejected {MINT_AUDIT_ACTION} pool:m-cap"),
+            "{answer}"
+        );
+        assert!(!b.last_audit.contains(CALLER_REF), "the key is never named");
     }
     assert!(
         host.minted
@@ -2213,6 +2259,42 @@ fn a_mint_for_a_key_outside_the_session_models_grant_is_refused() {
             .is_empty(),
         "nothing was minted"
     );
+}
+
+/// AN SDP OFFER THAT ARRIVES AS A PLAIN REQUEST (coordinator ruling 3, R10): the SDP door opens a
+/// call session over the WebRTC carrier; an offer reaching it as a one-request unit (no session)
+/// is refused on its first piece with 501 Not Implemented (RFC 9110 §15.6.2) and a body that says
+/// why, never an empty answer the host reads as the plane's panic. The refusal is audited, nothing
+/// is dialled and no units are reported. RED: the door answered the piece Refused, with nothing.
+/// Both ways, on the caller's piece and on an ATTEMPT piece alike.
+#[test]
+fn an_sdp_offer_arriving_as_a_plain_request_is_refused_501_explained() {
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        for first in [
+            push(81, 1, FROM_CALLER, PIECE_LAST, b"v=0\r\n"),
+            attempt(82, 1),
+        ] {
+            let mut b = Bufs::new(512);
+            let answer = b.call(p, &first);
+            assert_eq!(
+                answer,
+                format!(
+                    "Ready emitted={SDP_PLAIN_REQUEST} more=0 far=false done=true status=501 \
+                     verb= target= fields=[\"content-type=application/json\", \"content-length={}\"]",
+                    SDP_PLAIN_REQUEST.len()
+                )
+            );
+            assert_eq!(b.last_units, "", "a refusal bills nothing");
+            assert_eq!(b.last_need, 0, "and dials nothing");
+            assert_eq!(
+                b.last_audit,
+                format!("rejected {OFFER_AUDIT_ACTION} pool:m-cap")
+            );
+        }
+    }
 }
 
 /// RED-BEFORE-GREEN (THE DESIGN: admission bounds live work, nothing evicts it): an instance holding
