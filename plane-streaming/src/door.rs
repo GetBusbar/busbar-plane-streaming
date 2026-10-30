@@ -598,15 +598,21 @@ pub const REFUSAL_CALLS_FULL: u32 = 2;
 /// [`MAX_BROKERED_CALLS`] live calls (a 429, its words [`CALLS_FULL_TEXT`]).
 pub const REFUSAL_OFFERS_FULL: u32 = 3;
 
-/// The status [`REFUSAL_CALLS_FULL`] and [`REFUSAL_OFFERS_FULL`] wear.
+/// The plane's refusal code for a request unit (the mint door's) arriving while the instance holds
+/// [`MAX_UNITS`] units in flight (a 429, its words [`CALLS_FULL_TEXT`]).
+pub const REFUSAL_UNITS_FULL: u32 = 4;
+
+/// The status [`REFUSAL_CALLS_FULL`], [`REFUSAL_OFFERS_FULL`] and [`REFUSAL_UNITS_FULL`] wear.
 pub const STATUS_CALLS_FULL: u32 = 429;
 
-/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`] is answered with.
+/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`], and a request unit refused at
+/// [`MAX_UNITS`], are answered with.
 pub const CALLS_FULL_TEXT: &str =
     "busbar is holding as many realtime calls as it admits at once; retry once one has ended";
 
-/// The most request units an instance keeps state for at once; past it, a new unit is refused (a
-/// unit in flight is never dropped to make room).
+/// The most request units an instance keeps state for at once; at it, a new unit is refused at its
+/// arrival ([`REFUSAL_UNITS_FULL`]), and a unit admitted alongside others checked at once is refused
+/// at its first piece (a unit in flight is never dropped to make room).
 pub const MAX_UNITS: usize = 4096;
 
 /// The most sideband arrivals whose call is kept until their session opens; past it, a new
@@ -677,6 +683,11 @@ impl Units {
         }
         self.held.insert(unit, held);
         true
+    }
+
+    /// Whether the table holds [`MAX_UNITS`] units: a new unit is refused at its arrival.
+    fn full(&self) -> bool {
+        self.held.len() >= MAX_UNITS
     }
 
     /// A piece of unit `unit` crossed on `ticket`.
@@ -1366,6 +1377,14 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
             out.error(CALLS_FULL_TEXT);
             return Outcome::Refused;
         }
+    }
+    // A REQUEST UNIT (a door that opens no session) on an instance holding as many units as it
+    // keeps is refused before its first piece, in words: no unit in flight is dropped for it.
+    if !a.door.is_session() && instance.get().is_some_and(|p| lock(&p.units).full()) {
+        out.set(|o| &o.refusal, REFUSAL_UNITS_FULL);
+        out.set(|o| &o.refusal_status, STATUS_CALLS_FULL);
+        out.error(CALLS_FULL_TEXT);
+        return Outcome::Refused;
     }
     // THE MINT DOOR DIALS NOTHING: busbar mints the ticket itself (row 132). Its request counts
     // against the caller's caps as any admitted call does.
