@@ -495,7 +495,8 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
 /// forms never read alike.
 ///
 /// # Errors
-/// The grammar's reason when the section is not a `streams:` section.
+/// The grammar's reason when the section is not a `streams:` section, or the section's reason when
+/// its token ceilings conflict ([`StreamsCfg::ceilings_conflict`]), on either form.
 pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
     let Ok(serde_json::Value::Object(mut keyed)) =
         serde_json::from_slice::<serde_json::Value>(settings)
@@ -510,6 +511,9 @@ pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
     } else {
         serde_json::from_value::<StreamsCfg>(section).map_err(|e| e.to_string())?
     };
+    if let Some(reason) = cfg.ceilings_conflict() {
+        return Err(reason);
+    }
     cfg.upstream_model = cfg
         .session
         .model
