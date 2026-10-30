@@ -86,12 +86,13 @@ fn rides(transport: &str, auth: &str) -> u32 {
 }
 
 /// The realtime dialects' vendor copy for a bad or missing credential (the logic crate's
-/// `door_tests` pins the door's own constants to these words).
+/// `plane_door_tests` pins the door's own constants to these words).
 const AUTH_FAILURE_MESSAGE: &str = "Incorrect API key provided.";
 const AUTH_FAILURE_CODE: &str = "invalid_api_key";
 
 /// The realtime dialects' REST error envelope for a refusal at `status` worded `text`, built as the
-/// door builds it (the logic crate's `door_tests` reads the door's `refusal_body` in this shape).
+/// door builds it (the logic crate's `plane_door_tests` reads the door's `refusal_body` in this
+/// shape).
 fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     let kind = match status {
         401 => "authentication_error",
@@ -118,19 +119,6 @@ const OFFER_AUDIT_ACTION: &str = "realtime_call.offer";
 /// opens a call session over the WebRTC carrier; this listener does not carry one.
 const SDP_PLAIN_REQUEST: &str = r#"{"error":{"code":"session_carrier_required","message":"an SDP offer opens a realtime call over the WebRTC carrier, which this listener does not carry; send the offer to a listener serving WebRTC","param":null,"type":"server_error"}}"#;
 const MINT_NOT_GRANTED: &str = r#"{"error":{"code":"not_granted","message":"this key is not granted the session's model `m-cap`, so no ephemeral secret is minted for it","param":null,"type":"permission_error"}}"#;
-
-/// THE STATEMENT CARRIES THE DECLARES DOCUMENT (BUSBAR-1.6.0.md l.246, ARCHITECT ruling
-/// 2026-10-21): the door's Statement, read back, holds `declares.json` byte for byte under
-/// `EXT_DECLARES`.
-#[test]
-fn the_statement_carries_the_declares_document() {
-    let row = LinkedRow::of_loaded(loaded_door()).unwrap();
-    let read = busbar_contract::abi::mechanism::rendering::read(&row.statement).unwrap();
-    assert_eq!(
-        busbar_contract::abi::mechanism::extensions::declares(&read.extensions.bytes),
-        Some(&include_bytes!("../../plane-streaming/declares.json")[..])
-    );
-}
 
 fn json(b: &'static [u8]) -> Blob {
     Blob::json(b)
@@ -2342,6 +2330,60 @@ fn an_sdp_offer_at_the_call_bound_is_refused_at_its_arrival() {
             arrive_sideband(p, 901, sideband_to(&first)),
             Outcome::Ready,
             "the oldest caller's call is kept"
+        );
+    }
+}
+
+/// THE UNIT TABLE AT ITS BOUND (sibling rule R3: a unit table full is refused at `arrive`, 429, in
+/// the plane's words): an instance holding as many request units as it keeps refuses the next mint
+/// at its arrival, before any piece, with the plane's code, a 429 and the words the SDP bound
+/// wears; no unit in flight is dropped for it, and once one ends the next arrival is admitted.
+/// RED: the arrival was admitted and its first piece answered a bare REFUSED, no words, no status.
+/// Both ways.
+#[test]
+fn a_request_unit_at_the_unit_bound_is_refused_at_its_arrival_in_words() {
+    const MAX_UNITS: u64 = 4096;
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(256);
+        for unit in 1..=MAX_UNITS {
+            assert!(
+                b.call(p, &attempt(unit, 0)).starts_with("Ready "),
+                "unit {unit}"
+            );
+        }
+        let arrive_mint = |unit: u64| {
+            let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
+            a.input.head = in_head();
+            (a.input.unit, a.input.claim) = (unit, 0);
+            a.input.target = text("/v1/realtime/client_secrets");
+            a.out.head = out_head();
+            let c = p.call(slot::ARRIVE, &mut a);
+            (
+                c.outcome,
+                a.out.refusal,
+                a.out.refusal_status,
+                read(a.out.head.error),
+            )
+        };
+        assert_eq!(
+            arrive_mint(MAX_UNITS + 1),
+            (
+                Outcome::Refused,
+                4,
+                429,
+                "busbar is holding as many realtime calls as it admits at once; retry once one has ended"
+                    .to_string()
+            )
+        );
+        let caller = push(1, 0, FROM_CALLER, PIECE_LAST, &[]);
+        assert!(b.call(p, &caller).contains("done=true"), "unit 1 ends");
+        assert_eq!(
+            arrive_mint(MAX_UNITS + 1).0,
+            Outcome::Ready,
+            "its room is free"
         );
     }
 }

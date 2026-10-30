@@ -42,11 +42,11 @@ mod claims;
 #[allow(missing_docs)]
 mod codec;
 mod config;
-mod door;
 mod driven;
 mod meta;
 /// What an `on_piece` answer owes the reply buffer across re-calls, and the one settle of its buffers.
 mod piece;
+mod plane_door;
 mod provider;
 mod request_unit;
 mod session;
@@ -60,4 +60,4 @@ mod ticket;
 mod tests;
 
 /// The door: this plugin's one public item.
-pub use door::door;
+pub use plane_door::door;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! Tests for `crates/busbar-plane-streaming/src/door.rs`: the P-item pins the door holds (spec
+//! Tests for `plane-streaming/src/plane_door.rs`: the P-item pins the door holds (spec
 //! DONE item 2, "All P-item behaviours match 1.5.5"), each written against the door as it serves.
 
 use super::*;
