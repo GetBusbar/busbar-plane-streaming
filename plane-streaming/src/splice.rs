@@ -17,6 +17,7 @@
 //! bytes around that object are copied as they arrived. Keys are compared as the far end reads
 //! them, escapes decoded, and a key the caller wrote twice is cut every time it appears.
 
+use busbar_contract::spans::{self, value_end};
 use serde_json::{Map, Value};
 
 use crate::codec::ir::codec::gemini::{setup_from_session_config, setup_locked, GeminiLiveCodec};
@@ -657,90 +658,23 @@ fn ws(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-/// The index past the JSON string starting at `b[i]`.
-fn string_end(b: &[u8], i: usize) -> Option<usize> {
-    let mut j = i + 1;
-    while j < b.len() {
-        match b[j] {
-            b'\\' => j += 2,
-            b'"' => return Some(j + 1),
-            _ => j += 1,
-        }
-    }
-    None
-}
-
-/// The index past the JSON value starting at `b[i]`.
-fn value_end(b: &[u8], i: usize) -> Option<usize> {
-    match b.get(i)? {
-        b'"' => string_end(b, i),
-        b'{' | b'[' => {
-            let mut depth = 0_usize;
-            let mut j = i;
-            while j < b.len() {
-                match b[j] {
-                    b'"' => {
-                        j = string_end(b, j)?;
-                        continue;
-                    }
-                    b'{' | b'[' => depth += 1,
-                    b'}' | b']' => {
-                        depth = depth.checked_sub(1)?;
-                        if depth == 0 {
-                            return Some(j + 1);
-                        }
-                    }
-                    _ => {}
-                }
-                j += 1;
-            }
-            None
-        }
-        _ => {
-            let mut j = i;
-            while j < b.len() && !matches!(b[j], b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
-            {
-                j += 1;
-            }
-            (j > i).then_some(j)
-        }
-    }
-}
-
-/// The members of the object at `b[open]`, and the index past its closing brace.
+/// The members of the object at `b[open]` (the contract's scanner, each key read as JSON), and the
+/// index past its closing brace.
 fn members(b: &[u8], open: usize) -> Option<(Vec<JsonMember>, usize)> {
     if b.get(open) != Some(&b'{') {
         return None;
     }
     let mut out = Vec::new();
-    let mut i = ws(b, open + 1);
-    if b.get(i) == Some(&b'}') {
-        return Some((out, i + 1));
-    }
-    loop {
-        if b.get(i) != Some(&b'"') {
-            return None;
-        }
-        let key_end = string_end(b, i)?;
-        let key: String = serde_json::from_slice(&b[i..key_end]).ok()?;
-        let colon = ws(b, key_end);
-        if b.get(colon) != Some(&b':') {
-            return None;
-        }
-        let start = ws(b, colon + 1);
-        let end = value_end(b, start)?;
-        out.push(JsonMember {
+    let mut keys = true;
+    let (_, close) = spans::scan(b, open, |m| match serde_json::from_slice(m.raw_key) {
+        Ok(key) => out.push(JsonMember {
             key,
-            start: i,
-            value: (start, end),
-        });
-        let next = ws(b, end);
-        match b.get(next)? {
-            b',' => i = ws(b, next + 1),
-            b'}' => return Some((out, next + 1)),
-            _ => return None,
-        }
-    }
+            start: m.key_start,
+            value: (m.value_start, m.value_end),
+        }),
+        Err(_) => keys = false,
+    })?;
+    keys.then_some((out, close + 1))
 }
 
 #[cfg(test)]
