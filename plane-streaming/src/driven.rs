@@ -27,7 +27,7 @@ pub const FIELD_LOCATION: &str = "location";
 /// The head field a whole answer states its length in.
 pub const FIELD_CONTENT_LENGTH: &str = "content-length";
 
-/// The door a claim is, by its index in the snapshot's claims (`crate::door::ROUTES`).
+/// The door a claim is, by its index in the snapshot's claims (`crate::plane_door::ROUTES`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Door {
     /// `POST /v1/realtime/client_secrets`: one ticket for a browser session, minted by busbar.
@@ -60,10 +60,10 @@ impl Door {
         }
     }
 
-    /// The door's line on the guest list: its claim (`crate::door::ROUTES`), in claim order.
+    /// The door's line on the guest list: its claim (`crate::plane_door::ROUTES`), in claim order.
     #[must_use]
-    pub const fn line(self) -> crate::door::Route {
-        crate::door::ROUTES[self as usize]
+    pub const fn line(self) -> crate::plane_door::Route {
+        crate::plane_door::ROUTES[self as usize]
     }
 
     /// The door's dialect, by its index in the tail's dialects: its line's.
@@ -89,10 +89,10 @@ impl Door {
     #[must_use]
     pub const fn rides(self) -> u32 {
         match self {
-            Door::Gemini => crate::door::RIDES_LIVE_SOCKET,
-            Door::Sdp => crate::door::RIDES_REALTIME_CALL,
+            Door::Gemini => crate::plane_door::RIDES_LIVE_SOCKET,
+            Door::Sdp => crate::plane_door::RIDES_REALTIME_CALL,
             Door::Mint | Door::Sideband | Door::Twilio | Door::Realtime => {
-                crate::door::RIDES_REALTIME_SOCKET
+                crate::plane_door::RIDES_REALTIME_SOCKET
             }
         }
     }

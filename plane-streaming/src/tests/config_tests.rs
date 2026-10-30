@@ -121,7 +121,7 @@ fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings(
         ),
     ] {
         let keyed = format!(r#"{{"streams":{blob},"models":{{}}}}"#);
-        let refused = crate::door::read_dealt(keyed.as_bytes()).expect_err(&keyed);
+        let refused = crate::plane_door::read_dealt(keyed.as_bytes()).expect_err(&keyed);
         assert!(refused.contains(words), "{keyed}: {refused}");
     }
     for blob in [
@@ -130,7 +130,7 @@ fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings(
         &br#"{"streams":{}}"#[..],
         &br#"{"streams":null}"#[..],
     ] {
-        let cfg = crate::door::read_dealt(blob).expect("the defaults load");
+        let cfg = crate::plane_door::read_dealt(blob).expect("the defaults load");
         assert_eq!(
             (cfg.max_output_tokens, cfg.context_window_tokens),
             (4096, 32_768)

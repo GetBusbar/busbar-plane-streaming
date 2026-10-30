@@ -1,7 +1,7 @@
 //! The transports the door's routes are carried on ([`WS_TRANSPORT`], [`HTTP_TRANSPORT`]), and a
 //! claim table only the tests (and the voice conformance harness) read.
 //!
-//! The shipped plane publishes its door's routes (`crate::door::ROUTES`). The table below
+//! The shipped plane publishes its door's routes (`crate::plane_door::ROUTES`). The table below
 //! ([`DIALECT_CLAIMS`]) is not published: no door claims it, and its two one-shot operations
 //! (`/v1/audio/*`) are served by no door, so it is compiled for the tests alone. Twilio Media
 //! Streams rides the WebSocket carrier and authenticates under the `webhook-signature` alternative

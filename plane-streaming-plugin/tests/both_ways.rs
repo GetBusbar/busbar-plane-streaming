@@ -86,12 +86,13 @@ fn rides(transport: &str, auth: &str) -> u32 {
 }
 
 /// The realtime dialects' vendor copy for a bad or missing credential (the logic crate's
-/// `door_tests` pins the door's own constants to these words).
+/// `plane_door_tests` pins the door's own constants to these words).
 const AUTH_FAILURE_MESSAGE: &str = "Incorrect API key provided.";
 const AUTH_FAILURE_CODE: &str = "invalid_api_key";
 
 /// The realtime dialects' REST error envelope for a refusal at `status` worded `text`, built as the
-/// door builds it (the logic crate's `door_tests` reads the door's `refusal_body` in this shape).
+/// door builds it (the logic crate's `plane_door_tests` reads the door's `refusal_body` in this
+/// shape).
 fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     let kind = match status {
         401 => "authentication_error",
@@ -2361,7 +2362,10 @@ fn a_request_unit_at_the_unit_bound_is_refused_at_its_arrival_in_words() {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(256);
         for unit in 1..=MAX_UNITS {
-            assert!(b.call(p, &attempt(unit, 0)).starts_with("Ready "), "unit {unit}");
+            assert!(
+                b.call(p, &attempt(unit, 0)).starts_with("Ready "),
+                "unit {unit}"
+            );
         }
         let arrive_mint = |unit: u64| {
             let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
@@ -2370,7 +2374,12 @@ fn a_request_unit_at_the_unit_bound_is_refused_at_its_arrival_in_words() {
             a.input.target = text("/v1/realtime/client_secrets");
             a.out.head = out_head();
             let c = p.call(slot::ARRIVE, &mut a);
-            (c.outcome, a.out.refusal, a.out.refusal_status, read(a.out.head.error))
+            (
+                c.outcome,
+                a.out.refusal,
+                a.out.refusal_status,
+                read(a.out.head.error),
+            )
         };
         assert_eq!(
             arrive_mint(MAX_UNITS + 1),
@@ -2384,7 +2393,11 @@ fn a_request_unit_at_the_unit_bound_is_refused_at_its_arrival_in_words() {
         );
         let caller = push(1, 0, FROM_CALLER, PIECE_LAST, &[]);
         assert!(b.call(p, &caller).contains("done=true"), "unit 1 ends");
-        assert_eq!(arrive_mint(MAX_UNITS + 1).0, Outcome::Ready, "its room is free");
+        assert_eq!(
+            arrive_mint(MAX_UNITS + 1).0,
+            Outcome::Ready,
+            "its room is free"
+        );
     }
 }
 

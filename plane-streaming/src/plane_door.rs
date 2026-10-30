@@ -1896,46 +1896,51 @@ pub fn session_cut_render(dialect: u32, text: &str) -> Vec<u8> {
 // error shape, as JSON, before any upgrade; a live session's budget cut in its own stream. The
 // refusal ends its unit: what the door holds for it as a request unit, a pending sideband call or a
 // session is forgotten.
-slot!(RefusalSlot, RefusalIn, RefusalOut, |instance, input, out| {
-    let given = input;
-    let status = u16::try_from(given.status()).unwrap_or(0);
-    let text = input.text().as_str().unwrap_or_default();
-    let cut = given.reason() == RefusalCode::OverBudget as u32
-        && given.unit() != 0
-        && instance
-            .get()
-            .is_some_and(|p| lock(&p.sessions).served(given.unit()));
-    if let (Some(p), true) = (instance.get(), given.unit() != 0) {
-        p.end_unit(given.unit());
+slot!(
+    RefusalSlot,
+    RefusalIn,
+    RefusalOut,
+    |instance, input, out| {
+        let given = input;
+        let status = u16::try_from(given.status()).unwrap_or(0);
+        let text = input.text().as_str().unwrap_or_default();
+        let cut = given.reason() == RefusalCode::OverBudget as u32
+            && given.unit() != 0
+            && instance
+                .get()
+                .is_some_and(|p| lock(&p.sessions).served(given.unit()));
+        if let (Some(p), true) = (instance.get(), given.unit() != 0) {
+            p.end_unit(given.unit());
+        }
+        let body = if cut {
+            session_cut_render(given.dialect(), text)
+        } else {
+            refusal_render(status, given.reason(), text)
+        };
+        let (mut reply, mut fields, mut arena) =
+            (input.reply_buf(), input.fields_buf(), input.arena_buf());
+        reply.extend(&body);
+        fields.push(OutField {
+            name: arena.span(FIELD_CONTENT_TYPE.as_bytes()),
+            value: arena.span(CONTENT_TYPE_JSON.as_bytes()),
+        });
+        let short = !(reply.fits() && fields.fits() && arena.fits());
+        let (rw, rnd) = reply.settle(short);
+        let (fw, fnd) = fields.settle(short);
+        let (aw, and) = arena.settle(short);
+        out.set(|o| &o.reply_written, rw as u64);
+        out.set(|o| &o.reply_needed, rnd as u64);
+        out.set(|o| &o.fields_written, fw as u32);
+        out.set(|o| &o.fields_needed, fnd as u32);
+        out.set(|o| &o.arena_written, aw as u64);
+        out.set(|o| &o.arena_needed, and as u64);
+        if short {
+            Outcome::Failed
+        } else {
+            Outcome::Ready
+        }
     }
-    let body = if cut {
-        session_cut_render(given.dialect(), text)
-    } else {
-        refusal_render(status, given.reason(), text)
-    };
-    let (mut reply, mut fields, mut arena) =
-        (input.reply_buf(), input.fields_buf(), input.arena_buf());
-    reply.extend(&body);
-    fields.push(OutField {
-        name: arena.span(FIELD_CONTENT_TYPE.as_bytes()),
-        value: arena.span(CONTENT_TYPE_JSON.as_bytes()),
-    });
-    let short = !(reply.fits() && fields.fits() && arena.fits());
-    let (rw, rnd) = reply.settle(short);
-    let (fw, fnd) = fields.settle(short);
-    let (aw, and) = arena.settle(short);
-    out.set(|o| &o.reply_written, rw as u64);
-    out.set(|o| &o.reply_needed, rnd as u64);
-    out.set(|o| &o.fields_written, fw as u32);
-    out.set(|o| &o.fields_needed, fnd as u32);
-    out.set(|o| &o.arena_written, aw as u64);
-    out.set(|o| &o.arena_needed, and as u64);
-    if short {
-        Outcome::Failed
-    } else {
-        Outcome::Ready
-    }
-});
+);
 
 slot!(Serve, ServeIn, ServeOut, |_, _, _out| { Outcome::Refused });
 
@@ -2087,8 +2092,8 @@ busbar_contract::plugin_door! {
 mod ladder_tests;
 
 #[cfg(test)]
-#[path = "tests/door_tests.rs"]
-mod door_tests;
+#[path = "tests/plane_door_tests.rs"]
+mod plane_door_tests;
 
 const _: () = {
     // The ride constants name the needs they say they name.
