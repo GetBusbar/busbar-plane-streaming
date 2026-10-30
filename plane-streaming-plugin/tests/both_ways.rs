@@ -2346,6 +2346,48 @@ fn an_sdp_offer_at_the_call_bound_is_refused_at_its_arrival() {
     }
 }
 
+/// THE UNIT TABLE AT ITS BOUND (sibling rule R3: a unit table full is refused at `arrive`, 429, in
+/// the plane's words): an instance holding as many request units as it keeps refuses the next mint
+/// at its arrival, before any piece, with the plane's code, a 429 and the words the SDP bound
+/// wears; no unit in flight is dropped for it, and once one ends the next arrival is admitted.
+/// RED: the arrival was admitted and its first piece answered a bare REFUSED, no words, no status.
+/// Both ways.
+#[test]
+fn a_request_unit_at_the_unit_bound_is_refused_at_its_arrival_in_words() {
+    const MAX_UNITS: u64 = 4096;
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(256);
+        for unit in 1..=MAX_UNITS {
+            assert!(b.call(p, &attempt(unit, 0)).starts_with("Ready "), "unit {unit}");
+        }
+        let arrive_mint = |unit: u64| {
+            let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
+            a.input.head = in_head();
+            (a.input.unit, a.input.claim) = (unit, 0);
+            a.input.target = text("/v1/realtime/client_secrets");
+            a.out.head = out_head();
+            let c = p.call(slot::ARRIVE, &mut a);
+            (c.outcome, a.out.refusal, a.out.refusal_status, read(a.out.head.error))
+        };
+        assert_eq!(
+            arrive_mint(MAX_UNITS + 1),
+            (
+                Outcome::Refused,
+                4,
+                429,
+                "busbar is holding as many realtime calls as it admits at once; retry once one has ended"
+                    .to_string()
+            )
+        );
+        let caller = push(1, 0, FROM_CALLER, PIECE_LAST, &[]);
+        assert!(b.call(p, &caller).contains("done=true"), "unit 1 ends");
+        assert_eq!(arrive_mint(MAX_UNITS + 1).0, Outcome::Ready, "its room is free");
+    }
+}
+
 // ── AN UNREADABLE USAGE, AND THE HOST LOG ─────────────────────────────────────────────────────────
 
 /// The host's envelope sink, keeping the text of every diagnostic and log record a call carried:
