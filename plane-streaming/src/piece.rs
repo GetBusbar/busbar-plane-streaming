@@ -14,7 +14,8 @@
 //! this logic today; one SDK home for all of them is 1.6.0-QUESTIONS.md PIECE-HOME.
 
 use busbar_contract::abi::plane::{
-    OnPieceIn, OnPieceOut, OutField, UnitCount, EMIT_DONE, EMIT_TO_FAR_END, PIECE_OUT_TEXT,
+    OnPieceIn, OnPieceOut, OutField, RecordWrite, UnitCount, EMIT_DONE, EMIT_TO_FAR_END,
+    PIECE_OUT_TEXT,
 };
 use busbar_contract::abi::sdk::cred::SealedWrite;
 use busbar_contract::abi::sdk::{HostBuf, Lent, Out};
@@ -145,8 +146,15 @@ pub fn settle(
     fields: &HostBuf<'_, OutField>,
     units: &HostBuf<'_, UnitCount>,
     arena: &HostBuf<'_, u8>,
+    records: Option<&HostBuf<'_, RecordWrite>>,
 ) -> bool {
-    let short = !(fields.fits() && units.fits() && arena.fits());
+    let short =
+        !(fields.fits() && units.fits() && arena.fits() && records.is_none_or(HostBuf::fits));
+    if let Some(records) = records {
+        let (rw, rnd) = records.settle(short);
+        out.set(|o| &o.records_written, rw as u32);
+        out.set(|o| &o.records_needed, rnd as u32);
+    }
     let (fw, fnd) = fields.settle(short);
     let (uw, und) = units.settle(short);
     let (aw, and) = arena.settle(short);

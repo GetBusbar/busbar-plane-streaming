@@ -61,13 +61,13 @@ use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
 use busbar_contract::abi::plane::{
     class_of, reason_of, ArriveIn, ArriveOut, BillableClass, DialectAuth, OnPieceIn, OnPieceOut,
     OpClass, OutField, PlaneCancelIn, PlaneCancelOut, PlaneDriveIn, PlaneDriveOut, PlaneOpenIn,
-    PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RefusalClass,
-    RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT,
-    CANCEL_ABORTED, CANCEL_OK_PARTIAL, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER,
-    FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION, INGRESS_REQUEST_RESPONSE, PIECE_CUT,
-    PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT, PIECE_REFUSED, PRINCIPAL_REQUIRED, ROUTE_DIRECT,
-    SHAPE_PIECEWISE, SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_FLOOR,
-    UNITS_REPORTED,
+    PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RecordWrite,
+    RefusalClass, RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT,
+    AUDIT_REJECTED, CANCEL_ABORTED, CANCEL_OK_PARTIAL, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END,
+    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION, INGRESS_REQUEST_RESPONSE,
+    PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT, PIECE_REFUSED, PRINCIPAL_REQUIRED,
+    RECORD_AUDIT, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE,
+    UNITS_FLOOR, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
@@ -79,7 +79,7 @@ use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 use crate::claims::{HTTP_TRANSPORT, WEBRTC_TRANSPORT, WS_TRANSPORT};
 use crate::codec::ir::config::SessionConfig;
 use crate::config::StreamsCfg;
-use crate::driven::{Door, FIELD_CONTENT_LENGTH};
+use crate::driven::{Door, Rejected, Reply, FIELD_CONTENT_LENGTH};
 use crate::meta;
 use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME, TWILIO_MEDIA_STREAMS};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
@@ -191,7 +191,11 @@ const DIALECT_AUTH: &[DialectAuth] = &[
     dialect_auth(4, LIVE_STYLE),
 ];
 
-const SCOPE_KINDS: &[AbiStr] = &[abi_str(SCOPE)];
+/// The scope kind the kernel's pool guard judges a routed entry by (a key's `allowed_pools`), which
+/// the mint door asks `entitlement.check` over for the entry its ticket's call will be routed to.
+const POOL_SCOPE: &str = "pool";
+
+const SCOPE_KINDS: &[AbiStr] = &[abi_str(SCOPE), abi_str(POOL_SCOPE)];
 
 /// The one operation every door serves: a session open (or the ticket one is opened with).
 const OP_CLASSES: &[OpClass] = &[OpClass {
@@ -956,6 +960,30 @@ impl Plane {
             .map_err(|_| MINTED_NONE.to_string())
     }
 
+    /// THE ENTRY A MINT'S GRANT MUST REACH: the session's model as the newest generation names it,
+    /// the DIRECT entry an SDP offer on the minted ticket is routed to (`Arrive`). `None` = the
+    /// section names no model, so the call has no entry and the mint none to judge.
+    fn mint_entry(&self) -> Option<String> {
+        let generations = lock(&self.generations);
+        generations
+            .last()
+            .and_then(|(cfg, _, _)| cfg.session.model.clone())
+    }
+
+    /// WHETHER THE UNIT'S KEY IS GRANTED `entry` (`entitlement.check` over the pool scope, the one
+    /// the kernel's pool guard judges a routed entry by): a mint routes nowhere (it dials nothing),
+    /// so the plane asks before it mints, never after. Anything but the host's "entitled" is a
+    /// refusal: a declined or broken check (R10 grant ruling: refuse, never default open). An
+    /// instance the host lent no services can mint nothing at all, so its mint answers that
+    /// failure ([`MINTED_NONE`]) and not a grant it was never asked about.
+    fn mint_granted(&self, entry: &str) -> bool {
+        self.services.as_ref().is_none_or(|services| {
+            services
+                .entitled(UNTICKETED, &format!("{POOL_SCOPE}:{entry}"))
+                .unwrap_or(false)
+        })
+    }
+
     /// TAKE what admitted the unit this crossing serves (`ticket.take`): `Some` a ticket's record,
     /// `None` a key, or the host's refusal (no such unit, or taken already).
     fn take_ticket(&self) -> Result<Option<Vec<u8>>, ()> {
@@ -1012,7 +1040,9 @@ impl Plane {
     }
 
     /// A unit arriving on claim `claim`, under the newest live generation's session params. `None`
-    /// for a claim the plane never published, and for a door that opens a live session.
+    /// for a claim the plane never published, and for a door that opens a live session, except the
+    /// SDP door: an offer reaching it as a plain request is held to be refused 501, explained
+    /// ([`RequestUnit::plain_offer`]).
     fn held(&self, claim: u32) -> Option<Held> {
         let door = Door::of(claim)?;
         // The ticket binds the browser's session to the section's session under its two token
@@ -1020,7 +1050,11 @@ impl Plane {
         let locked = lock(&self.generations)
             .last()
             .map(|(_, locked, _)| Arc::clone(locked))?;
-        let unit = RequestUnit::open(door, locked)?;
+        let unit = match RequestUnit::open(door, Arc::clone(&locked)) {
+            Some(unit) => unit,
+            None if door == Door::Sdp => RequestUnit::plain_offer(locked, self.mint_entry()),
+            None => return None,
+        };
         Some(Held {
             unit,
             owed: Owed::default(),
@@ -1418,29 +1452,60 @@ fn answer_piece(
         Answer::Nothing => (Outcome::Ready, false),
         Answer::Refused => (Outcome::Refused, true),
         Answer::Mint { ttl_secs, record } => {
-            let minted = held.unit.minted(p.mint_ticket(ttl_secs, &record));
-            answer_piece(p, held, minted, input, out)
+            // THE GRANT FIRST (R10 grant ruling): a key outside the session model's grant gets no
+            // ticket; nothing is minted and nothing is dialled.
+            let answer = match p.mint_entry() {
+                Some(entry) if !p.mint_granted(&entry) => held.unit.not_granted(&entry),
+                _ => held.unit.minted(p.mint_ticket(ttl_secs, &record)),
+            };
+            answer_piece(p, held, answer, input, out)
         }
-        Answer::ToCaller(reply) => {
-            // A ticket placed no call on the operator's account: the mint reports no units. The
-            // session's fee is incurred when the provider answers busbar's call for it.
-            let (mut fields, units, mut arena) =
-                (input.fields_buf(), input.units_buf(), input.arena_buf());
-            // A one-request door's answer is WHOLE: its head states its length, so the caller is
-            // answered under it, never chunked (the serve path sends a whole
-            // answer under the length its head states).
-            let mut head = reply.fields.clone();
-            head.push((FIELD_CONTENT_LENGTH, reply.body.len().to_string()));
-            push_fields(&mut fields, &mut arena, &head);
-            if piece::settle(out, &fields, &units, &arena) {
-                held.short = Some(Answer::ToCaller(reply));
-                return (Outcome::Failed, false);
-            }
-            out.set(|o| &o.reply_status, u32::from(reply.status));
-            let done = held.owed.owe_body(reply.body, EMIT_DONE, input, out);
-            (Outcome::Ready, done)
-        }
+        Answer::ToCaller(reply) => to_caller(held, reply, None, input, out),
+        Answer::Rejected(reply, row) => to_caller(held, reply, Some(row), input, out),
     }
+}
+
+/// The caller's whole answer `reply`, with the unit's audit row `row` of a refusal the door
+/// answered itself (outcome `rejected`).
+fn to_caller(
+    held: &mut Held,
+    reply: Reply,
+    row: Option<Rejected>,
+    input: Lent<'_, OnPieceIn>,
+    out: &mut Out<'_, OnPieceOut>,
+) -> (Outcome, bool) {
+    // A ticket placed no call on the operator's account: the mint reports no units. The
+    // session's fee is incurred when the provider answers busbar's call for it.
+    let (mut fields, units, mut arena, mut records) = (
+        input.fields_buf(),
+        input.units_buf(),
+        input.arena_buf(),
+        input.records_buf(),
+    );
+    // A one-request door's answer is WHOLE: its head states its length, so the caller is
+    // answered under it, never chunked (the serve path sends a whole
+    // answer under the length its head states).
+    let mut head = reply.fields.clone();
+    head.push((FIELD_CONTENT_LENGTH, reply.body.len().to_string()));
+    push_fields(&mut fields, &mut arena, &head);
+    if let Some(row) = &row {
+        records.push(RecordWrite {
+            kind: AUDIT_REJECTED,
+            op: RECORD_AUDIT,
+            key: arena.span(row.action.as_bytes()),
+            value: arena.span(row.resource.as_bytes()),
+        });
+    }
+    if piece::settle(out, &fields, &units, &arena, Some(&records)) {
+        held.short = Some(match row {
+            Some(row) => Answer::Rejected(reply, row),
+            None => Answer::ToCaller(reply),
+        });
+        return (Outcome::Failed, false);
+    }
+    out.set(|o| &o.reply_status, u32::from(reply.status));
+    let done = held.owed.owe_body(reply.body, EMIT_DONE, input, out);
+    (Outcome::Ready, done)
 }
 
 /// A live session's piece (`stream != 0`), answered by its [`crate::session_door::Live`]: the
@@ -1627,7 +1692,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     if let Some((_, pairs)) = &head {
         push_fields(&mut fields, &mut arena, pairs);
     }
-    if piece::settle(out, &fields, &units, &arena) {
+    if piece::settle(out, &fields, &units, &arena, None) {
         // Short as a whole: the re-call carries the same piece, answered from here.
         if near {
             live.short_near = Some(emit);
@@ -1646,9 +1711,14 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                 out.set(|o| &o.target, path);
             }
             out.set(|o| &o.need, door.rides());
-            // A realtime dialect's frame is a JSON text message on its socket.
-            live.near
-                .owe(&frame, EMIT_TO_FAR_END | PIECE_OUT_TEXT, input, out);
+            // A realtime dialect's frame is a JSON text message on its socket; the SDP door's
+            // opening call (busbar's call form) is the body of the open that dials the far end.
+            let flags = if live.take_opening() {
+                EMIT_TO_FAR_END
+            } else {
+                EMIT_TO_FAR_END | PIECE_OUT_TEXT
+            };
+            live.near.owe(&frame, flags, input, out);
             false
         }
         Some((Side::Caller, frame)) => {
