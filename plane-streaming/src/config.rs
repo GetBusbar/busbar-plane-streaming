@@ -146,9 +146,9 @@ pub struct StreamsCfg {
     #[serde(default = "default_max_output_tokens")]
     pub max_output_tokens: u32,
     /// The wire model a session's provider dial names, when the catalog entry `session.model`
-    /// names sets an `upstream_model` (a model entry's override, else its name). Read
-    /// from the `models` section the host hands beside this one ([`crate::plane_door::read_dealt`]), never
-    /// a key of `streams:`.
+    /// names sets an `upstream_model` (a model entry's override, else its name). Read from the
+    /// `models` section the host hands beside this one ([`crate::plane_door::read_dealt`]), never a
+    /// key of `streams:`.
     #[serde(skip)]
     pub upstream_model: Option<String>,
     /// THE BROWSER'S MEDIA LISTENER (row 132): where the SDP door's media associations arrive.

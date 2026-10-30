@@ -610,9 +610,9 @@ pub const STATUS_CALLS_FULL: u32 = 429;
 pub const CALLS_FULL_TEXT: &str =
     "busbar is holding as many realtime calls as it admits at once; retry once one has ended";
 
-/// The most request units an instance keeps state for at once; at it, a new unit is refused at its
-/// arrival ([`REFUSAL_UNITS_FULL`]), and a unit admitted alongside others checked at once is refused
-/// at its first piece (a unit in flight is never dropped to make room).
+/// The most request units an instance keeps state for at once; at it, a new unit is refused at
+/// its arrival ([`REFUSAL_UNITS_FULL`]), and a unit admitted alongside others checked at once is
+/// refused at its first piece (a unit in flight is never dropped to make room).
 pub const MAX_UNITS: usize = 4096;
 
 /// The most sideband arrivals whose call is kept until their session opens; past it, a new
