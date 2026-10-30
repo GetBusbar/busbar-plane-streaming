@@ -18,9 +18,10 @@ use busbar_contract::abi::mechanism::lifecycle::{
 };
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneOpenIn, PlaneOpenOut,
-    PlaneRefreshOut, PlaneSnapshot, UnitCount, CANCEL_ABORTED, CANCEL_OK_PARTIAL, CLAIM_EXACT,
-    CLAIM_OPEN, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
-    PIECE_HAS_STATUS, PIECE_LAST,
+    PlaneRefreshOut, PlaneSnapshot, RecordWrite, UnitCount, AUDIT_REJECTED, CANCEL_ABORTED,
+    CANCEL_OK_PARTIAL, CLAIM_EXACT, CLAIM_OPEN, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END,
+    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
+    RECORD_AUDIT,
 };
 use busbar_plane_streaming::door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -106,10 +107,17 @@ fn refusal_body(status: u16, text: &str) -> Vec<u8> {
     .expect("the envelope serializes")
 }
 
-/// The served plane's 502 for a mint the host served no ticket for (the logic crate's
-/// `driven_tests` pins `mint_failed`'s text to this shape, and its `door` names the reason).
-const MINT_FAILED: &str =
-    "streaming ephemeral-secret mint failed: ephemeral token mint failed: the host minted no ticket";
+/// The mint door's 403 when the host does not entitle the key to the session's model (R10 grant
+/// ruling): a host that serves no `entitlement.check` entitles nothing, so no ticket is asked for
+/// (the logic crate's `request_unit_tests` pins the envelope).
+/// The audit action a mint door's refusal is recorded under.
+const MINT_AUDIT_ACTION: &str = "realtime_ticket.mint";
+/// The audit action an SDP offer's refusal is recorded under.
+const OFFER_AUDIT_ACTION: &str = "realtime_call.offer";
+/// THE SDP DOOR'S ANSWER TO A PLAIN REQUEST (RFC 9110 section 15.6.2, 501 Not Implemented): the offer
+/// opens a call session over the WebRTC carrier; this listener does not carry one.
+const SDP_PLAIN_REQUEST: &str = r#"{"error":{"code":"session_carrier_required","message":"an SDP offer opens a realtime call over the WebRTC carrier, which this listener does not carry; send the offer to a listener serving WebRTC","param":null,"type":"server_error"}}"#;
+const MINT_NOT_GRANTED: &str = r#"{"error":{"code":"not_granted","message":"this key is not granted the session's model `m-cap`, so no ephemeral secret is minted for it","param":null,"type":"permission_error"}}"#;
 
 /// THE STATEMENT CARRIES THE DECLARES DOCUMENT (BUSBAR-1.6.0.md l.246, ARCHITECT ruling
 /// 2026-10-21): the door's Statement, read back, holds `declares.json` byte for byte under
@@ -527,6 +535,12 @@ struct Bufs {
     last_units: String,
     /// The need the last answer named for its far request (`0` = none).
     last_need: u32,
+    records: [RecordWrite; 2],
+    /// The flags the last answer stated (`EMIT_*`, `PIECE_OUT_TEXT`).
+    last_flags: u32,
+    /// The audit rows the last answer wrote (`outcome action resource`), or, short, the room it
+    /// needed.
+    last_audit: String,
     /// The caller reference the kernel lends each piece.
     caller: &'static str,
 }
@@ -558,6 +572,9 @@ impl Bufs {
             arena: [0; 256],
             last_units: String::new(),
             last_need: 0,
+            records: [z(); 2],
+            last_flags: 0,
+            last_audit: String::new(),
             caller: CALLER_REF,
         }
     }
@@ -577,12 +594,34 @@ impl Bufs {
         (i.units_buf, i.units_cap) = (self.units.as_mut_ptr(), self.units.len());
         (i.fields_buf, i.fields_cap) = (self.fields.as_mut_ptr(), self.fields.len());
         (i.arena_buf, i.arena_cap) = (self.arena.as_mut_ptr(), self.arena.len());
+        (i.records_buf, i.records_cap) = (self.records.as_mut_ptr(), self.records.len());
         let mut o: OnPieceOut = z();
         o.head = out_head();
         let mut f = Frame::new(i, o);
         let c = p.call(slot::ON_PIECE, &mut f);
         let o = f.out;
         self.last_need = o.need;
+        self.last_flags = o.flags;
+        self.last_audit = if o.records_needed != 0 {
+            format!("needed {}", o.records_needed)
+        } else {
+            self.records[..o.records_written as usize]
+                .iter()
+                .map(|r| {
+                    let outcome = if r.op == RECORD_AUDIT && r.kind == AUDIT_REJECTED {
+                        "rejected".to_string()
+                    } else {
+                        format!("op{}/kind{}", r.op, r.kind)
+                    };
+                    format!(
+                        "{outcome} {} {}",
+                        at(&self.arena, r.key),
+                        at(&self.arena, r.value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
         self.last_units = if o.units_needed != 0 {
             format!("needed {}", o.units_needed)
         } else {
@@ -635,7 +674,7 @@ const fn attempt(unit: u64, claim: u32) -> Push<'static> {
 
 /// THE UNIT SCRIPT: the mint (busbar mints the ticket itself and dials nothing; the dispatcher here
 /// serves no ticket, so the mint is the served plane's 502), the SDP door's request piece (it opens a
-/// session, so a request piece is refused), a session door's request piece and an unpublished
+/// session, so a plain request is refused 501, explained), a session door's request piece and an unpublished
 /// claim's (the metadata path among them: it is no claim, 1.5.5 parity).
 fn unit_script(p: &Plugin<Plane>) -> Vec<String> {
     let mut t = vec![format!("open {:?}", open(p, 1, SESSION, Some(PUBLIC)).0)];
@@ -658,12 +697,16 @@ fn unit_expected() -> Vec<String> {
         "open Ready".to_string(),
         format!("mint attempt Ready emitted= more=0 far=false done=false status=0 {none}"),
         format!(
-            "mint caller Ready emitted={MINT_FAILED} more=0 far=false done=true status=502 \
-             verb= target= fields=[\"content-length={}\"]",
-            MINT_FAILED.len()
+            "mint caller Ready emitted={MINT_NOT_GRANTED} more=0 far=false done=true status=403 \
+             verb= target= fields=[\"content-type=application/json\", \"content-length={}\"]",
+            MINT_NOT_GRANTED.len()
         ),
         "mint units []".to_string(),
-        format!("sdp request Refused emitted= more=0 far=false done=false status=0 {none}"),
+        format!(
+            "sdp request Ready emitted={SDP_PLAIN_REQUEST} more=0 far=false done=true status=501 \
+             verb= target= fields=[\"content-type=application/json\", \"content-length={}\"]",
+            SDP_PLAIN_REQUEST.len()
+        ),
         format!("sideband Refused emitted= more=0 far=false done=false status=0 {none}"),
         format!("unpublished Refused emitted= more=0 far=false done=false status=0 {none}"),
         format!("metadata path Refused emitted= more=0 far=false done=false status=0 {none}"),
@@ -760,12 +803,28 @@ struct TicketHost {
     draws: std::sync::atomic::AtomicU64,
     /// The record the last mint stored beside its ticket.
     minted: std::sync::Mutex<Vec<u8>>,
+    /// The `pool:<entry>` targets the key is granted (`entitlement.check`).
+    granted: &'static [&'static str],
 }
 
 /// The record unit 50's ticket locks: a session config naming its instructions.
 const TICKET_RECORD: &[u8] = br#"{"instructions":"from-ticket"}"#;
 
 impl busbar_contract::services::double::ServicesDouble for TicketHost {
+    fn entitlement_check(
+        &self,
+        _caller: &busbar_contract::services::Caller,
+        _unit: Option<u64>,
+        target: &str,
+    ) -> busbar_contract::services::Stored {
+        use busbar_contract::abi::host::service::{ENTITLED, NOT_ENTITLED};
+        busbar_contract::services::Stored::ready(if self.granted.contains(&target) {
+            ENTITLED
+        } else {
+            NOT_ENTITLED
+        })
+    }
+
     fn ticket_mint(
         &self,
         _caller: &busbar_contract::services::Caller,
@@ -816,11 +875,18 @@ impl busbar_contract::services::double::ServicesDouble for TicketHost {
     }
 }
 
-/// A dispatcher whose host serves tickets and randomness ([`TicketHost`]), and that host.
+/// A dispatcher whose host serves tickets and randomness ([`TicketHost`]) to a key granted the
+/// session's model (`pool:m-cap`), and that host.
 fn ticket_host() -> (Dispatcher, Arc<TicketHost>) {
+    ticket_host_granting(&["pool:m-cap"])
+}
+
+/// [`ticket_host`] for a key granted exactly `granted`.
+fn ticket_host_granting(granted: &'static [&'static str]) -> (Dispatcher, Arc<TicketHost>) {
     let host = Arc::new(TicketHost {
         draws: std::sync::atomic::AtomicU64::new(0xa0),
         minted: std::sync::Mutex::new(Vec::new()),
+        granted,
     });
     let d = Dispatcher::with_services(DispatchConfig::default(), host.clone());
     (d, host)
@@ -2084,6 +2150,13 @@ fn the_sdp_door_places_busbars_call_locked_to_its_ticket_and_the_sideband_resolv
             "the session the ticket locked, in the GA shape: {call}"
         );
         assert_eq!(b.last_need, rides("webrtc", "bearer"));
+        // The form is the body of the composed open busbar dials (the description of the upstream
+        // leg completes it), not a text message on a socket: a text message rides no opening.
+        assert_eq!(
+            b.last_flags & PIECE_OUT_TEXT,
+            0,
+            "busbar's call form is the open's body, never a text message: {call}"
+        );
         // The provider's answer to busbar's call names its own call.
         let upstream = [Field {
             name: text("location"),
@@ -2161,6 +2234,78 @@ fn the_mint_door_answers_the_ticket_busbar_minted() {
         );
         assert_eq!(b.last_units, "", "a ticket bills nothing");
         assert_eq!(b.last_need, 0, "and dials nothing");
+    }
+}
+
+/// A KEY OUTSIDE THE SESSION MODEL'S GRANT GETS NO TICKET (R10 grant ruling): the mint door asks
+/// `entitlement.check` for `pool:<the session's model>` before it mints, and a key the host does not
+/// entitle is refused 403 in the OpenAI error envelope: nothing minted, no record stored, nothing
+/// dialled, no units. Both ways.
+#[test]
+fn a_mint_for_a_key_outside_the_session_models_grant_is_refused() {
+    let (d, host) = ticket_host_granting(&["pool:another-model"]);
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(512);
+        let answer = b.call(p, &push(71, 0, FROM_CALLER, PIECE_LAST, &[]));
+        assert!(answer.contains("status=403"), "{answer}");
+        assert!(answer.contains("not_granted"), "{answer}");
+        assert!(answer.contains("m-cap"), "{answer}");
+        assert!(!answer.contains(TICKET), "no ticket: {answer}");
+        assert_eq!(b.last_units, "", "a refusal bills nothing");
+        assert_eq!(b.last_need, 0, "and dials nothing");
+        // THE REFUSAL IS AUDITED WITH ITS REASON (R10 grant ruling 2): the unit's audit row names
+        // the pool the key is not granted, never the key.
+        assert_eq!(
+            b.last_audit,
+            format!("rejected {MINT_AUDIT_ACTION} pool:m-cap"),
+            "{answer}"
+        );
+        assert!(!b.last_audit.contains(CALLER_REF), "the key is never named");
+    }
+    assert!(
+        host.minted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty(),
+        "nothing was minted"
+    );
+}
+
+/// AN SDP OFFER THAT ARRIVES AS A PLAIN REQUEST (coordinator ruling 3, R10): the SDP door opens a
+/// call session over the WebRTC carrier; an offer reaching it as a one-request unit (no session)
+/// is refused on its first piece with 501 Not Implemented (RFC 9110 section 15.6.2) and a body that says
+/// why, never an empty answer the host reads as the plane's panic. The refusal is audited, nothing
+/// is dialled and no units are reported. RED: the door answered the piece Refused, with nothing.
+/// Both ways, on the caller's piece and on an ATTEMPT piece alike.
+#[test]
+fn an_sdp_offer_arriving_as_a_plain_request_is_refused_501_explained() {
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        for first in [
+            push(81, 1, FROM_CALLER, PIECE_LAST, b"v=0\r\n"),
+            attempt(82, 1),
+        ] {
+            let mut b = Bufs::new(512);
+            let answer = b.call(p, &first);
+            assert_eq!(
+                answer,
+                format!(
+                    "Ready emitted={SDP_PLAIN_REQUEST} more=0 far=false done=true status=501 \
+                     verb= target= fields=[\"content-type=application/json\", \"content-length={}\"]",
+                    SDP_PLAIN_REQUEST.len()
+                )
+            );
+            assert_eq!(b.last_units, "", "a refusal bills nothing");
+            assert_eq!(b.last_need, 0, "and dials nothing");
+            assert_eq!(
+                b.last_audit,
+                format!("rejected {OFFER_AUDIT_ACTION} pool:m-cap")
+            );
+        }
     }
 }
 
