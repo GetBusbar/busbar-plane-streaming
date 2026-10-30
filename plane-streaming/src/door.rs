@@ -1711,9 +1711,14 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                 out.set(|o| &o.target, path);
             }
             out.set(|o| &o.need, door.rides());
-            // A realtime dialect's frame is a JSON text message on its socket.
-            live.near
-                .owe(&frame, EMIT_TO_FAR_END | PIECE_OUT_TEXT, input, out);
+            // A realtime dialect's frame is a JSON text message on its socket; the SDP door's
+            // opening call (busbar's call form) is the body of the open that dials the far end.
+            let flags = if live.take_opening() {
+                EMIT_TO_FAR_END
+            } else {
+                EMIT_TO_FAR_END | PIECE_OUT_TEXT
+            };
+            live.near.owe(&frame, flags, input, out);
             false
         }
         Some((Side::Caller, frame)) => {
