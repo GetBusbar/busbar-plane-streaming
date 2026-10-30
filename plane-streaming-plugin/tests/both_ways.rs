@@ -20,7 +20,8 @@ use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneOpenIn, PlaneOpenOut,
     PlaneRefreshOut, PlaneSnapshot, RecordWrite, UnitCount, AUDIT_REJECTED, CANCEL_ABORTED,
     CANCEL_OK_PARTIAL, CLAIM_EXACT, CLAIM_OPEN, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END,
-    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, RECORD_AUDIT,
+    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT,
+    RECORD_AUDIT,
 };
 use busbar_plane_streaming::door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -535,6 +536,8 @@ struct Bufs {
     /// The need the last answer named for its far request (`0` = none).
     last_need: u32,
     records: [RecordWrite; 2],
+    /// The flags the last answer stated (`EMIT_*`, `PIECE_OUT_TEXT`).
+    last_flags: u32,
     /// The audit rows the last answer wrote (`outcome action resource`), or, short, the room it
     /// needed.
     last_audit: String,
@@ -570,6 +573,7 @@ impl Bufs {
             last_units: String::new(),
             last_need: 0,
             records: [z(); 2],
+            last_flags: 0,
             last_audit: String::new(),
             caller: CALLER_REF,
         }
@@ -597,6 +601,7 @@ impl Bufs {
         let c = p.call(slot::ON_PIECE, &mut f);
         let o = f.out;
         self.last_need = o.need;
+        self.last_flags = o.flags;
         self.last_audit = if o.records_needed != 0 {
             format!("needed {}", o.records_needed)
         } else {
@@ -2145,6 +2150,13 @@ fn the_sdp_door_places_busbars_call_locked_to_its_ticket_and_the_sideband_resolv
             "the session the ticket locked, in the GA shape: {call}"
         );
         assert_eq!(b.last_need, rides("webrtc", "bearer"));
+        // The form is the body of the composed open busbar dials (the description of the upstream
+        // leg completes it), not a text message on a socket: a text message rides no opening.
+        assert_eq!(
+            b.last_flags & PIECE_OUT_TEXT,
+            0,
+            "busbar's call form is the open's body, never a text message: {call}"
+        );
         // The provider's answer to busbar's call names its own call.
         let upstream = [Field {
             name: text("location"),
