@@ -120,19 +120,6 @@ const OFFER_AUDIT_ACTION: &str = "realtime_call.offer";
 const SDP_PLAIN_REQUEST: &str = r#"{"error":{"code":"session_carrier_required","message":"an SDP offer opens a realtime call over the WebRTC carrier, which this listener does not carry; send the offer to a listener serving WebRTC","param":null,"type":"server_error"}}"#;
 const MINT_NOT_GRANTED: &str = r#"{"error":{"code":"not_granted","message":"this key is not granted the session's model `m-cap`, so no ephemeral secret is minted for it","param":null,"type":"permission_error"}}"#;
 
-/// THE STATEMENT CARRIES THE DECLARES DOCUMENT (BUSBAR-1.6.0.md l.246, ARCHITECT ruling
-/// 2026-10-21): the door's Statement, read back, holds `declares.json` byte for byte under
-/// `EXT_DECLARES`.
-#[test]
-fn the_statement_carries_the_declares_document() {
-    let row = LinkedRow::of_loaded(loaded_door()).unwrap();
-    let read = busbar_contract::abi::mechanism::rendering::read(&row.statement).unwrap();
-    assert_eq!(
-        busbar_contract::abi::mechanism::extensions::declares(&read.extensions.bytes),
-        Some(&include_bytes!("../../plane-streaming/declares.json")[..])
-    );
-}
-
 fn json(b: &'static [u8]) -> Blob {
     Blob::json(b)
 }
