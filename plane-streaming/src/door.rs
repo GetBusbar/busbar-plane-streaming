@@ -67,7 +67,7 @@ use busbar_contract::abi::plane::{
     SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_FLOOR, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
-use busbar_contract::abi::sdk::life::Refusal as Refused;
+use busbar_contract::abi::sdk::life::Refusal;
 use busbar_contract::abi::sdk::plane::{cancel_disposition, UnitCancel};
 use busbar_contract::abi::sdk::plane_life::{self as life, PlaneLife};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
@@ -1177,12 +1177,12 @@ impl PlaneLife for Plane {
         &self.snapshots
     }
 
-    fn validate(settings: &[u8]) -> Result<(), Refused> {
-        read_dealt(settings).map(|_| ()).map_err(Refused::refused)
+    fn validate(settings: &[u8]) -> Result<(), Refusal> {
+        read_dealt(settings).map(|_| ()).map_err(Refusal::refused)
     }
 
-    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<life::Opened<Self>, Refused> {
-        let cfg = read_dealt(input.open().settings().bytes()).map_err(Refused::refused)?;
+    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<life::Opened<Self>, Refusal> {
+        let cfg = read_dealt(input.open().settings().bytes()).map_err(Refusal::refused)?;
         let public_url = input
             .public_url()
             .as_str()
@@ -1207,8 +1207,8 @@ impl PlaneLife for Plane {
         Ok(life::Opened { plane, first })
     }
 
-    fn refresh(&self, settings: &[u8], generation: u64) -> Result<life::Published<()>, Refused> {
-        let cfg = read_dealt(settings).map_err(Refused::refused)?;
+    fn refresh(&self, settings: &[u8], generation: u64) -> Result<life::Published<()>, Refusal> {
+        let cfg = read_dealt(settings).map_err(Refusal::refused)?;
         Ok(self.publish(generation, cfg))
     }
 
@@ -1896,7 +1896,7 @@ pub fn session_cut_render(dialect: u32, text: &str) -> Vec<u8> {
 // error shape, as JSON, before any upgrade; a live session's budget cut in its own stream. The
 // refusal ends its unit: what the door holds for it as a request unit, a pending sideband call or a
 // session is forgotten.
-slot!(Refusal, RefusalIn, RefusalOut, |instance, input, out| {
+slot!(RefusalSlot, RefusalIn, RefusalOut, |instance, input, out| {
     let given = input;
     let status = u16::try_from(given.status()).unwrap_or(0);
     let text = input.text().as_str().unwrap_or_default();
@@ -2056,21 +2056,28 @@ busbar_contract::statement_extensions!(
     )]
 );
 
-busbar_contract::plugin_door! {
-    ops: busbar_contract::abi::plane::Ops,
-    statement: {
-        let mut s = statement(NAME, VERSION, 64)
+/// The most calls the kernel keeps in flight on one instance.
+const MAX_INFLIGHT: u32 = 64;
+
+/// The Statement: the plane's name and version, its sections, its needs, its tail, its extensions
+/// and the mark words its issued ids carry.
+pub const STATEMENT: busbar_contract::abi::mechanism::door::Statement =
+    busbar_contract::abi::mechanism::door::Statement {
+        extensions: EXTENSIONS,
+        mark_words: MARK_WORDS.as_ptr(),
+        mark_words_len: MARK_WORDS.len(),
+        ..statement(NAME, VERSION, MAX_INFLIGHT)
             .with_sections(SECTIONS)
             .with_needs(NEEDS)
-            .with_kind_tail(TAIL);
-        s.extensions = EXTENSIONS;
-        s.mark_words = MARK_WORDS.as_ptr();
-        s.mark_words_len = MARK_WORDS.len();
-        s
-    },
+            .with_kind_tail(TAIL)
+    };
+
+busbar_contract::plugin_door! {
+    ops: busbar_contract::abi::plane::Ops,
+    statement: STATEMENT,
     lifecycle: plane_life(Plane),
     kind_ops: {
-        arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<Refusal>, serve: Safe<Serve>,
+        arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<RefusalSlot>, serve: Safe<Serve>,
         hydrate: Safe<Hydrate>, start: Safe<Start>, project: Safe<Project>,
     },
 }
