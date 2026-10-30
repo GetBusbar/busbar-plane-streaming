@@ -1,24 +1,5 @@
-# busbar-plane-streaming — THE STREAMING PLANE, as an identity over the duplex/session dialects.
-#
-# WHAT THIS CRATE IS. One implementation of the plugin contract's plane kind for busbar's STREAMING
-# surface: long-lived, bidirectional, per-turn-governed sessions. Its dialects are the duplex/live
-# ones — `openai-realtime` and `gemini-live` (the live realtime VOICE dialect is one of them, not the
-# plane's name), the `twilio-media-streams` telephony grammar, and the one-shot transcribe/tts
-# operations. Voice is ONE dialect inside this plane; the plane is streaming.
-#
-# WHY IT DELEGATES. Every byte of every dialect this plane speaks is already read and written by the
-# duplex codecs in its own `codec` module, which this crate adapts onto the
-# contract plane trait itself. No wire format is written twice: this crate is the ONE streaming
-# plane (its own registry key, its own capability key) over those codecs. `busbar-plane-voice` was
-# the second adapter over the same codecs and is DELETED into this one (#18/#83 — one crate per
-# plane, and the plane is streaming).
-#
-# WHAT THIS CRATE IS NOT. There is no governance here, no breaker, no hook seat and no metering
-# arithmetic — those are units, on the far side of the kernel from a plane. The metering method returns
-# LOCATORS (where the per-turn quantities are), never a price. The routing method returns a plan, never
-# a connection. Nothing here opens a socket, reads a file or reads a clock other than the one the
-# context hands it: the plane's entire transitive closure is `busbar-contract` + the codecs it
-# already carries as its own module (no async, no `hyper`/`tokio`/`net`).
+# busbar-plane-streaming: the streaming plane. Its door (`plane_door::door`) over the duplex dialect
+# codecs (the `codec` module); the cdylib twin `busbar-plane-streaming-plugin` exports the same door.
 [package]
 name = "busbar-plane-streaming"
 version = "1.6.0"
@@ -26,7 +7,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "The streaming plane for busbar: the plugin contract's plane and session-plane kinds for duplex/live sessions (openai-realtime, gemini-live, twilio, one-shot), with the live realtime voice dialect as one dialect among them — implemented as a thin adapter over its own folded-in duplex codecs."
+description = "The streaming plane for busbar: the plugin contract's plane kind for live duplex sessions over its openai-realtime, gemini-live and twilio-media-streams dialect codecs."
 # THE ROOT CELLS' ADDRESS: `build.rs` states `cells=<this crate>/tests/root/mod.rs` under this
 # `links` name, and the composition root's `build.rs` reads it as `DEP_BUSBAR_DOOR_CELLS_<CRATE>_CELLS`
 # (the same for a path dependency and a pinned one), so the root compiles this plane's own root cells
