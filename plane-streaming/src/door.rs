@@ -50,26 +50,26 @@ use busbar_contract::abi::hook::REQUEST_STREAM;
 use busbar_contract::abi::host::conn::connector::{
     Need, DIRECTION_INBOUND, DIRECTION_OUTBOUND, EGRESS_PROVIDER, KEEP_NAMED,
 };
-use busbar_contract::abi::mechanism::call::{AbiStr, Blob, InHead, OutHead, Outcome, Span};
+use busbar_contract::abi::mechanism::call::{AbiStr, Blob, OutHead, Outcome, Span};
 use busbar_contract::abi::mechanism::door::{
     MarkWord, Section, MARK_WORD_ISSUED_ID_PREFIX, SECTION_CONSUMED, SECTION_DECLARING,
 };
-use busbar_contract::abi::mechanism::lifecycle::{
-    GenIn, RefreshIn, ReleaseIn, TickIn, TickOut, ValidateIn,
-};
+use busbar_contract::abi::mechanism::lifecycle::{GenIn, TickIn, TickOut};
 use busbar_contract::abi::mechanism::ticket::{CompletionHandle, Ticket};
 use busbar_contract::abi::plane::{
     class_of, reason_of, ArriveIn, ArriveOut, BillableClass, DialectAuth, OnPieceIn, OnPieceOut,
     OpClass, OutField, PlaneCancelIn, PlaneCancelOut, PlaneDriveIn, PlaneDriveOut, PlaneOpenIn,
-    PlaneOpenOut, PlaneRefreshOut, PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RecordWrite,
-    RefusalClass, RefusalCode, RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT,
-    AUDIT_REJECTED, CANCEL_ABORTED, CANCEL_OK_PARTIAL, CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END,
-    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, INGRESS_DUPLEX_SESSION, INGRESS_REQUEST_RESPONSE,
-    PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST, PIECE_OUT_TEXT, PIECE_REFUSED, PRINCIPAL_REQUIRED,
-    RECORD_AUDIT, ROUTE_DIRECT, SHAPE_PIECEWISE, SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE,
-    UNITS_FLOOR, UNITS_REPORTED,
+    PlaneSnapshot, PlaneTail, ProjectIn, ProjectOut, RecordWrite, RefusalClass, RefusalCode,
+    RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, AUDIT_REJECTED,
+    CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
+    INGRESS_DUPLEX_SESSION, INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST,
+    PIECE_OUT_TEXT, PIECE_REFUSED, PRINCIPAL_REQUIRED, RECORD_AUDIT, ROUTE_DIRECT, SHAPE_PIECEWISE,
+    SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_FLOOR, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
+use busbar_contract::abi::sdk::life::Refusal as Refused;
+use busbar_contract::abi::sdk::plane::{cancel_disposition, UnitCancel};
+use busbar_contract::abi::sdk::plane_life::{self as life, PlaneLife};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
 use busbar_contract::abi::sdk::{
     Generations, HostBuf, Instance, Lent, Minted, Out, Safe, SafeSlot, Services, StaticWake, Wake,
@@ -1114,21 +1114,16 @@ impl Plane {
         }
     }
 
-    /// Publish generation `generation` into the `out` field `pick` names.
-    fn publish<T: busbar_contract::abi::sdk::door::AbiOut>(
-        &self,
-        out: &mut Out<'_, T>,
-        pick: impl FnOnce(&T) -> &*const PlaneSnapshot,
-        generation: u64,
-        cfg: StreamsCfg,
-    ) {
+    /// Generation `generation` over `cfg`, held live: the snapshot it publishes.
+    fn publish(&self, generation: u64, cfg: StreamsCfg) -> life::Published<()> {
         let g = Generation::build(generation, self.public_url.as_deref());
-        out.publish(pick, &self.snapshots, generation, &g.snapshot());
+        let spec = g.snapshot();
         // The mint binds the browser's session to the section's session under its two token
         // ceilings, as a socket session is locked, and names the session model by its wire name.
         let locked =
             crate::session_door::with_ceilings(cfg.wire_session(cfg.session.clone()), &cfg);
         lock(&self.generations).push((Arc::new(cfg), Arc::new(locked), g));
+        life::Published { spec, held: () }
     }
 }
 
@@ -1155,120 +1150,110 @@ macro_rules! slot {
     };
 }
 
-slot!(Validate, ValidateIn, OutHead, |_, input, out| {
-    match read_dealt(input.settings().bytes()) {
-        Ok(_) => Outcome::Ready,
-        Err(words) => out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words)),
+// THE LIFECYCLE (`lifecycle: plane_life(Plane)`): validate, open and refresh read the dealt section
+// and publish a generation over it; retire drops it; release and close are the SDK's. Tick, drive
+// and cancel are the plane's own.
+impl PlaneLife for Plane {
+    type Held = ();
+
+    fn generations(&self) -> &Generations<PlaneSnapshot> {
+        &self.snapshots
     }
-});
 
-slot!(Open, PlaneOpenIn, PlaneOpenOut, |instance, input, out| {
-    let cfg = match read_dealt(input.open().settings().bytes()) {
-        Ok(cfg) => cfg,
-        Err(words) => return out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words)),
-    };
-    let public_url = input
-        .public_url()
-        .as_str()
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned);
-    let wake = input.open().host().and_then(|h| Wake::of(&h));
-    let services = input.open().host().and_then(|h| Services::of(&h));
-    let p = Plane {
-        public_url,
-        generations: Mutex::new(Vec::new()),
-        snapshots: Generations::new(),
-        units: Mutex::new(Units::default()),
-        calls: Mutex::new(PendingCalls::default()),
-        brokered: Mutex::new(Brokered::default()),
-        services,
-        sessions: Mutex::new(Sessions::default()),
-        wake,
-        driver: Mutex::new((Ticket::NONE, 0)),
-    };
-    p.publish(&mut out, |o| &o.snapshot, input.open().generation(), cfg);
-    instance.open(p);
-    Outcome::Ready
-});
+    fn validate(settings: &[u8]) -> Result<(), Refused> {
+        read_dealt(settings).map(|_| ()).map_err(Refused::refused)
+    }
 
-slot!(
-    Refresh,
-    RefreshIn,
-    PlaneRefreshOut,
-    |instance, input, out| {
-        let Some(p) = instance.get() else {
-            return Outcome::Failed;
+    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<life::Opened<Self>, Refused> {
+        let cfg = read_dealt(input.open().settings().bytes()).map_err(Refused::refused)?;
+        let public_url = input
+            .public_url()
+            .as_str()
+            .ok()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let wake = input.open().host().and_then(|h| Wake::of(&h));
+        let services = input.open().host().and_then(|h| Services::of(&h));
+        let plane = Plane {
+            public_url,
+            generations: Mutex::new(Vec::new()),
+            snapshots: Generations::new(),
+            units: Mutex::new(Units::default()),
+            calls: Mutex::new(PendingCalls::default()),
+            brokered: Mutex::new(Brokered::default()),
+            services,
+            sessions: Mutex::new(Sessions::default()),
+            wake,
+            driver: Mutex::new((Ticket::NONE, 0)),
         };
-        let cfg = match read_dealt(input.settings().bytes()) {
-            Ok(cfg) => cfg,
-            Err(words) => {
-                return out.fail(busbar_contract::abi::sdk::life::Refusal::refused(words))
+        let first = plane.publish(input.open().generation(), cfg);
+        Ok(life::Opened { plane, first })
+    }
+
+    fn refresh(&self, settings: &[u8], generation: u64) -> Result<life::Published<()>, Refused> {
+        let cfg = read_dealt(settings).map_err(Refused::refused)?;
+        Ok(self.publish(generation, cfg))
+    }
+
+    fn retire(&self, generation: u64) {
+        lock(&self.generations).retain(|(_, _, g)| g.generation() != generation);
+    }
+
+    // The tick: the instance's driver ticket is noted, every live session's clock and ceiling read
+    // on the tick clock, and a session that now owes its end names the driver ticket. While a live
+    // generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`. The
+    // brokered rows' clock is read here too: a row's age starts at the first tick after it was
+    // recorded, an expired row is freed, and while any row is held the door asks to be ticked when
+    // the next one expires (or within `BROKERED_TICK_MS` for a row whose age has not started); the
+    // earliest ask wins.
+    fn tick(
+        instance: Instance<'_, Self>,
+        input: Lent<'_, TickIn>,
+        mut out: Out<'_, TickOut>,
+    ) -> Outcome {
+        let given = input;
+        let next = match instance.get() {
+            Some(p) => {
+                *lock(&p.driver) = (given.head().ticket(), given.now_ns() / 1_000_000);
+                let owes = {
+                    let mut sessions = lock(&p.sessions);
+                    let owes = sessions.tick(given.now_ns());
+                    p.end_calls(&mut sessions);
+                    owes
+                };
+                if owes {
+                    p.wake_driver();
+                }
+                let ceiling = if p.any_ceiling() {
+                    Some(given.now_ns().saturating_add(CEILING_TICK_NS))
+                } else {
+                    None
+                };
+                let now_ms = given.now_ns() / 1_000_000;
+                let brokered = {
+                    let mut brokered = lock(&p.brokered);
+                    brokered.expire(now_ms);
+                    brokered
+                        .next_tick_ms(now_ms)
+                        .map(|ms| ms.saturating_mul(1_000_000))
+                };
+                match (ceiling, brokered) {
+                    (Some(a), Some(b)) => a.min(b),
+                    (a, b) => a.or(b).unwrap_or(0),
+                }
             }
+            None => 0,
         };
-        p.publish(&mut out, |o| &o.snapshot, input.generation(), cfg);
+        out.set(|o| &o.next_tick_ns, next);
         Outcome::Ready
     }
-);
 
-slot!(Retire, GenIn, OutHead, |instance, input, _out| {
-    if let Some(p) = instance.get() {
-        lock(&p.generations).retain(|(_, _, g)| g.generation() != input.generation());
-        p.snapshots.retire(input.generation());
-    }
-    Outcome::Ready
-});
-
-// The tick: the instance's driver ticket is noted, every live session's clock and ceiling read on
-// the tick clock, and a session that now owes its end names the driver ticket. While a live
-// generation configures a ceiling the door asks to be ticked every `CEILING_TICK_NS`. The brokered
-// rows' clock is read here too: a row's age starts at the first tick after it was recorded, an
-// expired row is freed, and while any row is held the door asks to be ticked when the next one
-// expires (or within `BROKERED_TICK_MS` for a row whose age has not started); the earliest ask wins.
-slot!(Tick, TickIn, TickOut, |instance, input, out| {
-    let given = input;
-    let next = match instance.get() {
-        Some(p) => {
-            *lock(&p.driver) = (given.head().ticket(), given.now_ns() / 1_000_000);
-            let owes = {
-                let mut sessions = lock(&p.sessions);
-                let owes = sessions.tick(given.now_ns());
-                p.end_calls(&mut sessions);
-                owes
-            };
-            if owes {
-                p.wake_driver();
-            }
-            let ceiling = if p.any_ceiling() {
-                Some(given.now_ns().saturating_add(CEILING_TICK_NS))
-            } else {
-                None
-            };
-            let now_ms = given.now_ns() / 1_000_000;
-            let brokered = {
-                let mut brokered = lock(&p.brokered);
-                brokered.expire(now_ms);
-                brokered
-                    .next_tick_ms(now_ms)
-                    .map(|ms| ms.saturating_mul(1_000_000))
-            };
-            match (ceiling, brokered) {
-                (Some(a), Some(b)) => a.min(b),
-                (a, b) => a.or(b).unwrap_or(0),
-            }
-        }
-        None => 0,
-    };
-    out.set(|o| &o.next_tick_ns, next);
-    Outcome::Ready
-});
-
-// `drive`: the sessions with output of their own, by stream, as many as the host's buffer takes.
-slot!(
-    Drive,
-    PlaneDriveIn,
-    PlaneDriveOut,
-    |instance, input, out| {
+    // `drive`: the sessions with output of their own, by stream, as many as the host's buffer takes.
+    fn drive(
+        instance: Instance<'_, Self>,
+        input: Lent<'_, PlaneDriveIn>,
+        mut out: Out<'_, PlaneDriveOut>,
+    ) -> Outcome {
         let Some(p) = instance.get() else {
             return Outcome::Ready;
         };
@@ -1284,24 +1269,22 @@ slot!(
         out.set(|o| &o.sessions_written, buf.written() as u32);
         Outcome::Ready
     }
-);
 
-// `cancel`: an op on a session's ticket ends the session (each side tells the other); an op on a
-// request unit's ticket, or the kernel's own cancel of a unit (`PlaneCancelIn::unit`, a unit whose
-// ticket no piece may ever have carried), forgets the unit's state, its pending sideband call and
-// the session its unit names.
-// It writes no record. A unit or session whose far end had begun its answer is PARTIAL, so the
-// units it reported bill when its answer was streamed (the ledger records
-// what the dialect did); one cut before is ABORTED.
-slot!(
-    Cancel,
-    PlaneCancelIn,
-    PlaneCancelOut,
-    |instance, input, out| {
+    // `cancel`: an op on a session's ticket ends the session (each side tells the other); an op on
+    // a request unit's ticket, or the kernel's own cancel of a unit (`PlaneCancelIn::unit`, a unit
+    // whose ticket no piece may ever have carried), forgets the unit's state, its pending sideband
+    // call and the session its unit names.
+    // It writes no record. A unit or session whose far end had begun its answer is PARTIAL, so the
+    // units it reported bill when its answer was streamed (the ledger records what the dialect
+    // did); one cut before is ABORTED.
+    fn cancel(
+        instance: Instance<'_, Self>,
+        input: Lent<'_, PlaneCancelIn>,
+        mut out: Out<'_, PlaneCancelOut>,
+    ) -> Outcome {
         let mut answered = false;
         if let Some(p) = instance.get() {
-            let ticket = input.cancel().ticket();
-            let unit = input.unit();
+            let UnitCancel { ticket, unit } = UnitCancel::of(&input);
             // Each table is locked once, in the order a session's piece takes them.
             let mut sessions = lock(&p.sessions);
             let mut units = lock(&p.units);
@@ -1318,21 +1301,10 @@ slot!(
             // Busbar's calls placed by the sessions this ended are freed.
             p.end_calls(&mut sessions);
         }
-        out.set(
-            |o| &o.cancel.disposition,
-            if answered {
-                CANCEL_OK_PARTIAL
-            } else {
-                CANCEL_ABORTED
-            },
-        );
+        out.set(|o| &o.cancel.disposition, cancel_disposition(answered));
         Outcome::Ready
     }
-);
-
-slot!(Release, ReleaseIn, OutHead, |_, _, _out| { Outcome::Ready });
-
-slot!(Close, InHead, OutHead, |_, _, _out| { Outcome::Ready });
+}
 
 // A claimed arrival is classified: its door's dialect, the session open, a known principal. No
 // admission estimate: a session's units are what the far end reports. A door that reaches the far end
@@ -2071,11 +2043,7 @@ busbar_contract::plugin_door! {
         s.mark_words_len = MARK_WORDS.len();
         s
     },
-    lifecycle: {
-        validate: Safe<Validate>, open: Safe<Open>, refresh: Safe<Refresh>, retire: Safe<Retire>,
-        tick: Safe<Tick>, drive: Safe<Drive>, cancel: Safe<Cancel>, release: Safe<Release>,
-        close: Safe<Close>,
-    },
+    lifecycle: plane_life(Plane),
     kind_ops: {
         arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<Refusal>, serve: Safe<Serve>,
         hydrate: Safe<Hydrate>, start: Safe<Start>, project: Safe<Project>,
