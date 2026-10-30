@@ -480,7 +480,11 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
     if settings.is_empty() {
         return Ok(StreamsCfg::default());
     }
-    let cfg = serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())?;
+    checked(serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())?)
+}
+
+/// THE SECTION'S OWN RULE, on whichever form handed it: its two token ceilings must both hold.
+fn checked(cfg: StreamsCfg) -> Result<StreamsCfg, String> {
     match cfg.ceilings_conflict() {
         Some(reason) => Err(reason),
         None => Ok(cfg),
@@ -489,10 +493,11 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
 
 /// The settings the host hands, read: the plane's grammar over its own `streams:` section, with the
 /// session model's provider wire model resolved from the `models` section beside it. A host hands a
-/// plane that consumes sections one object keyed by section: `{streams: …}` plus
-/// each consumed section the deployment writes. A blob without a `streams` key is the section itself (a host that hands the bare section, or a test), read as
+/// plane that consumes sections one object keyed by section: `{streams: …}` plus each consumed
+/// section the deployment writes. A blob without a `streams` key is the section itself (the
+/// published conformance suite hands `open` and `refresh` the section as written), read as
 /// [`read_settings`] reads it. The section's grammar refuses a `streams` key of its own, so the two
-/// forms never read alike.
+/// forms never read alike; both are judged by the one [`checked`].
 ///
 /// # Errors
 /// The grammar's reason when the section is not a `streams:` section, or the section's reason when
@@ -507,13 +512,10 @@ pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
         return read_settings(settings);
     };
     let mut cfg = if section.is_null() {
-        read_settings(&[])?
+        StreamsCfg::default()
     } else {
-        serde_json::from_value::<StreamsCfg>(section).map_err(|e| e.to_string())?
+        checked(serde_json::from_value::<StreamsCfg>(section).map_err(|e| e.to_string())?)?
     };
-    if let Some(reason) = cfg.ceilings_conflict() {
-        return Err(reason);
-    }
     cfg.upstream_model = cfg
         .session
         .model
