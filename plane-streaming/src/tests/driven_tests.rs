@@ -26,7 +26,11 @@ fn every_published_claim_arrives_at_its_door_in_its_dialect() {
         None,
         "a claim the plane never published arrives nowhere (the metadata path is no claim)"
     );
-    assert_eq!(crate::door::ROUTES.len(), 6, "one door per published claim");
+    assert_eq!(
+        crate::plane_door::ROUTES.len(),
+        6,
+        "one door per published claim"
+    );
 }
 
 /// Busbar terminates the browser's media (row 132): the mint door dials nothing, and the SDP door
@@ -55,7 +59,7 @@ fn the_mint_dials_nothing_and_busbars_call_names_the_caller() {
             .all(|(n, _)| !n.eq_ignore_ascii_case("authorization")),
         "the plane never writes the credential; the kernel adds it"
     );
-    assert_eq!(Door::Sdp.rides(), crate::door::RIDES_REALTIME_CALL);
+    assert_eq!(Door::Sdp.rides(), crate::plane_door::RIDES_REALTIME_CALL);
     let anonymous = Door::Sdp.route(None).expect("a call");
     assert_eq!(
         anonymous.fields,
@@ -148,18 +152,18 @@ fn each_door_routes_and_meters_as_the_plane_answers() {
 /// attached to no call. RED: no `GET /v1/realtime` line was published.
 #[test]
 fn plain_openai_realtime_over_ws_is_its_own_session_door() {
-    let i = crate::door::ROUTES
+    let i = crate::plane_door::ROUTES
         .iter()
         .position(|r| r.verb == "GET" && r.target == "/v1/realtime")
         .expect("GET /v1/realtime is a published door");
-    let line = crate::door::ROUTES[i];
+    let line = crate::plane_door::ROUTES[i];
     assert!(line.upgrade, "the plain socket is an upgrade line");
     assert_eq!(line.carrier, crate::claims::WS_TRANSPORT);
-    assert_eq!(line.auth, crate::door::KEY_AUTH, "a keyed door");
+    assert_eq!(line.auth, crate::plane_door::KEY_AUTH, "a keyed door");
     let a = arrive(i as u32).expect("the plain socket arrives at a door");
     assert!(a.door.is_session(), "it opens a live session");
     assert_eq!(a.dialect, 0, "in the OpenAI Realtime dialect");
-    assert_eq!(a.door.rides(), crate::door::RIDES_REALTIME_SOCKET);
+    assert_eq!(a.door.rides(), crate::plane_door::RIDES_REALTIME_SOCKET);
     let dial = a.door.route(None).expect("a session door dials");
     assert_eq!(
         (dial.verb, dial.target),

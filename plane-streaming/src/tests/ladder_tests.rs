@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE LADDER RED for `crates/busbar-plane-streaming/src/door.rs`: the plane's lines on a guest
+//! THE LADDER RED for `crates/busbar-plane-streaming/src/plane_door.rs`: the plane's lines on a guest
 //! list reproduce the served plane's dispatch ladder exactly (`BUSBAR-1.6.0.md` section 6, "Auth
 //! points and guest lists", step 3). Every served route resolves to the same (dialect, door), and
 //! a request no served route took resolves to no line. A request whose path a line matches under
@@ -216,7 +216,7 @@ fn no_line_is_open_and_the_telephony_line_is_signed() {
     let open: Vec<_> = ROUTES
         .iter()
         .filter(|r| {
-            ![crate::door::KEY_AUTH, SIGNATURE_AUTH].contains(&r.auth)
+            ![crate::plane_door::KEY_AUTH, SIGNATURE_AUTH].contains(&r.auth)
                 || r.claim().flags & CLAIM_OPEN != 0
         })
         .map(|r| r.target)
