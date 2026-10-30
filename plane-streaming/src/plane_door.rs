@@ -67,7 +67,7 @@ use busbar_contract::abi::plane::{
     SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_FLOOR, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
-use busbar_contract::abi::sdk::life::Refusal as Refused;
+use busbar_contract::abi::sdk::life::Refusal;
 use busbar_contract::abi::sdk::plane::{cancel_disposition, UnitCancel};
 use busbar_contract::abi::sdk::plane_life::{self as life, PlaneLife};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
@@ -480,7 +480,11 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
     if settings.is_empty() {
         return Ok(StreamsCfg::default());
     }
-    let cfg = serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())?;
+    checked(serde_json::from_slice::<StreamsCfg>(settings).map_err(|e| e.to_string())?)
+}
+
+/// THE SECTION'S OWN RULE, on whichever form handed it: its two token ceilings must both hold.
+fn checked(cfg: StreamsCfg) -> Result<StreamsCfg, String> {
     match cfg.ceilings_conflict() {
         Some(reason) => Err(reason),
         None => Ok(cfg),
@@ -489,13 +493,15 @@ pub fn read_settings(settings: &[u8]) -> Result<StreamsCfg, String> {
 
 /// The settings the host hands, read: the plane's grammar over its own `streams:` section, with the
 /// session model's provider wire model resolved from the `models` section beside it. A host hands a
-/// plane that consumes sections one object keyed by section: `{streams: …}` plus
-/// each consumed section the deployment writes. A blob without a `streams` key is the section itself (a host that hands the bare section, or a test), read as
+/// plane that consumes sections one object keyed by section: `{streams: …}` plus each consumed
+/// section the deployment writes. A blob without a `streams` key is the section itself (the
+/// published conformance suite hands `open` and `refresh` the section as written), read as
 /// [`read_settings`] reads it. The section's grammar refuses a `streams` key of its own, so the two
-/// forms never read alike.
+/// forms never read alike; both are judged by the one [`checked`].
 ///
 /// # Errors
-/// The grammar's reason when the section is not a `streams:` section.
+/// The grammar's reason when the section is not a `streams:` section, or the section's reason when
+/// its token ceilings conflict ([`StreamsCfg::ceilings_conflict`]), on either form.
 pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
     let Ok(serde_json::Value::Object(mut keyed)) =
         serde_json::from_slice::<serde_json::Value>(settings)
@@ -506,9 +512,9 @@ pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
         return read_settings(settings);
     };
     let mut cfg = if section.is_null() {
-        read_settings(&[])?
+        StreamsCfg::default()
     } else {
-        serde_json::from_value::<StreamsCfg>(section).map_err(|e| e.to_string())?
+        checked(serde_json::from_value::<StreamsCfg>(section).map_err(|e| e.to_string())?)?
     };
     cfg.upstream_model = cfg
         .session
@@ -592,15 +598,21 @@ pub const REFUSAL_CALLS_FULL: u32 = 2;
 /// [`MAX_BROKERED_CALLS`] live calls (a 429, its words [`CALLS_FULL_TEXT`]).
 pub const REFUSAL_OFFERS_FULL: u32 = 3;
 
-/// The status [`REFUSAL_CALLS_FULL`] and [`REFUSAL_OFFERS_FULL`] wear.
+/// The plane's refusal code for a request unit (the mint door's) arriving while the instance holds
+/// [`MAX_UNITS`] units in flight (a 429, its words [`CALLS_FULL_TEXT`]).
+pub const REFUSAL_UNITS_FULL: u32 = 4;
+
+/// The status [`REFUSAL_CALLS_FULL`], [`REFUSAL_OFFERS_FULL`] and [`REFUSAL_UNITS_FULL`] wear.
 pub const STATUS_CALLS_FULL: u32 = 429;
 
-/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`] is answered with.
+/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`], and a request unit refused at
+/// [`MAX_UNITS`], are answered with.
 pub const CALLS_FULL_TEXT: &str =
     "busbar is holding as many realtime calls as it admits at once; retry once one has ended";
 
-/// The most request units an instance keeps state for at once; past it, a new unit is refused (a
-/// unit in flight is never dropped to make room).
+/// The most request units an instance keeps state for at once; at it, a new unit is refused at
+/// its arrival ([`REFUSAL_UNITS_FULL`]), and a unit admitted alongside others checked at once is
+/// refused at its first piece (a unit in flight is never dropped to make room).
 pub const MAX_UNITS: usize = 4096;
 
 /// The most sideband arrivals whose call is kept until their session opens; past it, a new
@@ -671,6 +683,11 @@ impl Units {
         }
         self.held.insert(unit, held);
         true
+    }
+
+    /// Whether the table holds [`MAX_UNITS`] units: a new unit is refused at its arrival.
+    fn full(&self) -> bool {
+        self.held.len() >= MAX_UNITS
     }
 
     /// A piece of unit `unit` crossed on `ticket`.
@@ -1160,12 +1177,12 @@ impl PlaneLife for Plane {
         &self.snapshots
     }
 
-    fn validate(settings: &[u8]) -> Result<(), Refused> {
-        read_dealt(settings).map(|_| ()).map_err(Refused::refused)
+    fn validate(settings: &[u8]) -> Result<(), Refusal> {
+        read_dealt(settings).map(|_| ()).map_err(Refusal::refused)
     }
 
-    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<life::Opened<Self>, Refused> {
-        let cfg = read_dealt(input.open().settings().bytes()).map_err(Refused::refused)?;
+    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<life::Opened<Self>, Refusal> {
+        let cfg = read_dealt(input.open().settings().bytes()).map_err(Refusal::refused)?;
         let public_url = input
             .public_url()
             .as_str()
@@ -1190,8 +1207,8 @@ impl PlaneLife for Plane {
         Ok(life::Opened { plane, first })
     }
 
-    fn refresh(&self, settings: &[u8], generation: u64) -> Result<life::Published<()>, Refused> {
-        let cfg = read_dealt(settings).map_err(Refused::refused)?;
+    fn refresh(&self, settings: &[u8], generation: u64) -> Result<life::Published<()>, Refusal> {
+        let cfg = read_dealt(settings).map_err(Refusal::refused)?;
         Ok(self.publish(generation, cfg))
     }
 
@@ -1360,6 +1377,14 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
             out.error(CALLS_FULL_TEXT);
             return Outcome::Refused;
         }
+    }
+    // A REQUEST UNIT (a door that opens no session) on an instance holding as many units as it
+    // keeps is refused before its first piece, in words: no unit in flight is dropped for it.
+    if !a.door.is_session() && instance.get().is_some_and(|p| lock(&p.units).full()) {
+        out.set(|o| &o.refusal, REFUSAL_UNITS_FULL);
+        out.set(|o| &o.refusal_status, STATUS_CALLS_FULL);
+        out.error(CALLS_FULL_TEXT);
+        return Outcome::Refused;
     }
     // THE MINT DOOR DIALS NOTHING: busbar mints the ticket itself (row 132). Its request counts
     // against the caller's caps as any admitted call does.
@@ -1871,46 +1896,51 @@ pub fn session_cut_render(dialect: u32, text: &str) -> Vec<u8> {
 // error shape, as JSON, before any upgrade; a live session's budget cut in its own stream. The
 // refusal ends its unit: what the door holds for it as a request unit, a pending sideband call or a
 // session is forgotten.
-slot!(Refusal, RefusalIn, RefusalOut, |instance, input, out| {
-    let given = input;
-    let status = u16::try_from(given.status()).unwrap_or(0);
-    let text = input.text().as_str().unwrap_or_default();
-    let cut = given.reason() == RefusalCode::OverBudget as u32
-        && given.unit() != 0
-        && instance
-            .get()
-            .is_some_and(|p| lock(&p.sessions).served(given.unit()));
-    if let (Some(p), true) = (instance.get(), given.unit() != 0) {
-        p.end_unit(given.unit());
+slot!(
+    RefusalSlot,
+    RefusalIn,
+    RefusalOut,
+    |instance, input, out| {
+        let given = input;
+        let status = u16::try_from(given.status()).unwrap_or(0);
+        let text = input.text().as_str().unwrap_or_default();
+        let cut = given.reason() == RefusalCode::OverBudget as u32
+            && given.unit() != 0
+            && instance
+                .get()
+                .is_some_and(|p| lock(&p.sessions).served(given.unit()));
+        if let (Some(p), true) = (instance.get(), given.unit() != 0) {
+            p.end_unit(given.unit());
+        }
+        let body = if cut {
+            session_cut_render(given.dialect(), text)
+        } else {
+            refusal_render(status, given.reason(), text)
+        };
+        let (mut reply, mut fields, mut arena) =
+            (input.reply_buf(), input.fields_buf(), input.arena_buf());
+        reply.extend(&body);
+        fields.push(OutField {
+            name: arena.span(FIELD_CONTENT_TYPE.as_bytes()),
+            value: arena.span(CONTENT_TYPE_JSON.as_bytes()),
+        });
+        let short = !(reply.fits() && fields.fits() && arena.fits());
+        let (rw, rnd) = reply.settle(short);
+        let (fw, fnd) = fields.settle(short);
+        let (aw, and) = arena.settle(short);
+        out.set(|o| &o.reply_written, rw as u64);
+        out.set(|o| &o.reply_needed, rnd as u64);
+        out.set(|o| &o.fields_written, fw as u32);
+        out.set(|o| &o.fields_needed, fnd as u32);
+        out.set(|o| &o.arena_written, aw as u64);
+        out.set(|o| &o.arena_needed, and as u64);
+        if short {
+            Outcome::Failed
+        } else {
+            Outcome::Ready
+        }
     }
-    let body = if cut {
-        session_cut_render(given.dialect(), text)
-    } else {
-        refusal_render(status, given.reason(), text)
-    };
-    let (mut reply, mut fields, mut arena) =
-        (input.reply_buf(), input.fields_buf(), input.arena_buf());
-    reply.extend(&body);
-    fields.push(OutField {
-        name: arena.span(FIELD_CONTENT_TYPE.as_bytes()),
-        value: arena.span(CONTENT_TYPE_JSON.as_bytes()),
-    });
-    let short = !(reply.fits() && fields.fits() && arena.fits());
-    let (rw, rnd) = reply.settle(short);
-    let (fw, fnd) = fields.settle(short);
-    let (aw, and) = arena.settle(short);
-    out.set(|o| &o.reply_written, rw as u64);
-    out.set(|o| &o.reply_needed, rnd as u64);
-    out.set(|o| &o.fields_written, fw as u32);
-    out.set(|o| &o.fields_needed, fnd as u32);
-    out.set(|o| &o.arena_written, aw as u64);
-    out.set(|o| &o.arena_needed, and as u64);
-    if short {
-        Outcome::Failed
-    } else {
-        Outcome::Ready
-    }
-});
+);
 
 slot!(Serve, ServeIn, ServeOut, |_, _, _out| { Outcome::Refused });
 
@@ -2031,21 +2061,28 @@ busbar_contract::statement_extensions!(
     )]
 );
 
-busbar_contract::plugin_door! {
-    ops: busbar_contract::abi::plane::Ops,
-    statement: {
-        let mut s = statement(NAME, VERSION, 64)
+/// The most calls the kernel keeps in flight on one instance.
+const MAX_INFLIGHT: u32 = 64;
+
+/// The Statement: the plane's name and version, its sections, its needs, its tail, its extensions
+/// and the mark words its issued ids carry.
+pub const STATEMENT: busbar_contract::abi::mechanism::door::Statement =
+    busbar_contract::abi::mechanism::door::Statement {
+        extensions: EXTENSIONS,
+        mark_words: MARK_WORDS.as_ptr(),
+        mark_words_len: MARK_WORDS.len(),
+        ..statement(NAME, VERSION, MAX_INFLIGHT)
             .with_sections(SECTIONS)
             .with_needs(NEEDS)
-            .with_kind_tail(TAIL);
-        s.extensions = EXTENSIONS;
-        s.mark_words = MARK_WORDS.as_ptr();
-        s.mark_words_len = MARK_WORDS.len();
-        s
-    },
+            .with_kind_tail(TAIL)
+    };
+
+busbar_contract::plugin_door! {
+    ops: busbar_contract::abi::plane::Ops,
+    statement: STATEMENT,
     lifecycle: plane_life(Plane),
     kind_ops: {
-        arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<Refusal>, serve: Safe<Serve>,
+        arrive: Safe<Arrive>, on_piece: Safe<OnPiece>, refusal: Safe<RefusalSlot>, serve: Safe<Serve>,
         hydrate: Safe<Hydrate>, start: Safe<Start>, project: Safe<Project>,
     },
 }
@@ -2055,8 +2092,8 @@ busbar_contract::plugin_door! {
 mod ladder_tests;
 
 #[cfg(test)]
-#[path = "tests/door_tests.rs"]
-mod door_tests;
+#[path = "tests/plane_door_tests.rs"]
+mod plane_door_tests;
 
 const _: () = {
     // The ride constants name the needs they say they name.

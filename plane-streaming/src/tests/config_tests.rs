@@ -105,7 +105,9 @@ fn the_strict_key_lists_are_the_session_objects_own_members() {
 /// context window leaves the locked session no room for the conversation, so the section is refused
 /// at load, the refusal naming both settings and their values; the defaults (4096 below 32768)
 /// load and leave the conversation 28672 tokens. RED: such a section loaded and the locked
-/// session's context limit after its output saturated to 0.
+/// session's context limit after its output saturated to 0. Driven through `read_dealt` with the
+/// KEYED blob (`{streams: …}`), the form the host deals validate, open and refresh: RED (B1) the
+/// keyed path never judged the ceilings, so the conflicting section validated, opened and served.
 #[test]
 fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings() {
     for (blob, words) in [
@@ -118,11 +120,17 @@ fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings(
             "streams.max_output_tokens (8192) must be below streams.context_window_tokens (4096)",
         ),
     ] {
-        let refused = crate::door::read_settings(blob.as_bytes()).expect_err(blob);
-        assert!(refused.contains(words), "{blob}: {refused}");
+        let keyed = format!(r#"{{"streams":{blob},"models":{{}}}}"#);
+        let refused = crate::plane_door::read_dealt(keyed.as_bytes()).expect_err(&keyed);
+        assert!(refused.contains(words), "{keyed}: {refused}");
     }
-    for blob in [&b""[..], &b"{}"[..]] {
-        let cfg = crate::door::read_settings(blob).expect("the defaults load");
+    for blob in [
+        &b""[..],
+        &b"{}"[..],
+        &br#"{"streams":{}}"#[..],
+        &br#"{"streams":null}"#[..],
+    ] {
+        let cfg = crate::plane_door::read_dealt(blob).expect("the defaults load");
         assert_eq!(
             (cfg.max_output_tokens, cfg.context_window_tokens),
             (4096, 32_768)
