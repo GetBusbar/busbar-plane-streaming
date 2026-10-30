@@ -105,6 +105,9 @@ pub struct Live {
     unit: Unit,
     /// Frames owed a side, oldest first, past the one each answer carries.
     queued: VecDeque<(Side, Vec<u8>)>,
+    /// The session's opening call ([`Live::open_far`]) is still owed: the first far-bound frame is
+    /// the body of the open that dials the far end, not a message on it ([`Live::take_opening`]).
+    opening: bool,
     /// The session ended; it is over once its queued frames are collected.
     ending: bool,
     /// The wall-clock ceiling of the generation it opened under, in seconds.
@@ -190,6 +193,7 @@ impl Live {
         Some(Live {
             unit,
             queued: VecDeque::new(),
+            opening: false,
             ending: false,
             ceiling_secs: ceiling,
             started_ns: None,
@@ -265,6 +269,13 @@ impl Live {
     /// request, which places busbar's own call and so dials the session's far end at its open).
     pub fn open_far(&mut self, frame: Vec<u8>) {
         self.queued.push_front((Side::FarEnd, frame));
+        self.opening = true;
+    }
+
+    /// Whether the far-bound frame being written is the session's opening call (once): the body of
+    /// the open that dials the far end, never a text message on it.
+    pub fn take_opening(&mut self) -> bool {
+        std::mem::take(&mut self.opening)
     }
 
     /// The session ends now: whatever it still owes is collected, then its end.
