@@ -202,3 +202,73 @@ fn malformed_and_unknown_frames_fail_closed() {
         Err(TwilioError::BadPayload)
     );
 }
+
+fn start_of(sid: &str, encoding: &str, rate: u32) -> Vec<u8> {
+    frame(serde_json::json!({
+        "event": "start",
+        "start": {
+            "streamSid": sid,
+            "callSid": "CA1",
+            "mediaFormat": { "encoding": encoding, "sampleRate": rate, "channels": 1 }
+        },
+        "streamSid": sid,
+    }))
+}
+
+fn media_of(sid: &str) -> Vec<u8> {
+    frame(serde_json::json!({
+        "event": "media",
+        "streamSid": sid,
+        "media": { "payload": busbar_contract::media::base64_encode(&[0xff; 160]) },
+    }))
+}
+
+/// RED (audit plane-streaming round 52b0f93ac9, S55): a carrier frame that ends the call (a start
+/// in another media format, a frame not in Twilio's shape, a payload that is not clean base64) is
+/// said in one log line naming why, so an operator can tell why every call from a misconfigured
+/// stream ends. RED: the call ended with no line anywhere.
+#[test]
+fn a_refused_carrier_frame_is_said_in_one_log_line_naming_why() {
+    use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
+    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
+    let steps = tracing::subscriber::with_default(cap.clone(), || {
+        let mut bridge = TwilioBridge::default();
+        [
+            bridge.from_caller(&start_of("MZ1", "audio/l16", 16_000)),
+            TwilioBridge::default().from_caller(b"not json"),
+        ]
+    });
+    assert!(steps.iter().all(|s| matches!(s, CallerStep::Refused)));
+    assert_eq!(cap.messages().len(), 2, "{:?}", cap.messages());
+    assert!(
+        cap.contains("16000Hz"),
+        "the format is named: {:?}",
+        cap.messages()
+    );
+    assert!(cap.contains("malformed"), "{:?}", cap.messages());
+}
+
+/// RED (audit plane-streaming round 52b0f93ac9, S13): the stream a call's `start` binds is the
+/// one its media must name; a second `start` (Twilio sends one per stream) binds nothing, so media
+/// naming the second stream is not admitted. RED: each start rebound the stream.
+#[test]
+fn a_second_start_does_not_rebind_the_calls_stream() {
+    use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
+    let mut bridge = TwilioBridge::default();
+    assert!(matches!(
+        bridge.from_caller(&start_of("MZa", "audio/x-mulaw", 8000)),
+        CallerStep::Nothing
+    ));
+    assert!(matches!(
+        bridge.from_caller(&start_of("MZb", "audio/x-mulaw", 8000)),
+        CallerStep::Nothing
+    ));
+    assert!(
+        matches!(bridge.from_caller(&media_of("MZb")), CallerStep::Nothing),
+        "media for a stream the call did not start is not admitted"
+    );
+    assert!(
+        matches!(bridge.from_caller(&media_of("MZa")), CallerStep::Audio(_)),
+        "the stream the call started still is"
+    );
+}
