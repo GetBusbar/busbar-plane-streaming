@@ -21,7 +21,8 @@
 //! ## The dependency seam, stated honestly
 //!
 //! Measured with `cargo tree -p busbar-plane-streaming --edges normal --depth 1`, this crate's whole
-//! direct closure is `busbar-contract` + `serde` + `serde_json` + `bytes` + `url` — the codecs are
+//! direct closure is `busbar-contract` + `serde` + `serde_json` + `bytes` + `url` + `zeroize` +
+//! `tracing` — the codecs are
 //! this crate's own `codec` module, not a named dependency, and no async runtime (`tokio`,
 //! `futures`, `hyper`) is reachable from here.
 //!
