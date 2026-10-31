@@ -531,6 +531,8 @@ struct Bufs {
     last_audit: String,
     /// The caller reference the kernel lends each piece.
     caller: &'static str,
+    /// The room the fields buffer is lent with (at most its length).
+    fields_cap: usize,
 }
 
 /// One piece pushed to a unit: whose it is, its flags, bytes, status and kept head fields.
@@ -564,6 +566,7 @@ impl Bufs {
             last_flags: 0,
             last_audit: String::new(),
             caller: CALLER_REF,
+            fields_cap: 4,
         }
     }
 
@@ -580,7 +583,7 @@ impl Bufs {
         }
         (i.reply_buf, i.reply_cap) = (self.reply.as_mut_ptr(), self.reply.len());
         (i.units_buf, i.units_cap) = (self.units.as_mut_ptr(), self.units.len());
-        (i.fields_buf, i.fields_cap) = (self.fields.as_mut_ptr(), self.fields.len());
+        (i.fields_buf, i.fields_cap) = (self.fields.as_mut_ptr(), self.fields_cap);
         (i.arena_buf, i.arena_cap) = (self.arena.as_mut_ptr(), self.arena.len());
         (i.records_buf, i.records_cap) = (self.records.as_mut_ptr(), self.records.len());
         let mut o: OnPieceOut = z();
@@ -2541,5 +2544,37 @@ fn a_refused_upgrade_reports_no_session_fee_and_cancels_aborted() {
                 "status {status} on claim {claim}"
             );
         }
+    }
+}
+
+/// RED (audit plane-streaming round 52b0f93ac9, S4): the SDP door's open answered short (its
+/// fields buffer too small for busbar's call in `Location`) is FAILED with nothing applied for the
+/// caller to see, and the host's re-call with room answers the open whole: 201, and the
+/// `Location` naming busbar's call. RED: the re-call answered with no status and no `Location`,
+/// so the browser never learned the call busbar had already placed. Both ways.
+#[test]
+fn an_sdp_open_answered_short_answers_its_201_and_location_on_the_re_call() {
+    let d = host();
+    for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
+        let p = door(&d);
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let offer = Push {
+            stream: 81,
+            ..push(81, 1, FROM_CALLER, 0, &[])
+        };
+        let mut b = Bufs::with_units(1 << 16, 8);
+        b.fields_cap = 0;
+        let short = b.call(&p, &offer);
+        assert!(short.starts_with("Failed"), "{short}");
+        b.fields_cap = 4;
+        let whole = b.call(&p, &offer);
+        assert!(
+            whole.starts_with("Ready") && whole.contains("status=201"),
+            "{whole}"
+        );
+        assert!(
+            whole.contains("location=/v1/realtime/calls/rtc_"),
+            "busbar's call in Location: {whole}"
+        );
     }
 }
