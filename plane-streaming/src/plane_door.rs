@@ -1030,8 +1030,7 @@ impl Plane {
             Ok(None) | Err(()) => cfg.session.clone(),
         };
         let locked = browser_lock(locked, cfg);
-        sessions.rewrite(stream, locked.clone());
-        Some(locked)
+        sessions.rewrite(stream, locked.clone()).then_some(locked)
     }
 
     /// Busbar's own call id: opaque, from the host's randomness.
@@ -1995,7 +1994,10 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
                 let Ok(ticketed) = crate::ticket::locked_by(&record) else {
                     return Outcome::Refused;
                 };
-                lock(&p.sessions).rewrite(given.unit(), ticketed.clone());
+                if !lock(&p.sessions).rewrite(given.unit(), ticketed.clone()) {
+                    out.error(CALLS_FULL_TEXT);
+                    return Outcome::Refused;
+                }
                 locked = ticketed;
             }
         }
@@ -2004,7 +2006,10 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         } else {
             match committed_session_config(&locked, rewrite) {
                 Ok(params) => {
-                    lock(&p.sessions).rewrite(given.unit(), params.clone());
+                    if !lock(&p.sessions).rewrite(given.unit(), params.clone()) {
+                        out.error(CALLS_FULL_TEXT);
+                        return Outcome::Refused;
+                    }
                     params
                 }
                 Err(_) => return Outcome::Refused,

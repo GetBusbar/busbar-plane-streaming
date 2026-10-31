@@ -479,15 +479,17 @@ impl Sessions {
         self.live.get_mut(&stream)
     }
 
-    /// The session-open params a hook rewrote for the session unit `unit` opens (kept until its
-    /// first piece; the oldest dropped past [`MAX_SESSIONS`] kept).
-    pub fn rewrite(&mut self, unit: u64, params: SessionConfig) {
-        while self.rewritten.len() >= MAX_SESSIONS {
-            if self.rewritten.pop_first().is_none() {
-                break;
-            }
+    /// Keep the session-open params a hook rewrote (or a ticket locks) for the session unit `unit`
+    /// opens, until its first piece. Answers `false`, keeping nothing, for a new unit while
+    /// [`MAX_SESSIONS`] are kept: the open is refused, and no kept entry is dropped to make room.
+    /// An entry already kept is restated in place.
+    #[must_use]
+    pub fn rewrite(&mut self, unit: u64, params: SessionConfig) -> bool {
+        if self.rewritten.len() >= MAX_SESSIONS && !self.rewritten.contains_key(&unit) {
+            return false;
         }
         self.rewritten.insert(unit, params);
+        true
     }
 
     /// The session-open params stated for the session unit `unit` opens (a hook's rewrite, or a
