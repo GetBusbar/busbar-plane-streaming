@@ -161,3 +161,26 @@ fn a_server_vad_naming_no_silence_window_locks_the_published_500ms() {
         "{ga:?}"
     );
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S15): the locked session's `modalities` names ONE
+/// output modality, `audio` or `text` (OpenAI Realtime GA's `output_modalities`: "not possible to
+/// request both"; Gemini Live's `responseModalities` takes one): any other list is refused at load
+/// with its path, never booted into a session every far end refuses. RED: `[audio, text]` loaded.
+#[test]
+fn the_locked_sessions_modalities_name_one_of_audio_or_text() {
+    for blob in [
+        r#"{"session":{"modalities":["audio","text"]}}"#,
+        r#"{"session":{"modalities":["video"]}}"#,
+        r#"{"session":{"modalities":["text","text"]}}"#,
+    ] {
+        let err = serde_json::from_str::<StreamsCfg>(blob).expect_err(blob);
+        assert!(err.to_string().contains("session.modalities"), "{err}");
+    }
+    for blob in [
+        r#"{"session":{"modalities":["audio"]}}"#,
+        r#"{"session":{"modalities":["text"]}}"#,
+        r#"{"session":{}}"#,
+    ] {
+        assert!(serde_json::from_str::<StreamsCfg>(blob).is_ok(), "{blob}");
+    }
+}
