@@ -2716,3 +2716,18 @@ fn a_session_open_rewrite_that_cannot_be_applied_leaves_the_open_unmodified() {
         }
     }
 }
+
+#[test]
+fn an_unapplied_rewrite_is_logged_once_when_projection_needs_more_room() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let p = linked(&d);
+    assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
+    tracing::subscriber::with_default(cap.clone(), || {
+        let rewrite = br#"{"voice":7}"#;
+        assert_eq!(project_at(&p, 2, 732, rewrite, 0).0, Outcome::Failed);
+        assert_eq!(project_at(&p, 2, 732, rewrite, 4096).0, Outcome::Ready);
+    });
+    assert_eq!(cap.count("session-open hook"), 1, "{:?}", cap.messages());
+    assert!(cap.contains("not a session config"), "{:?}", cap.messages());
+}
