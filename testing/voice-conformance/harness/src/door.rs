@@ -450,6 +450,36 @@ pub fn arrive(p: &Plugin<Plane>, claim: u32) -> Arrived {
     }
 }
 
+/// ONE RECORD WRITE a door's answer made, read back: its op (`RECORD_PUT`, a record of the door's
+/// own, or `RECORD_AUDIT`, the unit's audit row on the kernel's chain: the one fixed record), its
+/// kind (a put's record kind; an audit row's outcome), its key (an audit row's action) and its
+/// value (an audit row's resource).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    /// `RECORD_PUT` | `RECORD_AUDIT`.
+    pub op: u32,
+    /// A put's record kind; an audit row's outcome (`AUDIT_*`).
+    pub kind: u32,
+    /// The key: an audit row's action.
+    pub key: String,
+    /// The value: an audit row's resource.
+    pub value: String,
+}
+
+/// The first `written` record writes in `records`, read back over `arena`.
+fn rows(records: &[RecordWrite], written: u32, arena: &[u8]) -> Vec<Row> {
+    let n = (written as usize).min(records.len());
+    records[..n]
+        .iter()
+        .map(|w| Row {
+            op: w.op,
+            kind: w.kind,
+            key: at(arena, w.key),
+            value: at(arena, w.value),
+        })
+        .collect()
+}
+
 /// What `refusal` rendered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rendered {
@@ -463,6 +493,8 @@ pub struct Rendered {
     pub status: u32,
     /// The record writes it made.
     pub records: u32,
+    /// Each of them, read back.
+    pub rows: Vec<Row>,
 }
 
 /// The kernel refuses unit `unit` on `dialect` with `status` and `words`: the door renders it.
@@ -518,6 +550,7 @@ pub fn refusal_for(
             .collect(),
         status: out.status,
         records: out.records_written,
+        rows: rows(&records, out.records_written, &arena),
     }
 }
 
@@ -620,6 +653,8 @@ pub struct Answer {
     pub need: u32,
     /// The record writes it made.
     pub records: u32,
+    /// Each of them, read back.
+    pub rows: Vec<Row>,
 }
 
 impl Answer {
@@ -681,6 +716,7 @@ pub fn piece(p: &Plugin<Plane>, x: &Piece<'_>) -> Answer {
         units_needed: o.units_needed,
         need: o.need,
         records: o.records_written,
+        rows: rows(&records, o.records_written, &arena),
     }
 }
 
@@ -714,6 +750,8 @@ pub struct Log {
     pub units: Vec<(u32, u32, u64)>,
     /// Record writes across every answer.
     pub records: u32,
+    /// Each of them, read back, in the order they were written.
+    pub rows: Vec<Row>,
     /// Answers that carried the session's end.
     pub done: u32,
 }
@@ -760,6 +798,7 @@ impl<'p> Session<'p> {
             self.log.units.clone_from(&a.units);
         }
         self.log.records += a.records;
+        self.log.rows.extend(a.rows.iter().cloned());
         if a.done {
             self.log.done += 1;
         }
