@@ -1982,8 +1982,15 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
     let (body, rewritten) = if door.is_session() {
         let mut locked = Live::locked(door, &cfg);
         // THE SDP DOOR'S SESSION IS LOCKED TO ITS TICKET (row 132): the hooks are shown the
-        // session the ticket's record locks, kept for the session the unit opens.
-        if door == Door::Sdp {
+        // session the ticket's record locks, kept for the session the unit opens. A re-call after
+        // a short answer finds it kept (the ticket is taken once): the rewrite is patched over it
+        // again, which writes the same params (a patch over its own result changes nothing).
+        let stated = (door == Door::Sdp)
+            .then(|| lock(&p.sessions).rewritten(given.unit()).cloned())
+            .flatten();
+        if let Some(stated) = stated {
+            locked = stated;
+        } else if door == Door::Sdp {
             if let Ok(Some(record)) = p.take_ticket() {
                 let Ok(ticketed) = crate::ticket::locked_by(&record) else {
                     return Outcome::Refused;
@@ -2039,7 +2046,7 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
     out.set(|o| &o.rewritten, absent);
     if short {
         // The driver re-calls once with the buffers this named, the same rewrite with it: patching
-        // it again over the locked params writes the same body.
+        // it again over the params kept for the unit writes the same body.
         return Outcome::Failed;
     }
     if let Some(pool) = pool {
