@@ -73,6 +73,18 @@ fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     }
 }
 
+/// A present usage report `u` that is not an object: unreadable, never an all-zero report. The error
+/// is the operator-facing message, its spelling bounded as [`billed_count`]'s.
+pub(crate) fn usage_object(u: &Value, member: &str) -> Result<(), String> {
+    if u.is_object() {
+        return Ok(());
+    }
+    let spelling: String = u.to_string().chars().take(64).collect();
+    Err(format!(
+        "usage `{member}` is present but is not an object: {spelling}"
+    ))
+}
+
 /// What an unreadable usage report bills (spend is always attributed and nothing is silent): the
 /// llm plane's floor, one output token per [`FLOOR_BYTES_PER_TOKEN`] bytes
 /// of the report and at least one, marked as the plane's floor. Its one log line names the field and
@@ -130,12 +142,14 @@ impl DuplexReader for OpenAiRealtimeCodec {
             {
                 vec![Metered::ToolOpen]
             }
-            // An absent `usage` is no report (zero); a present-but-unreadable billed count bills
-            // the plane's floor and says so (never metered at zero).
+            // An absent or `null` `usage` is no report (zero); a usage that is not an object, or a
+            // present-but-unreadable billed count, bills the plane's floor and says so (never
+            // metered at zero).
             wire::RESPONSE_DONE => vec![Metered::Usage(
                 match v
                     .get("response")
                     .and_then(|r| r.get("usage"))
+                    .filter(|u| !u.is_null())
                     .map(extract_usage)
                     .transpose()
                 {
@@ -176,6 +190,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
 /// present-but-unreadable one is an `Err` the caller bills the floor for ([`usage_floor`]).
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
+    usage_object(u, "usage")?;
     let ind = u.get("input_token_details");
     let outd = u.get("output_token_details");
     let audio_in = billed_count(ind, "audio_tokens")?;
