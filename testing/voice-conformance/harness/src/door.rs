@@ -277,44 +277,7 @@ pub fn judge_planted<T: Clone + PartialEq + Debug>(
     plants: &[Plant<'_, T>],
 ) -> bool {
     let (linked, dropped) = seen;
-    let subject = match plants.first() {
-        Some((_, plant)) if red_mode() => plant(linked),
-        _ => linked.clone(),
-    };
-    let mut wrong = Vec::new();
-    if plants.is_empty() {
-        wrong.push("RED arm: the assertion plants no wrong answer".to_string());
-    }
-    match dropped {
-        Ok(dropped) if *dropped == subject => {}
-        Ok(dropped) => wrong.push(format!(
-            "the linked and dropped doors answered differently: {} vs {}",
-            clip(&format!("{subject:?}")),
-            clip(&format!("{dropped:?}"))
-        )),
-        Err(e) => wrong.push(e.clone()),
-    }
-    let proved = match check(&subject) {
-        Ok(proved) => proved,
-        Err(e) => {
-            wrong.push(e);
-            String::new()
-        }
-    };
-    if !red_mode() {
-        for (name, plant) in plants {
-            let planted = plant(linked);
-            if planted == *linked {
-                wrong.push(format!(
-                    "RED arm ({name}): the planted wrong answer changed nothing"
-                ));
-            } else if let Ok(accepted) = check(&planted) {
-                wrong.push(format!(
-                    "RED arm ({name}): the check accepted a planted wrong answer ({accepted})"
-                ));
-            }
-        }
-    }
+    let (proved, wrong) = verdict(linked, dropped, check, plants, red_mode());
     if wrong.is_empty() {
         result(
             slice,
@@ -329,6 +292,88 @@ pub fn judge_planted<T: Clone + PartialEq + Debug>(
     } else {
         result(slice, false, what, &wrong.join("; "));
         false
+    }
+}
+
+/// What [`judge_planted`] finds: what `check` proved, and every way the assertion is wrong. Under
+/// `red` the first plant is the subject on BOTH doors (each door's own answer, planted), so the two
+/// still agree and the line's verdict is the check's alone: a check that accepts its plant stays
+/// PASS, and the battery's RED leg reports it as one that cannot tell.
+fn verdict<T: Clone + PartialEq + Debug>(
+    linked: &T,
+    dropped: &Result<T, String>,
+    check: Check<'_, T>,
+    plants: &[Plant<'_, T>],
+    red: bool,
+) -> (String, Vec<String>) {
+    let subject_of = |answer: &T| match plants.first() {
+        Some((_, plant)) if red => plant(answer),
+        _ => answer.clone(),
+    };
+    let subject = subject_of(linked);
+    let dropped = dropped.as_ref().map(&subject_of);
+    let mut wrong = Vec::new();
+    if plants.is_empty() {
+        wrong.push("RED arm: the assertion plants no wrong answer".to_string());
+    }
+    match dropped {
+        Ok(dropped) if dropped == subject => {}
+        Ok(dropped) => wrong.push(format!(
+            "the linked and dropped doors answered differently: {} vs {}",
+            clip(&format!("{subject:?}")),
+            clip(&format!("{dropped:?}"))
+        )),
+        Err(e) => wrong.push(e.clone()),
+    }
+    let proved = match check(&subject) {
+        Ok(proved) => proved,
+        Err(e) => {
+            wrong.push(e);
+            String::new()
+        }
+    };
+    if !red {
+        for (name, plant) in plants {
+            let planted = plant(linked);
+            if planted == *linked {
+                wrong.push(format!(
+                    "RED arm ({name}): the planted wrong answer changed nothing"
+                ));
+            } else if let Ok(accepted) = check(&planted) {
+                wrong.push(format!(
+                    "RED arm ({name}): the check accepted a planted wrong answer ({accepted})"
+                ));
+            }
+        }
+    }
+    (proved, wrong)
+}
+
+#[cfg(test)]
+mod verdict_tests {
+    use super::*;
+
+    fn bump(n: &u32) -> u32 {
+        n + 1
+    }
+
+    /// Audit S98: under RED the plant is the subject on both doors, so a check that accepts its
+    /// plant passes (and the RED leg reports a battery that cannot tell); a check with teeth fails.
+    /// RED: the linked door was planted and the dropped door was not, so every line failed on the
+    /// mismatch alone, whatever its check did.
+    #[test]
+    fn under_red_the_verdict_is_the_checks_alone() {
+        let toothless: Check<'_, u32> = &|_| Ok("anything".to_string());
+        let toothed: Check<'_, u32> = &|n| {
+            (*n == 1)
+                .then(|| "one".to_string())
+                .ok_or_else(|| format!("{n}"))
+        };
+        let plants: &[Plant<'_, u32>] = &[("bump", &bump)];
+        assert!(verdict(&1, &Ok(1), toothless, plants, true).1.is_empty());
+        assert!(!verdict(&1, &Ok(1), toothed, plants, true).1.is_empty());
+        assert!(verdict(&1, &Ok(1), toothed, plants, false).1.is_empty());
+        assert!(!verdict(&1, &Ok(2), toothed, plants, false).1.is_empty());
     }
 }
 
