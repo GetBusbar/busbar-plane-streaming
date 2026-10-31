@@ -371,6 +371,13 @@ pub enum CallerStep {
     Nothing,
 }
 
+/// A carrier frame that ends the call, said in one log line naming why: the call drops, and the
+/// operator can tell why every call from a misconfigured stream ends.
+fn refused(why: &TwilioError) -> CallerStep {
+    tracing::warn!("the telephony carrier's frame ends the call: {why}");
+    CallerStep::Refused
+}
+
 impl TwilioBridge {
     /// Whether the carrier has stated its stream: its `start` was read and admitted.
     #[must_use]
@@ -386,8 +393,11 @@ impl TwilioBridge {
     pub fn from_caller(&mut self, frame: &[u8]) -> CallerStep {
         match TwilioEnvelope::decode(frame) {
             Ok(TwilioEvent::Start(start)) => {
-                if start.stream_sid.is_empty() || assert_g711_ulaw(&start.media_format).is_err() {
-                    return CallerStep::Refused;
+                if start.stream_sid.is_empty() {
+                    return refused(&TwilioError::Malformed);
+                }
+                if let Err(why) = assert_g711_ulaw(&start.media_format) {
+                    return refused(&why);
                 }
                 self.stream_sid = Some(start.stream_sid);
                 CallerStep::Nothing
@@ -410,7 +420,7 @@ impl TwilioBridge {
             }
             Ok(TwilioEvent::Stop) => CallerStep::Stop,
             Ok(_) | Err(TwilioError::UnknownEvent(_)) => CallerStep::Nothing,
-            Err(_) => CallerStep::Refused,
+            Err(why) => refused(&why),
         }
     }
 
