@@ -662,3 +662,28 @@ fn a_plain_or_telephony_session_dials_the_socket_naming_the_sessions_model() {
         "the model is escaped: it carries no second parameter"
     );
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S49): the session-open params kept for units not yet
+/// opened are bounded as every table of the plane is: at [`MAX_SESSIONS`] a NEW unit's params are
+/// refused (the caller refuses the open), and no kept entry is dropped to make room; restating an
+/// entry already kept (a projection's re-call) replaces it in place. RED: the oldest entry was
+/// evicted (a hook's clamp or a taken ticket's lock, which its session then opened without), even
+/// when the key being written was already kept.
+#[test]
+fn the_kept_session_params_refuse_at_the_bound_and_never_evict() {
+    let mut all = Sessions::default();
+    let cfg = StreamsCfg::default();
+    for unit in 0..MAX_SESSIONS as u64 {
+        let _ = all.rewrite(unit, cfg.session.clone());
+    }
+    let marin = SessionConfig {
+        voice: Some("marin".into()),
+        ..cfg.session.clone()
+    };
+    let _ = all.rewrite(7, marin.clone());
+    assert_eq!(all.rewritten(7), Some(&marin), "an entry kept is restated");
+    assert!(all.rewritten(0).is_some(), "nothing was evicted");
+    let _ = all.rewrite(MAX_SESSIONS as u64, marin);
+    assert!(all.rewritten(0).is_some(), "and still nothing was evicted");
+    assert!(all.rewritten(MAX_SESSIONS as u64).is_none());
+}
