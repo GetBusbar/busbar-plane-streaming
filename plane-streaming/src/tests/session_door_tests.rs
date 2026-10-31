@@ -341,13 +341,17 @@ fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
     let locked = SessionConfig::default();
     let cap = busbar_test_kit::warn_capture::WarnCapture::default();
     let (bad, good) = tracing::subscriber::with_default(cap.clone(), || {
+        let bad = committed_session_config(&locked, br#"{"voice":7}"#);
+        if let Err(why) = &bad {
+            report_unapplied_rewrite(why);
+        }
         (
-            applied_rewrite(&locked, br#"{"voice":7}"#),
-            applied_rewrite(&locked, br#"{"voice":"marin"}"#),
+            bad,
+            committed_session_config(&locked, br#"{"voice":"marin"}"#),
         )
     });
-    assert_eq!(bad, None);
-    assert_eq!(good.and_then(|g| g.voice).as_deref(), Some("marin"));
+    assert!(bad.is_err());
+    assert_eq!(good.ok().and_then(|g| g.voice).as_deref(), Some("marin"));
     assert_eq!(cap.count("session-open hook"), 1, "{:?}", cap.messages());
     assert!(cap.contains("not a session config"), "{:?}", cap.messages());
 }

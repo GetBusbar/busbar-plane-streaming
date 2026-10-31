@@ -420,8 +420,8 @@ pub fn with_ceilings(mut locked: SessionConfig, cfg: &StreamsCfg) -> SessionConf
 /// The rewrite is a JSON object PATCHED over the `locked` params as the hook was shown them: a key
 /// the hook named wins, a key it did not name keeps the locked value (naming a key with `null`
 /// clears it). The merge comes before the decode, so a patch that names one bad field cannot be
-/// applied at all; nor can output that is not JSON, or JSON that is not an object
-/// ([`applied_rewrite`] leaves the open unmodified and says so).
+/// applied at all; nor can output that is not JSON, or JSON that is not an object. The caller
+/// preserves the locked params and reports rejection once its projection completes.
 ///
 /// # Errors
 ///
@@ -445,20 +445,12 @@ pub fn committed_session_config(
         .map_err(|e| format!("the output is not a session config: {e}"))
 }
 
-/// The session-open params a committed hook rewrite yields over `locked`, or `None` when it cannot
-/// be applied (the one hook-rewrite rule: a rewrite that cannot be applied leaves the request
-/// unmodified): the open goes ahead with the params the hook was shown, and one log line names
-/// the session-open hook stage and why.
-#[must_use]
-pub fn applied_rewrite(locked: &SessionConfig, rewrite: &[u8]) -> Option<SessionConfig> {
-    committed_session_config(locked, rewrite)
-        .map_err(|why| {
-            tracing::warn!(
-                "the session-open hook's rewrite was not applied ({why}); the session opens with \
-                 the params the hook was shown"
-            );
-        })
-        .ok()
+/// Name a rejected session-open rewrite after its projection has completed.
+pub fn report_unapplied_rewrite(why: &str) {
+    tracing::warn!(
+        "the session-open hook's rewrite was not applied ({why}); the session opens with \
+         the params the hook was shown"
+    );
 }
 
 /// The door's live sessions, by the kernel's stream.

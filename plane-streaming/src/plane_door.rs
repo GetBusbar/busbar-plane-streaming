@@ -83,7 +83,9 @@ use crate::driven::{Door, Rejected, Reply, FIELD_CONTENT_LENGTH};
 use crate::meta;
 use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME, TWILIO_MEDIA_STREAMS};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
-use crate::session_door::{applied_rewrite, Live, Sessions, Side, CEILING_TICK_NS};
+use crate::session_door::{
+    committed_session_config, report_unapplied_rewrite, Live, Sessions, Side, CEILING_TICK_NS,
+};
 
 /// The name the plane's Statement carries.
 pub const NAME: &str = crate::codec::PLANE_KEY;
@@ -2015,15 +2017,15 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         return Outcome::Refused;
     };
     let rewrite = input.rewrite().bytes();
+    let mut rewrite_rejection = None;
     let (body, rewritten) = if door.is_session() {
         let mut locked = Live::locked(door, &cfg);
         // THE SDP DOOR'S SESSION IS LOCKED TO ITS TICKET (row 132): the hooks are shown the
         // session the ticket's record locks, kept for the session the unit opens. A re-call after
         // a short answer finds it kept (the ticket is taken once): the rewrite is patched over it
         // again, which writes the same params (a patch over its own result changes nothing).
-        let stated = (door == Door::Sdp)
-            .then(|| lock(&p.sessions).rewritten(given.unit()).cloned())
-            .flatten();
+        // Each later hook patches the session the preceding hook accepted, including recalls.
+        let stated = lock(&p.sessions).rewritten(given.unit()).cloned();
         if let Some(stated) = stated {
             locked = stated;
         } else if door == Door::Sdp {
@@ -2038,11 +2040,19 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
                 locked = ticketed;
             }
         }
-        // A rewrite that cannot be applied leaves the open unmodified (and says so): the locked
-        // params are projected, not as rewritten, and nothing is kept for the unit.
-        let applied = (!rewrite.is_empty())
-            .then(|| applied_rewrite(&locked, rewrite))
-            .flatten();
+        // Rejection preserves the session already accepted for this unit. Report it only when
+        // this projection completes, so a short answer and its recall do not warn twice.
+        let applied = if rewrite.is_empty() {
+            None
+        } else {
+            match committed_session_config(&locked, rewrite) {
+                Ok(params) => Some(params),
+                Err(why) => {
+                    rewrite_rejection = Some(why);
+                    None
+                }
+            }
+        };
         let rewritten = applied.is_some();
         let params = match applied {
             Some(params) => {
@@ -2113,6 +2123,9 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         if rewritten {
             out.set(|o| &o.rewritten, body);
         }
+    }
+    if let Some(why) = rewrite_rejection {
+        report_unapplied_rewrite(&why);
     }
     Outcome::Ready
 });
