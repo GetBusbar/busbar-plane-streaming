@@ -217,16 +217,15 @@ fn cached_input_tokens_are_not_billed_twice() {
 
 // ── usage: the modality breakdown is a REFINEMENT, not the only source ──────────────────────────
 //
-// The two tests below are anchored to `testing/voice-conformance/fixtures/openai/response.done.json`
-// — the committed capture of a real OpenAI Realtime `response.done` — rather than to a literal typed
-// here. The defect was "the reader ignores the stated totals", and a hand-written fixture cannot
-// distinguish a reader that consults them from one that does not: it would be testing the test. The
-// capture supplies the shape; each test states exactly what it varies and why.
+// The two tests below are anchored to `testing/voice-conformance/fixtures/openai/response.done.json`,
+// the conformance battery's shared OpenAI Realtime `response.done` fixture (hand-written, not a
+// recorded capture), rather than to a literal typed here, so the reader and the
+// battery read one shape; each test states exactly what it varies from it and why.
 
-/// Load the committed OpenAI Realtime `response.done` capture.
+/// Load the committed OpenAI Realtime `response.done` fixture (hand-written, not a capture).
 ///
 /// It lives in this repo's voice-conformance fixture tree (moved here from busbar with the harness),
-/// where it was recorded and where the conformance battery judges against it; a missing file is a
+/// where the conformance battery judges against it; a missing file is a
 /// failure, never a skip.
 fn captured_response_done() -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -249,7 +248,7 @@ fn captured_response_done() -> Value {
 /// at zero on the other — which is why this is an oversight, not a decision.
 ///
 /// VARIED FROM THE CAPTURE: the two `*_token_details` members are REMOVED, and nothing else. That is
-/// precisely the wire case the capture cannot show (it is a breakdown-present recording) and the one
+/// precisely the wire case the capture cannot show (it carries the breakdown) and the one
 /// the defect lived in. The stated totals are the capture's own.
 #[test]
 fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
@@ -314,7 +313,7 @@ fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
 
 /// When the breakdown IS present it WINS — the stated totals are a fallback, never an override.
 ///
-/// Driven by the capture EXACTLY AS RECORDED, no variation at all: this is the ordinary wire case,
+/// Driven by the fixture EXACTLY AS COMMITTED, no variation at all: this is the ordinary wire case,
 /// and the fallback must be invisible on it.
 #[test]
 fn a_present_breakdown_is_not_overridden_by_the_stated_totals() {
