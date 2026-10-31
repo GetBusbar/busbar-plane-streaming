@@ -140,6 +140,9 @@ pub struct Live {
     pub(crate) short_near: Option<Emit>,
     /// The same, for a far-side answer.
     pub(crate) short_far: Option<Emit>,
+    /// The open's head (its status and fields) a short caller-side answer did not write: the
+    /// re-call answers it with the parked emit (the open happened once, and is answered whole).
+    pub(crate) short_head: Option<(u16, Vec<(&'static str, String)>)>,
 }
 
 impl Live {
@@ -213,6 +216,7 @@ impl Live {
             far: crate::piece::Owed::default(),
             short_near: None,
             short_far: None,
+            short_head: None,
         })
     }
 

@@ -1570,7 +1570,6 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     // The open's head: the 201 and busbar's call in `Location`, answered before anything is owed
     // either side (the open is answered under it); busbar's call goes to the far end next.
     let mut head: Option<(u16, Vec<(&'static str, String)>)> = None;
-    let recorded = placed.is_some();
     if let Some((id, form)) = placed {
         live.open_far(form);
         live.place(id.clone());
@@ -1599,6 +1598,11 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     } else {
         live.short_far.take()
     };
+    // A re-call of a short open answers the open's head it parked, with the parked emit.
+    if short.is_some() && near && head.is_none() {
+        head = live.short_head.take();
+    }
+    let recorded = head.is_some();
     let emit = match short {
         Some(emit) => emit,
         None if head.is_some() => crate::session_door::Emit::default(),
@@ -1688,9 +1692,11 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         push_fields(&mut fields, &mut arena, pairs);
     }
     if piece::settle(out, &fields, &units, &arena, None) {
-        // Short as a whole: the re-call carries the same piece, answered from here.
+        // Short as a whole: the re-call carries the same piece, answered from here, the open's
+        // head with it.
         if near {
             live.short_near = Some(emit);
+            live.short_head = head;
         } else {
             live.short_far = Some(emit);
         }
