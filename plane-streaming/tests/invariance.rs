@@ -99,42 +99,146 @@ fn the_source_contains_no_unsafe_block() {
     );
 }
 
+/// The sibling planes, by their crate names (lead ruling: a sibling check names the fixed list, never
+/// a directory scan, which is vacuous in a standalone repo), the cdylib twins with them.
+const SIBLING_PLANES: &[&str] = &[
+    "busbar-plane-llm",
+    "busbar-plane-mcp",
+    "busbar-plane-a2a",
+    "busbar-plane-decisions",
+];
+
+/// The crates a plane never depends on: the kernel side, and the legacy plugin-facing loader.
+const KERNEL_SIDE: &[&str] = &[
+    "busbar-api",
+    "busbar-core",
+    "busbar-caps",
+    "busbar-kernel",
+    "busbar-unit-",
+    "busbar-admin",
+    "busbar-plugin-loader",
+];
+
+/// Every crate `manifest`'s shipped dependency tables name: `[dependencies]`,
+/// `[build-dependencies]`, every `[target.<cfg>.…]` twin of them, and each `[dependencies.<name>]`
+/// table; by its key and by any `package = "…"` rename. (Dev-dependencies are not shipped.)
+fn shipped_dependencies(manifest: &str) -> Vec<String> {
+    let shipped = |table: &str| {
+        let last = table.rsplit('.').next().unwrap_or(table);
+        let head = table.split('.').next().unwrap_or(table);
+        (last == "dependencies" || last == "build-dependencies")
+            || (head == "dependencies" || head == "build-dependencies")
+            || (table.starts_with("target.")
+                && (table.contains(".dependencies") || table.contains(".build-dependencies")))
+    };
+    let unquote = |v: &str| v.trim().trim_matches('"').to_string();
+    let mut names = Vec::new();
+    let mut table = String::new();
+    for line in manifest.lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(header) = line.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+            table = header.trim().to_string();
+            if !shipped(&table) {
+                continue;
+            }
+            // `[dependencies.<name>]` (or a target's) names its crate in the header.
+            for marker in ["dependencies.", "build-dependencies."] {
+                if let Some((_, name)) = table.rsplit_once(marker) {
+                    if !name.contains('.') {
+                        names.push(unquote(name));
+                    }
+                }
+            }
+            continue;
+        }
+        if !shipped(&table) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = unquote(key);
+        let in_dep_table = table.ends_with("dependencies");
+        if in_dep_table {
+            names.push(key.clone());
+        }
+        // A rename: `package = "…"`, inline or in the crate's own table.
+        let package = if key == "package" {
+            Some(unquote(value))
+        } else {
+            value
+                .split_once("package")
+                .and_then(|(_, rest)| rest.split_once('='))
+                .map(|(_, rest)| unquote(rest.split([',', '}']).next().unwrap_or_default()))
+        };
+        names.extend(package);
+    }
+    names
+}
+
+/// What in `manifest` this plane may not name: a kernel-side crate, or a sibling plane.
+fn forbidden_dependencies(manifest: &str) -> Vec<String> {
+    shipped_dependencies(manifest)
+        .into_iter()
+        .filter(|name| {
+            KERNEL_SIDE.iter().any(|k| name.starts_with(k))
+                || SIBLING_PLANES
+                    .iter()
+                    .any(|s| name == s || name.strip_prefix(s) == Some("-plugin"))
+                || (name.starts_with("busbar-plane-") && name != env!("CARGO_PKG_NAME"))
+        })
+        .collect()
+}
+
 /// The manifest names no kernel-side crate, never the legacy plugin-facing one, and never a sibling
-/// plane (a plane reading another plane's private surface is never legitimate). Siblings are
-/// forbidden by shape (`busbar-plane-*` other than this crate), not by name.
+/// plane (a plane reading another plane's private surface is never legitimate).
 #[test]
 fn the_manifest_names_only_what_this_plane_may_name() {
     let manifest = manifest();
-    let deps = manifest
-        .split("[dependencies]")
-        .nth(1)
-        .expect("the manifest has a dependency section");
-    let deps = deps.split("\n[").next().unwrap_or_default();
-    for line in deps.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let name = line.split_whitespace().next().unwrap_or_default();
-        for forbidden in [
-            "busbar-api",
-            "busbar-core",
-            "busbar-caps",
+    assert!(
+        manifest.contains("[dependencies]"),
+        "the manifest has a dependency section"
+    );
+    assert_eq!(forbidden_dependencies(&manifest), Vec::<String>::new());
+}
+
+/// The check reads every shipped dependency table and every rename (audit S88): a kernel-side crate
+/// or a sibling named in a `[dependencies.<name>]` table, a target's table, or under another key
+/// through `package` is refused; the inline `[dependencies]` line was the only form read before.
+#[test]
+fn a_forbidden_crate_is_found_in_every_form_a_manifest_can_name_it() {
+    for (manifest, named) in [
+        (
+            "[dependencies.busbar-kernel]\ngit = \"x\"\n",
             "busbar-kernel",
-            "busbar-unit-",
-            "busbar-admin",
+        ),
+        (
+            "[target.'cfg(unix)'.dependencies]\nbusbar-core = \"1\"\n",
+            "busbar-core",
+        ),
+        (
+            "[dependencies]\nx = { package = \"busbar-plane-llm\", version = \"1\" }\n",
+            "busbar-plane-llm",
+        ),
+        (
+            "[dependencies.x]\npackage = \"busbar-plane-mcp\"\n",
+            "busbar-plane-mcp",
+        ),
+        (
+            "[build-dependencies]\nbusbar-plugin-loader = \"1\"\n",
             "busbar-plugin-loader",
-        ] {
-            assert!(
-                !name.starts_with(forbidden),
-                "the plane depends on {name}, which is kernel-side"
-            );
-        }
+        ),
+    ] {
         assert!(
-            !name.starts_with("busbar-plane-") || name == env!("CARGO_PKG_NAME"),
-            "the plane depends on {name}, a sibling plane"
+            forbidden_dependencies(manifest).iter().any(|n| n == named),
+            "{manifest}"
         );
     }
+    let fine = "[dependencies]\nbusbar-contract = { workspace = true }\n\n[dev-dependencies]\nbusbar-plugin-loader = \"1\"\n";
+    assert_eq!(forbidden_dependencies(fine), Vec::<String>::new());
 }
 
 /// The comments cite the design in words, not in section numbers.
