@@ -102,6 +102,7 @@ fn the_far_ends_usage_reaches_the_caller_and_the_sessions_units() {
     let mut s = sideband();
     s.from_caller(&uplink(2000), false);
     let _ = s.next(true);
+    s.accept();
     s.from_far_end(&usage_done());
     assert_eq!(
         s.units(),
@@ -261,7 +262,8 @@ fn drive_names_the_sessions_that_owe_output() {
 }
 
 /// THE SESSION'S FEE UNIT (ARCHITECT Q-L5-FEE (A); Q17-6): `per_session` is reported `1` once the
-/// far end first answers the session, never before. A session whose far end never answered (its
+/// far end accepts the session, never before, and never for a far-end piece alone (a refused
+/// upgrade's body; audit S1). A session whose far end never answered (its
 /// open failed) reports no fee unit however much its caller sent, so the kernel refunds the fee.
 #[test]
 fn the_fee_unit_is_incurred_when_the_far_end_first_answers() {
@@ -280,13 +282,19 @@ fn the_fee_unit_is_incurred_when_the_far_end_first_answers() {
     );
     let mut s = sideband();
     s.from_far_end(&audio_delta("it1"));
+    assert!(
+        !s.units().iter().any(|(c, _)| *c == PER_SESSION_CLASS),
+        "a far-end piece is not the far end accepting the session: {:?}",
+        s.units()
+    );
+    s.accept();
     assert_eq!(
         s.units()
             .iter()
             .filter(|(c, _)| *c == PER_SESSION_CLASS)
             .collect::<Vec<_>>(),
         vec![&(PER_SESSION_CLASS, 1)],
-        "the far end's first answer incurs it once"
+        "the far end's acceptance incurs it once"
     );
     s.from_far_end(&audio_delta("it2"));
     assert!(s.units().contains(&(PER_SESSION_CLASS, 1)), "still one");
@@ -458,6 +466,7 @@ fn a_session_the_kernel_cancels_mid_turn_has_already_reported_the_open_turn() {
     let cfg = StreamsCfg::default();
     let live = all.get_or_open(7, Door::Sideband, &cfg).expect("open");
     live.from_caller(&uplink(2500), false);
+    live.accept();
     live.from_far_end(&json(
         serde_json::json!({"type":"response.output_item.added",
             "item":{"type":"function_call","call_id":"c1","name":"weather"}}),

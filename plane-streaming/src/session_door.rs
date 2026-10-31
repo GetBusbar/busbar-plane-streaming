@@ -20,9 +20,10 @@
 //!   frame, toward the side it is bound for.
 //! - Every answer reports the session's cumulative units, the eight classes the plane counts over its
 //!   closed turns and its open turn's running counts (so a cancel or a cut, which reports nothing
-//!   of its own, bills what streamed from the last answer), and, once the far end has first
-//!   answered the session, its fee unit ([`PER_SESSION_CLASS`], `1`): a session whose far end never
-//!   answered (its open failed) reports none, and its fee is refunded. The kernel checkpoints them
+//!   of its own, bills what streamed from the last answer), and, once the far end has accepted the
+//!   session (its upgrade's switch or success, the SDP call's success), its fee unit
+//!   ([`PER_SESSION_CLASS`], `1`): a session whose far end never answered (its open failed, or it
+//!   refused the upgrade) reports none, and its fee is refunded. The kernel checkpoints them
 //!   and writes the session's one line at its end; the plane holds no reservation and never cuts on
 //!   money.
 //! - THE WALL-CLOCK CEILING (`streams.session_max_secs`, Q21a) is measured on the kernel's tick
@@ -220,9 +221,11 @@ impl Live {
         self.call_id = Some(call_id);
     }
 
-    /// The far end accepted the session's upgrade.
+    /// The far end accepted the session's upgrade: it answered the session, and its fee unit is
+    /// incurred. A far end that refused the upgrade never answered it.
     pub fn accept(&mut self) {
         self.accepted = true;
+        self.answered = true;
     }
 
     /// Whether the far end accepted the session's upgrade.
@@ -326,10 +329,10 @@ impl Live {
         self.take(plan);
     }
 
-    /// A far-end piece. The first one incurs the session's fee unit.
+    /// A far-end piece. It incurs no fee of its own: the fee is the far end's acceptance of the
+    /// session ([`Live::accept`], [`Live::answered_call`]), never a refusal's body.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8]) {
-        self.answered = true;
         let plan = each!(&mut self.unit, |u| u.from_far_end(bytes));
         self.take(plan);
     }
