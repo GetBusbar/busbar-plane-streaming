@@ -290,8 +290,9 @@ fn an_ungoverned_session_relays_a_call_and_never_answers_it() {
         "the call is relayed to the caller: {down}"
     );
     assert!(
-        !texts(&up).contains("function_call_output"),
-        "no result is authored upstream by the gateway"
+        up.is_empty(),
+        "nothing is authored upstream by the gateway (no result, no response.create): {}",
+        texts(&up)
     );
 }
 
