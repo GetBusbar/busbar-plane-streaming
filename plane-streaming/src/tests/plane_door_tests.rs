@@ -101,6 +101,7 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         .position(|c| *c == crate::meta::CLASS_TEXT_TOKENS_OUT)
         .expect("declared") as u32;
     let mut gemini = Live::open(Door::Gemini, &cfg).expect("a session door");
+    gemini.accept();
     gemini.from_far_end(report);
     assert_eq!(
         gemini.units(),
@@ -108,6 +109,7 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         "the Gemini session is metered on the Gemini far end's report"
     );
     let mut openai = Live::open(Door::Sideband, &cfg).expect("a session door");
+    openai.accept();
     openai.from_far_end(report);
     assert_eq!(
         openai.units(),
@@ -619,4 +621,26 @@ fn an_ended_sdp_session_frees_its_call() {
         p.end_calls(&mut sessions);
     }
     assert!(!lock(&p.brokered).holds("rtc_placed"));
+}
+
+/// A far end accepts a session's upgrade with a switch or a success, or, from a transport that
+/// states a class and no number, the success class; any other status (a refusal), or a piece with
+/// no status, is no acceptance (audit S1: only an acceptance incurs the session's fee).
+#[test]
+fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
+    use busbar_contract::abi::transport::{STATUS_CALLER_FAULT, STATUS_SUCCESS};
+    let success = u32::from(STATUS_SUCCESS);
+    for code in [101, 200, 204, 299] {
+        assert!(upgrade_accepted(PIECE_HAS_STATUS, code, success), "{code}");
+    }
+    assert!(upgrade_accepted(PIECE_HAS_STATUS, 0, success), "a class and no number");
+    for code in [100, 300, 401, 404, 429, 500, 503] {
+        assert!(!upgrade_accepted(PIECE_HAS_STATUS, code, 0), "{code}");
+    }
+    assert!(!upgrade_accepted(
+        PIECE_HAS_STATUS,
+        0,
+        u32::from(STATUS_CALLER_FAULT)
+    ));
+    assert!(!upgrade_accepted(0, 101, success), "no status stated");
 }

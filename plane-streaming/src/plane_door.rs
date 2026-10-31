@@ -1632,10 +1632,8 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                 }
                 FROM_FAR_END => {
                     // The far end's status (its first piece) says whether it accepted the
-                    // upgrade: a switch, or a success.
-                    if given.flags() & PIECE_HAS_STATUS != 0
-                        && (101..300).contains(&given.status_code())
-                    {
+                    // upgrade, which incurs the session's fee; a refusal's body incurs none.
+                    if upgrade_accepted(given.flags(), given.status_code(), given.status_class()) {
                         live.accept();
                     }
                     live.from_far_end(bytes);
@@ -1746,6 +1744,16 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         p.wake_driver();
     }
     Outcome::Ready
+}
+
+/// Whether a far-end piece with `flags` and status `code` (class `class`) is the far end accepting
+/// a session's upgrade: a switch or a success, or, from a transport that states a class and no
+/// number, the success class.
+fn upgrade_accepted(flags: u32, code: u32, class: u32) -> bool {
+    flags & PIECE_HAS_STATUS != 0
+        && ((101..300).contains(&code)
+            || (code == 0
+                && class == u32::from(busbar_contract::abi::transport::STATUS_SUCCESS)))
 }
 
 // `on_piece`: the mint door's piece, answered by the unit's [`RequestUnit`] with a ticket busbar
