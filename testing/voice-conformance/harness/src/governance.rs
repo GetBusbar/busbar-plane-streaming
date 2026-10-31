@@ -6,7 +6,7 @@
 //! any leg; the process always exits 0.
 
 use busbar_contract::abi::mechanism::call::Outcome;
-use busbar_contract::abi::plane::{FROM_CALLER, FROM_FAR_END, PIECE_LAST};
+use busbar_contract::abi::plane::{FROM_CALLER, FROM_FAR_END, PIECE_HAS_STATUS, PIECE_LAST};
 use busbar_plane_streaming::session_door::CEILING_TICK_NS;
 use busbar_plane_streaming::session_pump::SESSION_CEILING_REASON;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -165,12 +165,17 @@ fn settle_script(p: &Plugin<Plane>) -> Settled {
     let _ = open(p, SESSION, Some(PUBLIC));
     let mut s = Session::open(p, 120, 5);
     s.push(FROM_CALLER, 0, &uplink(1000));
+    // The far end's first piece carries its status: the upgrade's switch, its acceptance.
+    let first = Piece {
+        status: 101,
+        ..session(120, 5, FROM_FAR_END, PIECE_HAS_STATUS, USAGE_DONE)
+    };
     let narrow = Piece {
         units_cap: 2,
-        ..session(120, 5, FROM_FAR_END, 0, USAGE_DONE)
+        ..first
     };
     let a = piece(p, &narrow);
-    let b = piece(p, &session(120, 5, FROM_FAR_END, 0, USAGE_DONE));
+    let b = piece(p, &first);
     let c = piece(p, &session(120, 5, FROM_CALLER, PIECE_LAST, &[]));
     Settled {
         lines: vec![

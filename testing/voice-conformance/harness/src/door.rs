@@ -22,7 +22,8 @@ use busbar_contract::abi::mechanism::lifecycle::{slot as life, TickIn, TickOut};
 use busbar_contract::abi::plane::{
     slot, ArriveIn, ArriveOut, OnPieceIn, OnPieceOut, OutField, PlaneDriveIn, PlaneDriveOut,
     PlaneOpenIn, PlaneOpenOut, RecordWrite, RefusalIn, RefusalOut, UnitCount, CLAIM_EXACT,
-    CLAIM_OPEN, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_KERNEL, REFUSAL_KERNEL,
+    CLAIM_OPEN, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
+    PIECE_HAS_STATUS, REFUSAL_KERNEL,
 };
 use busbar_plane_streaming::plane_door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
@@ -761,6 +762,9 @@ pub struct Session<'p> {
     p: &'p Plugin<Plane>,
     stream: u64,
     claim: u32,
+    /// Whether the far end's first piece was pushed: the kernel states the far end's status (its
+    /// upgrade's switch) on that piece alone.
+    far_seen: bool,
     /// What it showed so far.
     pub log: Log,
 }
@@ -772,6 +776,7 @@ impl<'p> Session<'p> {
             p,
             stream,
             claim,
+            far_seen: false,
             log: Log::default(),
         };
         let a = piece(p, &session(stream, claim, FROM_CALLER, 0, &[]));
@@ -807,9 +812,25 @@ impl<'p> Session<'p> {
     /// Push `bytes` from `from` (with `flags`), then collect every frame the session still owes.
     /// Answers the piece's own answer.
     pub fn push(&mut self, from: u32, flags: u32, bytes: &[u8]) -> Answer {
+        // The far end's first piece carries its status, as the kernel sends it: the upgrade's
+        // switch (101), which is the far end accepting the session (its fee unit).
+        let first_far = from == FROM_FAR_END && !std::mem::replace(&mut self.far_seen, true);
         let a = piece(
             self.p,
-            &session(self.stream, self.claim, from, flags, bytes),
+            &Piece {
+                status: if first_far { 101 } else { 0 },
+                ..session(
+                    self.stream,
+                    self.claim,
+                    from,
+                    if first_far {
+                        flags | PIECE_HAS_STATUS
+                    } else {
+                        flags
+                    },
+                    bytes,
+                )
+            },
         );
         self.note("piece", &a);
         if a.outcome == Outcome::Ready && !a.done {
