@@ -187,6 +187,10 @@ fn linked(d: &Dispatcher) -> Plugin<Plane> {
 /// beside the test (uplifted to `target/<profile>`, or hashed in its `deps`). A missing artifact is
 /// a failure, never a skip: this test IS the dropped-in door's proof.
 fn dropped(d: &Dispatcher) -> Plugin<Plane> {
+    dropped_bound(bind(d, "dropped"))
+}
+
+fn dropped_bound(bound: Bind) -> Plugin<Plane> {
     let exe = std::env::current_exe().expect("the test binary has a path");
     let deps = exe.parent().expect("target/<profile>/deps");
     let profile = deps.parent().expect("target/<profile>");
@@ -196,8 +200,7 @@ fn dropped(d: &Dispatcher) -> Plugin<Plane> {
         .find(|p| p.exists())
         .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
     let stated = row().statement;
-    load_dropped::<Plane>(&path, &stated, bind(d, "dropped"))
-        .expect("the dropped streaming door loads")
+    load_dropped::<Plane>(&path, &stated, bound).expect("the dropped streaming door loads")
 }
 
 fn validate(p: &Plugin<Plane>, settings: &'static [u8]) -> Outcome {
@@ -1368,6 +1371,23 @@ fn project_at(
     rewrite: &'static [u8],
     arena_cap: usize,
 ) -> (Outcome, String, bool) {
+    let (outcome, body, rewritten, _) = project_recall_at(p, claim, unit, rewrite, arena_cap, None);
+    (outcome, body, rewritten)
+}
+
+fn project_recall_at(
+    p: &Plugin<Plane>,
+    claim: u32,
+    unit: u64,
+    rewrite: &'static [u8],
+    arena_cap: usize,
+    recall: Option<busbar_plugin_loader::dispatch::Recall>,
+) -> (
+    Outcome,
+    String,
+    bool,
+    Option<busbar_plugin_loader::dispatch::Recall>,
+) {
     use busbar_contract::abi::hook::{MessageView, SignalEntry};
     use busbar_contract::abi::plane::{ProjectIn, ProjectOut, SPAN_ABSENT};
     let mut arena = vec![0u8; arena_cap];
@@ -1386,13 +1406,21 @@ fn project_at(
     if !rewrite.is_empty() {
         j.input.rewrite = json(rewrite);
     }
-    let c = p.call(slot::PROJECT, &mut j);
+    let c = match recall {
+        Some(token) => p.recall(token, slot::PROJECT, &mut j),
+        None => p.call(slot::PROJECT, &mut j),
+    };
     let body = if j.out.body.offset == SPAN_ABSENT {
         String::new()
     } else {
         at(&arena, j.out.body)
     };
-    (c.outcome, body, j.out.rewritten.offset != SPAN_ABSENT)
+    (
+        c.outcome,
+        body,
+        j.out.rewritten.offset != SPAN_ABSENT,
+        c.recall,
+    )
 }
 
 /// A session door projects the session-open params it locks as the view's body; a hook's rewrite is
@@ -2720,14 +2748,86 @@ fn a_session_open_rewrite_that_cannot_be_applied_leaves_the_open_unmodified() {
 #[test]
 fn an_unapplied_rewrite_is_logged_once_when_projection_needs_more_room() {
     let d = Dispatcher::new(DispatchConfig::default());
-    let p = linked(&d);
-    assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
-    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
-    tracing::subscriber::with_default(cap.clone(), || {
+    for dropped_in in [false, true] {
+        let log = Arc::new(HostLog::default());
+        let bound = Bind {
+            sink: log.clone(),
+            ..bind(
+                &d,
+                if dropped_in {
+                    "dropped-short-rewrite"
+                } else {
+                    "linked-short-rewrite"
+                },
+            )
+        };
+        let p = if dropped_in {
+            dropped_bound(bound)
+        } else {
+            load_linked::<Plane>(&row(), bound).expect("the linked streaming door loads")
+        };
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let rewrite = br#"{"voice":7}"#;
-        assert_eq!(project_at(&p, 2, 732, rewrite, 0).0, Outcome::Failed);
-        assert_eq!(project_at(&p, 2, 732, rewrite, 4096).0, Outcome::Ready);
-    });
-    assert_eq!(cap.count("session-open hook"), 1, "{:?}", cap.messages());
-    assert!(cap.contains("not a session config"), "{:?}", cap.messages());
+        let (outcome, _, _, recall) = project_recall_at(&p, 2, 732, rewrite, 0, None);
+        assert_eq!(outcome, Outcome::Failed);
+        assert!(
+            !log.0
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains("session-open hook")),
+            "a short projection has not completed the hook stage"
+        );
+        let recall = recall.expect("the short answer grants one recall");
+        let (outcome, _, rewritten, recall) =
+            project_recall_at(&p, 2, 732, rewrite, 4096, Some(recall));
+        assert_eq!(outcome, Outcome::Ready);
+        assert!(!rewritten);
+        assert!(recall.is_none());
+        let lines = log.0.lock().unwrap();
+        let warnings: Vec<_> = lines
+            .iter()
+            .filter(|line| line.contains("session-open hook"))
+            .collect();
+        assert_eq!(warnings.len(), 1, "dropped-in {dropped_in}: {lines:?}");
+        assert!(warnings[0].contains("not a session config"), "{warnings:?}");
+    }
+}
+
+#[test]
+fn a_later_session_rewrite_keeps_prior_patches_through_short_recall_and_refusal() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    for make in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
+        let p = make(&d);
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(
+            project_at(&p, 2, 733, br#"{"voice":"marin"}"#, 4096).0,
+            Outcome::Ready
+        );
+        let patch = br#"{"instructions":"from-second-hook"}"#;
+        let (outcome, _, _, recall) = project_recall_at(&p, 2, 733, patch, 0, None);
+        assert_eq!(outcome, Outcome::Failed);
+        let (outcome, body, rewritten, _) = project_recall_at(
+            &p,
+            2,
+            733,
+            patch,
+            4096,
+            Some(recall.expect("short grants recall")),
+        );
+        assert_eq!(outcome, Outcome::Ready);
+        assert!(rewritten);
+        let view: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(view["voice"], "marin", "the first hook survives: {body}");
+        assert_eq!(view["instructions"], "from-second-hook");
+        let (outcome, body, rewritten) = project_at(&p, 2, 733, br#"{"voice":7}"#, 4096);
+        assert_eq!(outcome, Outcome::Ready);
+        assert!(!rewritten);
+        let view: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            view["voice"], "marin",
+            "invalid later rewrite keeps prior patches"
+        );
+        assert_eq!(view["instructions"], "from-second-hook");
+    }
 }
