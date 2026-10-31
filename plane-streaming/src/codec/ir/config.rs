@@ -106,7 +106,8 @@ pub struct SessionConfig {
     /// unaffected).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Requested modalities (e.g. `["audio", "text"]`).
+    /// The requested output modality, one of `["audio"]` or `["text"]` (a realtime session answers
+    /// in one; the operator's section is refused any other list).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub modalities: Vec<String>,
     /// System instructions the plane locks (the browser cannot override them).

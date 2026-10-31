@@ -120,7 +120,19 @@ fn strict_session<'de, D: Deserializer<'de>>(d: D) -> Result<SessionConfig, D::E
             "streams.{path}: not a key of the locked session"
         )));
     }
-    SessionConfig::deserialize(value).map_err(D::Error::custom)
+    let session = SessionConfig::deserialize(value).map_err(D::Error::custom)?;
+    // ONE output modality: OpenAI Realtime GA's `output_modalities` cannot request both, and Gemini
+    // Live's `responseModalities` takes one, so any other list would boot a session every far end
+    // refuses.
+    let one = matches!(session.modalities.as_slice(), [m] if m == "audio" || m == "text");
+    if !session.modalities.is_empty() && !one {
+        return Err(D::Error::custom(format!(
+            "streams.session.modalities: {:?} is not one of [\"audio\"] or [\"text\"] (a realtime \
+             session answers in one modality)",
+            session.modalities
+        )));
+    }
+    Ok(session)
 }
 
 /// THE `streams:` SECTION — the voice plane's owned config. Its VAD/session/media shape IS the GA
