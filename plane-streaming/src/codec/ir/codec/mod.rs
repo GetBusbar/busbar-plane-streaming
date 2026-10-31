@@ -114,8 +114,18 @@ pub trait DuplexReader {
     fn meter_down(&self, frame: &[u8]) -> Vec<Metered>;
 
     /// The uplink audio of a caller frame read whole as `top`: each blob's stated format (`None`:
-    /// it states none, and the session's governs) and the length its audio decodes to.
-    fn uplink_audio(&self, top: &Lite<'_>, admit: &mut dyn FnMut(Option<AudioFormat>, usize));
+    /// it states none, and the session's governs) and the length its audio decodes to. `Err` when
+    /// the frame carries audio the plane cannot meter (a format it does not count, or data that
+    /// does not decode): such a frame goes nowhere, and what was admitted of it is not counted.
+    ///
+    /// # Errors
+    ///
+    /// The frame carries audio the plane cannot meter.
+    fn uplink_audio(
+        &self,
+        top: &Lite<'_>,
+        admit: &mut dyn FnMut(Option<AudioFormat>, usize),
+    ) -> Result<(), crate::splice::Unmeterable>;
 }
 
 /// THE OpenAI Realtime GA DIALECT CODEC. A unit struct: stateless and shareable.
@@ -167,7 +177,11 @@ impl DuplexReader for OpenAiRealtimeCodec {
     /// An `input_audio_buffer.append`'s `audio`, and each `input_audio` content part of a
     /// `conversation.item.create`'s item (audio the far end consumes all the same); neither states
     /// a format.
-    fn uplink_audio(&self, top: &Lite<'_>, admit: &mut dyn FnMut(Option<AudioFormat>, usize)) {
+    fn uplink_audio(
+        &self,
+        top: &Lite<'_>,
+        admit: &mut dyn FnMut(Option<AudioFormat>, usize),
+    ) -> Result<(), crate::splice::Unmeterable> {
         match top.str_at("type") {
             wire::INPUT_AUDIO_APPEND => {
                 if let Some(len) = base64_len(top.str_at("audio")) {
@@ -188,6 +202,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
             }
             _ => {}
         }
+        Ok(())
     }
 }
 

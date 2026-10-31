@@ -11,7 +11,7 @@
 //! ATOMICALLY (`toolCall.functionCalls[]`): each call in it is one opened call. Gemini Live has no
 //! in-band error message (it reports errors with the socket's close).
 
-use super::peek::{base64_len, Head, Lite};
+use super::peek::{base64_len_any_alphabet, Head, Lite};
 use super::{billed_count, usage_floor, usage_object, DuplexReader, Metered};
 use crate::codec::ir::config::{IrVad, MaxOutputTokens, SessionConfig};
 use crate::codec::ir::media::AudioFormat;
@@ -297,29 +297,54 @@ impl DuplexReader for GeminiLiveCodec {
     }
 
     /// `realtimeInput`'s GA `audio` blob, else each legacy `mediaChunks[]` blob, at the format its
-    /// mime states; a frame that is a `setup` or a `clientContent` carries none.
-    fn uplink_audio(&self, top: &Lite<'_>, admit: &mut dyn FnMut(Option<AudioFormat>, usize)) {
+    /// mime states; a frame that is a `setup` or a `clientContent` carries none. Audio the plane
+    /// cannot meter is refused (`Err`), never relayed unmetered: a GA `audio` blob whose mime is not
+    /// a PCM rate the meter counts, or whose data does not decode in either base64 alphabet; a
+    /// legacy chunk whose mime is `audio/*` and the same; and a GA `audio` blob beside any legacy
+    /// audio chunk (the meter reads the GA blob alone, the far end may read both). A chunk that is
+    /// not audio (video) is not audio the meter counts, and passes.
+    fn uplink_audio(
+        &self,
+        top: &Lite<'_>,
+        admit: &mut dyn FnMut(Option<AudioFormat>, usize),
+    ) -> Result<(), crate::splice::Unmeterable> {
+        use crate::splice::Unmeterable;
         if top.get(wire::SETUP).is_some() || top.get(wire::CLIENT_CONTENT).is_some() {
-            return;
+            return Ok(());
         }
         let Some(ri) = top.get(wire::REALTIME_INPUT) else {
-            return;
+            return Ok(());
         };
-        let mut blob = |b: &Lite<'_>| {
-            if let (Some(format), Some(len)) = (
-                audio_format_from_mime(b.str_at("mimeType")),
-                base64_len(b.str_at("data")),
-            ) {
+        let is_audio = |b: &Lite<'_>| {
+            b.str_at("mimeType")
+                .get(..AUDIO_MIME_PREFIX.len())
+                .is_some_and(|p| p.eq_ignore_ascii_case(AUDIO_MIME_PREFIX))
+        };
+        let mut blob = |b: &Lite<'_>| match (
+            audio_format_from_mime(b.str_at("mimeType")),
+            base64_len_any_alphabet(b.str_at("data")),
+        ) {
+            (Some(format), Some(len)) => {
                 admit(Some(format), len);
+                Ok(())
             }
+            _ => Err(Unmeterable),
         };
-        match (ri.get("audio"), ri.get("mediaChunks")) {
-            (Some(audio), _) => blob(audio),
-            (None, Some(Lite::Arr(chunks))) => chunks.iter().for_each(blob),
-            _ => {}
+        let chunks = match ri.get("mediaChunks") {
+            Some(Lite::Arr(chunks)) => chunks.as_slice(),
+            _ => &[],
+        };
+        match ri.get("audio") {
+            Some(_) if chunks.iter().any(is_audio) => Err(Unmeterable),
+            Some(audio) => blob(audio),
+            None => chunks.iter().filter(|c| is_audio(c)).try_for_each(blob),
         }
     }
 }
+
+/// The mime prefix of an audio blob (matched ignoring case, as [`audio_format_from_mime`] reads
+/// the mime).
+const AUDIO_MIME_PREFIX: &str = "audio/";
 
 #[cfg(test)]
 mod tests;
