@@ -664,7 +664,8 @@ const fn attempt(unit: u64, claim: u32) -> Push<'static> {
 }
 
 /// THE UNIT SCRIPT: the mint (busbar mints the ticket itself and dials nothing; the dispatcher here
-/// serves no ticket, so the mint is the served plane's 502), the SDP door's request piece (it opens a
+/// grants the key no pool, so the mint is refused 403 `not_granted` before any ticket is minted,
+/// [`MINT_NOT_GRANTED`]), the SDP door's request piece (it opens a
 /// session, so a plain request is refused 501, explained), a session door's request piece and an unpublished
 /// claim's (the metadata path among them: it is no claim, 1.5.5 parity).
 fn unit_script(p: &Plugin<Plane>) -> Vec<String> {
