@@ -142,3 +142,22 @@ fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings(
         );
     }
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S6): an operator `server_vad` that names no
+/// `silence_duration_ms` takes OpenAI's published default, 500 ms (the openai-openapi spec's
+/// `turn_detection.silence_duration_ms`: "Defaults to 500ms"), and the locked session states it on
+/// the wire. RED: the IR's own default was 200, written explicitly, so every turn was cut at 200 ms.
+#[test]
+fn a_server_vad_naming_no_silence_window_locks_the_published_500ms() {
+    let cfg: StreamsCfg = serde_json::from_str(
+        r#"{"session":{"turn_detection":{"type":"server_vad","threshold":0.8}}}"#,
+    )
+    .expect("the section parses");
+    let ga = cfg.session.ga_session();
+    assert_eq!(
+        ga.get("audio")
+            .and_then(|a| a.pointer("/input/turn_detection/silence_duration_ms")),
+        Some(&serde_json::json!(500)),
+        "{ga:?}"
+    );
+}
