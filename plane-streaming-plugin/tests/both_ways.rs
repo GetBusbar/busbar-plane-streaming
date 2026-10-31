@@ -796,6 +796,10 @@ struct TicketHost {
     minted: std::sync::Mutex<Vec<u8>>,
     /// The `pool:<entry>` targets the key is granted (`entitlement.check`).
     granted: &'static [&'static str],
+    /// Unit 50's ticket is taken once, as a host takes it: a second take is refused.
+    once: bool,
+    /// Whether unit 50's ticket was taken.
+    took: std::sync::atomic::AtomicBool,
 }
 
 /// The record unit 50's ticket locks: a session config naming its instructions.
@@ -839,7 +843,12 @@ impl busbar_contract::services::double::ServicesDouble for TicketHost {
         unit: Option<u64>,
     ) -> busbar_contract::services::Stored {
         use busbar_contract::abi::host::service::{TICKET_NONE, TICKET_TAKEN};
-        if unit == Some(50) {
+        let again = unit == Some(50)
+            && self.took.swap(true, std::sync::atomic::Ordering::Relaxed)
+            && self.once;
+        if again {
+            busbar_contract::services::Stored::refused("the unit's ticket was taken already")
+        } else if unit == Some(50) {
             busbar_contract::services::Stored {
                 bytes: TICKET_RECORD.to_vec(),
                 ..busbar_contract::services::Stored::ready(TICKET_TAKEN)
@@ -878,6 +887,8 @@ fn ticket_host_granting(granted: &'static [&'static str]) -> (Dispatcher, Arc<Ti
         draws: std::sync::atomic::AtomicU64::new(0xa0),
         minted: std::sync::Mutex::new(Vec::new()),
         granted,
+        once: false,
+        took: std::sync::atomic::AtomicBool::new(false),
     });
     let d = Dispatcher::with_services(DispatchConfig::default(), host.clone());
     (d, host)
@@ -1345,15 +1356,26 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
 /// `project` of unit 31 on `claim` with `rewrite` (empty = none): its outcome, the projected body
 /// and whether it was answered as rewritten.
 fn project(p: &Plugin<Plane>, claim: u32, rewrite: &'static [u8]) -> (Outcome, String, bool) {
+    project_at(p, claim, 31, rewrite, 4096)
+}
+
+/// [`project`] of `unit`, its arena lent with `arena_cap` bytes.
+fn project_at(
+    p: &Plugin<Plane>,
+    claim: u32,
+    unit: u64,
+    rewrite: &'static [u8],
+    arena_cap: usize,
+) -> (Outcome, String, bool) {
     use busbar_contract::abi::hook::{MessageView, SignalEntry};
     use busbar_contract::abi::plane::{ProjectIn, ProjectOut, SPAN_ABSENT};
-    let mut arena = vec![0u8; 4096];
+    let mut arena = vec![0u8; arena_cap];
     let mut signals: Vec<SignalEntry> = vec![z(); 4];
     let mut turns: Vec<MessageView> = vec![z(); 4];
     let mut j: Frame<ProjectIn, ProjectOut> = Frame::new(z(), z());
     (j.input.head, j.out.head) = (in_head(), out_head());
     j.input.claim = claim;
-    j.input.unit = 31;
+    j.input.unit = unit;
     j.input.arena_buf = arena.as_mut_ptr();
     j.input.arena_cap = arena.len();
     j.input.signals_buf = signals.as_mut_ptr();
@@ -2575,6 +2597,40 @@ fn an_sdp_open_answered_short_answers_its_201_and_location_on_the_re_call() {
         assert!(
             whole.contains("location=/v1/realtime/calls/rtc_"),
             "busbar's call in Location: {whole}"
+        );
+    }
+}
+
+/// RED (audit plane-streaming round 52b0f93ac9, S5): the SDP door's projection takes the ticket
+/// that admitted the unit (once: a host refuses a second take) and patches a hook's rewrite over
+/// the session it locks. Answered short, it is re-called with room and the same rewrite: the
+/// re-call projects the rewrite over the TICKET's session again, never over the section's. RED:
+/// the re-call's take was refused, the rewrite was patched over the section's session, and the
+/// ticket's instructions were lost from the session the unit opens. Both ways.
+#[test]
+fn a_short_sdp_projection_re_called_keeps_the_tickets_session() {
+    for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
+        let host = Arc::new(TicketHost {
+            draws: std::sync::atomic::AtomicU64::new(0xa0),
+            minted: std::sync::Mutex::new(Vec::new()),
+            granted: &["pool:m-cap"],
+            once: true,
+            took: std::sync::atomic::AtomicBool::new(false),
+        });
+        let d = Dispatcher::with_services(DispatchConfig::default(), host);
+        let p = door(&d);
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let rewrite: &[u8] = br#"{"voice":"marin"}"#;
+        let (short, _, _) = project_at(&p, 1, 50, rewrite, 0);
+        assert_eq!(short, Outcome::Failed, "answered short");
+        let (outcome, body, rewritten) = project_at(&p, 1, 50, rewrite, 4096);
+        assert_eq!(outcome, Outcome::Ready);
+        assert!(rewritten);
+        let view: serde_json::Value = serde_json::from_str(&body).expect("the projected params");
+        assert_eq!(view["voice"], "marin", "{body}");
+        assert_eq!(
+            view["instructions"], "from-ticket",
+            "the ticket's session, under the rewrite: {body}"
         );
     }
 }
