@@ -357,7 +357,7 @@ fn a_rewritten_session_open_locks_the_rewritten_params_once() {
         voice: Some("marin".to_string()),
         ..cfg.session.clone()
     };
-    sessions.rewrite(7, rewritten);
+    assert!(sessions.rewrite(7, rewritten));
     assert!(sessions.get_or_open(7, Door::Sideband, &cfg).is_some());
     sessions.close(7);
     assert!(
@@ -674,16 +674,19 @@ fn the_kept_session_params_refuse_at_the_bound_and_never_evict() {
     let mut all = Sessions::default();
     let cfg = StreamsCfg::default();
     for unit in 0..MAX_SESSIONS as u64 {
-        let _ = all.rewrite(unit, cfg.session.clone());
+        assert!(all.rewrite(unit, cfg.session.clone()));
     }
     let marin = SessionConfig {
         voice: Some("marin".into()),
         ..cfg.session.clone()
     };
-    let _ = all.rewrite(7, marin.clone());
+    assert!(all.rewrite(7, marin.clone()));
     assert_eq!(all.rewritten(7), Some(&marin), "an entry kept is restated");
     assert!(all.rewritten(0).is_some(), "nothing was evicted");
-    let _ = all.rewrite(MAX_SESSIONS as u64, marin);
+    assert!(
+        !all.rewrite(MAX_SESSIONS as u64, marin),
+        "a new unit at the bound is refused"
+    );
     assert!(all.rewritten(0).is_some(), "and still nothing was evicted");
     assert!(all.rewritten(MAX_SESSIONS as u64).is_none());
 }
