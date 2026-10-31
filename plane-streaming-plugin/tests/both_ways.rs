@@ -2634,3 +2634,60 @@ fn a_short_sdp_projection_re_called_keeps_the_tickets_session() {
         );
     }
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S53; lead ruling "unit table full: one wording and
+/// 429 across planes"): an instance holding as many live sessions as it keeps refuses the next
+/// session at its arrival, before any piece, with the plane's code, a 429 and the words its sibling
+/// bounds wear; no live session is dropped for it, and once one ends the next arrival is admitted.
+/// RED: the arrival was admitted and its first piece answered a bare REFUSED, no words, no status.
+/// Both ways.
+#[test]
+fn a_session_at_the_session_bound_is_refused_at_its_arrival_in_words() {
+    const MAX_SESSIONS: u64 = 4096;
+    const PLAIN: u32 = 5;
+    let d = host();
+    let doors = vec![linked(&d), dropped(&d)];
+    for p in &doors {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(256);
+        let piece = |stream: u64, flags: u32| Push {
+            stream,
+            ..push(stream, PLAIN, FROM_CALLER, flags, &[])
+        };
+        for stream in 1..=MAX_SESSIONS {
+            assert!(
+                b.call(p, &piece(stream, 0)).starts_with("Ready "),
+                "{stream}"
+            );
+        }
+        let arrive_plain = |unit: u64| {
+            let mut a: Frame<ArriveIn, ArriveOut> = Frame::new(z(), z());
+            a.input.head = in_head();
+            (a.input.unit, a.input.claim) = (unit, PLAIN);
+            a.input.target = text("/v1/realtime?model=gpt-realtime");
+            a.out.head = out_head();
+            let c = p.call(slot::ARRIVE, &mut a);
+            (
+                c.outcome,
+                a.out.refusal,
+                a.out.refusal_status,
+                read(a.out.head.error),
+            )
+        };
+        assert_eq!(
+            arrive_plain(MAX_SESSIONS + 1),
+            (
+                Outcome::Refused,
+                5,
+                429,
+                "busbar is holding as many realtime calls as it admits at once; retry once one has ended"
+                    .to_string()
+            )
+        );
+        assert!(
+            b.call(p, &piece(1, PIECE_LAST)).contains("done=true"),
+            "session 1 ends"
+        );
+        assert_eq!(arrive_plain(MAX_SESSIONS + 1).0, Outcome::Ready);
+    }
+}
