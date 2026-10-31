@@ -119,3 +119,23 @@ fn the_providers_call_id_is_the_call_segment_of_its_location() {
     assert_eq!(call_id_of("/v1/realtime/calls/abc"), None);
     assert_eq!(call_id_of("/v1/realtime/calls/rtc_"), None);
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S76): the provider's call id a far end's `Location`
+/// names is taken only when it is the same well-formed id a sideband arrival's is (ASCII letters,
+/// digits, `_`, `-`): an untrusted answer naming `rtc_x&model=y` would otherwise add parameters to
+/// the sideband's dial (`?call_id=`, spliced unescaped). RED: any `rtc_` segment was taken.
+#[test]
+fn a_provider_call_id_carrying_anything_but_id_characters_is_not_taken() {
+    for location in [
+        "/v1/realtime/calls/rtc_x&model=y",
+        "/v1/realtime/calls/rtc_x%26model=y",
+        "/v1/realtime/calls/rtc_x model",
+        "/v1/realtime/calls/rtc_é",
+    ] {
+        assert_eq!(call_id_of(location), None, "{location}");
+    }
+    assert_eq!(
+        call_id_of("/v1/realtime/calls/rtc_A-b_9"),
+        Some("rtc_A-b_9".to_string())
+    );
+}
