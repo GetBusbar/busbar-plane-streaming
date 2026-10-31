@@ -18,7 +18,7 @@ use busbar_contract::caps::ReasonCode;
 use busbar_contract::media::base64_encode;
 use busbar_kernel::plane_driver::refusal_status;
 use busbar_plane_streaming::claims::WS_TRANSPORT;
-use busbar_plane_streaming::door::{
+use busbar_plane_streaming::plane_door::{
     refusal_body, refusal_render, AUDIT_KIND, LIVE_STYLE, MINTED_NONE, REALTIME_STYLE,
     REFUSAL_NO_DOOR, RIDES_LIVE_SOCKET, RIDES_REALTIME_CALL, RIDES_REALTIME_SOCKET,
 };

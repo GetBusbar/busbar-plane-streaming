@@ -38,7 +38,7 @@ use busbar_plane_streaming::claims::{dialect_for, Dialect, DIALECT_CLAIMS, WS_TR
 use busbar_plane_streaming::codec::topology::twilio::{
     assert_g711_ulaw, TwilioEnvelope, TwilioEvent,
 };
-use busbar_plane_streaming::door::{ROUTES, SIGNATURE_AUTH};
+use busbar_plane_streaming::plane_door::{ROUTES, SIGNATURE_AUTH};
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::Plugin;
 use serde_json::{json, Value};

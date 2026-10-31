@@ -4,7 +4,7 @@
 //! THE DOOR, BOTH WAYS: the plumbing every leg drives the streaming plane through.
 //!
 //! The same door is loaded twice through the ONE loader: compiled in
-//! (`busbar_plane_streaming::door::door`, [`load_linked`]) and dropped in (the plane's cdylib twin,
+//! (`busbar_plane_streaming::plane_door::door`, [`load_linked`]) and dropped in (the plane's cdylib twin,
 //! `busbar-plane-streaming-plugin`, beside this harness, [`load_dropped`] against the linked row's
 //! own Statement).
 //! Every leg builds a fresh instance of each, drives both with one script, and [`judge`]s the pair:
@@ -24,7 +24,7 @@ use busbar_contract::abi::plane::{
     PlaneOpenIn, PlaneOpenOut, RecordWrite, RefusalIn, RefusalOut, UnitCount, CLAIM_EXACT,
     CLAIM_OPEN, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_KERNEL, REFUSAL_KERNEL,
 };
-use busbar_plane_streaming::door;
+use busbar_plane_streaming::plane_door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::{
     in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
@@ -184,7 +184,7 @@ fn dropped_path() -> Result<PathBuf, String> {
 impl Rig {
     /// The dispatcher, the linked row's Statement, and where the dropped-in door lives.
     pub fn boot() -> Self {
-        let row = LinkedRow::of(door::door).expect("the streaming door states itself");
+        let row = LinkedRow::of(plane_door::door).expect("the streaming door states itself");
         Rig {
             dispatcher: Dispatcher::new(DispatchConfig::default()),
             count: Cell::new(0),
@@ -210,7 +210,7 @@ impl Rig {
 
     /// A fresh instance of the LINKED door.
     pub fn linked(&self) -> Plugin<Plane> {
-        let row = LinkedRow::of(door::door).expect("the streaming door states itself");
+        let row = LinkedRow::of(plane_door::door).expect("the streaming door states itself");
         load_linked::<Plane>(&row, self.bind("linked")).expect("the linked streaming door loads")
     }
 
