@@ -323,3 +323,17 @@ fn a_present_breakdown_is_not_overridden_by_the_stated_totals() {
     assert_eq!(u.audio_out, 60, "the captured audio-out slice: {u:?}");
     assert_eq!(u.text_out, 20, "the captured text-out slice: {u:?}");
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S2): a far end stating counts near `u64::MAX` saturates
+/// the input total, which then sits below the audio and image breakdown it must cover. The text
+/// slice is what is left of the input, never a wrapped subtraction: zero, as the Gemini twin
+/// (`usage_from_metadata`) answers the same report.
+#[test]
+fn a_saturated_input_total_leaves_no_text_slice_and_never_wraps() {
+    let u = usage_of(&json!({"type":"response.done","response":{"usage":{
+        "input_tokens": u64::MAX,
+        "input_token_details":{"audio_tokens": u64::MAX - 2, "image_tokens": 5}}}}));
+    assert_eq!(u.text_in, 0, "{u:?}");
+    assert_eq!(u.audio_in, u64::MAX - 2, "{u:?}");
+    assert_eq!(u.image_in, 5, "{u:?}");
+}
