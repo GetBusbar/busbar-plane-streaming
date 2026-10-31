@@ -191,8 +191,8 @@ fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     Ok(IrDuplexUsage {
         audio_in,
         audio_out,
-        text_in: input - audio_in - image_in,
-        text_out: output - audio_out,
+        text_in: input.saturating_sub(audio_in).saturating_sub(image_in),
+        text_out: output.saturating_sub(audio_out),
         image_in,
         video_in: 0,
         cached: billed_count(ind, "cached_tokens")?,
