@@ -17,8 +17,8 @@
 //! * Renders the inbound-webhook TwiML that tells Twilio which WS URL to dial (the crate's tests').
 //! * REFUSES a `start` whose negotiated media format is not `g711_ulaw` / 8000 Hz — a silent format
 //!   mismatch would corrupt the barge-in truncate arithmetic without erroring, so it fails closed.
-//! * Guards a WS connection's `streamSid` against the value bound at admission, so a forged or replayed
-//!   connection cannot inject audio into a session it does not own before any byte is admitted.
+//! * Admits only the media of the stream the call's first `start` bound (Twilio sends one `start`
+//!   per stream): media naming another stream, and a second `start`, are not admitted.
 
 use serde::Serialize;
 
@@ -392,6 +392,9 @@ impl TwilioBridge {
     #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, frame: &[u8]) -> CallerStep {
         match TwilioEnvelope::decode(frame) {
+            // The call's stream is the one its first start binds: Twilio sends one start per
+            // stream, and a second binds nothing (media naming it is not admitted).
+            Ok(TwilioEvent::Start(_)) if self.stream_sid.is_some() => CallerStep::Nothing,
             Ok(TwilioEvent::Start(start)) => {
                 if start.stream_sid.is_empty() {
                     return refused(&TwilioError::Malformed);
