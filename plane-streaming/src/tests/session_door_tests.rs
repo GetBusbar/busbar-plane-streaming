@@ -118,9 +118,8 @@ fn the_far_ends_usage_reaches_the_caller_and_the_sessions_units() {
     );
     let emit = s.next(false);
     assert!(
-        matches!(&emit.frame, Some((Side::Caller, f)) if text(f).contains("response.done"))
-            || emit.frame.is_none(),
-        "{emit:?}"
+        matches!(&emit.frame, Some((Side::Caller, f)) if text(f).contains("response.done")),
+        "the far end's report is relayed to the caller: {emit:?}"
     );
 }
 
