@@ -25,6 +25,8 @@ use peek::{base64_len, Head, Lite};
 /// The dialect wire `type` tokens the meter reads — named once here.
 mod wire {
     pub const INPUT_AUDIO_APPEND: &str = "input_audio_buffer.append";
+    pub const ITEM_CREATE: &str = "conversation.item.create";
+    pub const INPUT_AUDIO_PART: &str = "input_audio";
     pub const OUTPUT_ITEM_ADDED: &str = "response.output_item.added";
     pub const RESPONSE_DONE: &str = "response.done";
     pub const ERROR: &str = "error";
@@ -162,12 +164,29 @@ impl DuplexReader for OpenAiRealtimeCodec {
         }
     }
 
-    /// An `input_audio_buffer.append`'s `audio`, which states no format.
+    /// An `input_audio_buffer.append`'s `audio`, and each `input_audio` content part of a
+    /// `conversation.item.create`'s item (audio the far end consumes all the same); neither states
+    /// a format.
     fn uplink_audio(&self, top: &Lite<'_>, admit: &mut dyn FnMut(Option<AudioFormat>, usize)) {
-        if top.str_at("type") == wire::INPUT_AUDIO_APPEND {
-            if let Some(len) = base64_len(top.str_at("audio")) {
-                admit(None, len);
+        match top.str_at("type") {
+            wire::INPUT_AUDIO_APPEND => {
+                if let Some(len) = base64_len(top.str_at("audio")) {
+                    admit(None, len);
+                }
             }
+            wire::ITEM_CREATE => {
+                let parts = top.get("item").and_then(|item| item.get("content"));
+                if let Some(Lite::Arr(parts)) = parts {
+                    for part in parts {
+                        if part.str_at("type") == wire::INPUT_AUDIO_PART {
+                            if let Some(len) = base64_len(part.str_at("audio")) {
+                                admit(None, len);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
