@@ -14,7 +14,6 @@
 //!   the raw µ-law bytes the far end's uplink append carries.
 //! * ENCODES the far end's µ-law audio back into the Twilio outbound `media` envelope, and relays a
 //!   tool call the model makes down the session as the far end wrote it (Law 11).
-//! * Renders the inbound-webhook TwiML that tells Twilio which WS URL to dial (the crate's tests').
 //! * REFUSES a `start` whose negotiated media format is not `g711_ulaw` / 8000 Hz — a silent format
 //!   mismatch would corrupt the barge-in truncate arithmetic without erroring, so it fails closed.
 //! * Admits only the media of the stream the call's first `start` bound (Twilio sends one `start`
