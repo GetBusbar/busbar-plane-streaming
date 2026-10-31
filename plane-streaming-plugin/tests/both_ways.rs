@@ -2327,7 +2327,7 @@ fn an_sdp_offer_arriving_as_a_plain_request_is_refused_501_explained() {
 /// taken or call placed: a 429 worded by the door, and no other caller's call is dropped for it.
 /// RED: the offer was taken and placed, and the call it displaced was another caller's. Both ways.
 #[test]
-fn an_sdp_offer_at_the_call_bound_is_refused_at_its_arrival() {
+fn an_sdp_offer_at_the_live_session_and_call_bound_is_refused_at_its_arrival() {
     const MAX_BROKERED_CALLS: u64 = 4096;
     const MAX_CALLS_PER_CALLER: u64 = MAX_BROKERED_CALLS / 64;
     let d = host();
@@ -2346,6 +2346,7 @@ fn an_sdp_offer_at_the_call_bound_is_refused_at_its_arrival() {
         a.out.head = out_head();
         let c = p.call(slot::ARRIVE, &mut a);
         assert_eq!(c.outcome, Outcome::Refused);
+        assert_eq!(a.out.refusal, 5, "the live-session bound refuses first");
         assert_eq!(a.out.refusal_status, 429);
         assert_eq!(
             read(a.out.head.error),
