@@ -256,3 +256,28 @@ fn a_gemini_callers_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
         );
     }
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S74): a frame naming the governed member more than
+/// once at its top level (whatever each copy holds, however its key is spelled) is refused: the
+/// frame goes nowhere. RED: every copy was rebuilt and re-serialized with the whole locked object,
+/// so a cheap frame of a thousand `"session":{}` copies cost a thousand locked objects of memory and
+/// far-end traffic.
+#[test]
+fn a_frame_repeating_the_governed_member_is_refused_never_amplified() {
+    let locked = rule(serde_json::json!({"instructions": "x".repeat(4096)}));
+    let mut frame = String::from(r#"{"type":"session.update""#);
+    for _ in 0..1000 {
+        frame.push_str(r#","session":{}"#);
+    }
+    frame.push('}');
+    assert!(splice(frame.as_bytes(), &locked).is_none(), "a thousand copies");
+    for frame in [
+        &br#"{"session":{},"session":{}}"#[..],
+        br#"{"session":1,"session":{"voice":"verse"}}"#,
+        br#"{"session":{},"session":{}}"#,
+    ] {
+        assert!(splice(frame, &locked).is_none(), "{}", text(frame));
+    }
+    let once = splice(br#"{"session":{}}"#, &locked).expect("one copy is spliced");
+    assert!(text(&once).contains("xxxx"));
+}
