@@ -268,6 +268,10 @@ fn every_emitted_frame_is_a_text_message_and_either_opcode_is_read() {
     );
     let setup = json(serde_json::json!({"setupComplete": {}}));
     let plan = s.from_far_end(&setup);
+    // The setupComplete is relayed to the caller, once, exactly as it came, and is text (audit
+    // S85: the loop below held for a session that emitted nothing).
+    assert_eq!(plan.to_caller, vec![setup.clone()], "relayed as it came");
+    assert!(plan.to_far_end.is_empty());
     for frame in plan.to_caller.iter().chain(plan.to_far_end.iter()) {
         assert!(
             std::str::from_utf8(frame).is_ok(),
