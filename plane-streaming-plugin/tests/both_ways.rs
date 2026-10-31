@@ -2493,3 +2493,53 @@ fn an_unreadable_usage_bills_the_floor_and_its_line_reaches_the_host_log() {
         );
     }
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S1, MONEY): a far end that REFUSES the session's
+/// upgrade (a 401 for a bad operator key, a 429, a 5xx) never answered the session: no fee unit is
+/// reported (the kernel refunds it) and a cancel is ABORTED. One that accepts it (101) incurs the
+/// fee, and a cancel is PARTIAL. On the plain realtime socket (claim 5) and the Gemini Live socket
+/// (claim 3), both ways. RED: every far-end piece incurred the fee, whatever its status.
+#[test]
+fn a_refused_upgrade_reports_no_session_fee_and_cancels_aborted() {
+    const REFUSAL: &[u8] =
+        br#"{"error":{"message":"Incorrect API key provided.","type":"invalid_request_error"}}"#;
+    let d = host();
+    for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
+        let p = door(&d);
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        for (stream, claim, status, fee, disposition) in [
+            (31, 5, 401, false, CANCEL_ABORTED),
+            (32, 5, 429, false, CANCEL_ABORTED),
+            (33, 3, 503, false, CANCEL_ABORTED),
+            (34, 5, 101, true, CANCEL_OK_PARTIAL),
+            (35, 3, 101, true, CANCEL_OK_PARTIAL),
+        ] {
+            let piece = |from, flags, bytes| Push {
+                stream,
+                ..push(stream, claim, from, flags, bytes)
+            };
+            let mut b = Bufs::with_units(1 << 18, 8);
+            b.call(&p, &piece(FROM_CALLER, 0, &[]));
+            let last = if fee { 0 } else { PIECE_LAST };
+            let body = if fee { &[][..] } else { REFUSAL };
+            let answered = b.call(
+                &p,
+                &Push {
+                    status,
+                    ..piece(FROM_FAR_END, PIECE_HAS_STATUS | last, body)
+                },
+            );
+            assert_eq!(
+                b.last_units.contains("8:1=1"),
+                fee,
+                "status {status} on claim {claim}: {answered} units=[{}]",
+                b.last_units
+            );
+            assert_eq!(
+                cancel_disposition(&p, stream),
+                disposition,
+                "status {status} on claim {claim}"
+            );
+        }
+    }
+}
