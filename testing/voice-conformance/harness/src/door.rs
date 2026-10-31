@@ -4,7 +4,7 @@
 //! THE DOOR, BOTH WAYS: the plumbing every leg drives the streaming plane through.
 //!
 //! The same door is loaded twice through the ONE loader: compiled in
-//! (`busbar_plane_streaming::door::door`, [`load_linked`]) and dropped in (the plane's cdylib twin,
+//! (`busbar_plane_streaming::plane_door::door`, [`load_linked`]) and dropped in (the plane's cdylib twin,
 //! `busbar-plane-streaming-plugin`, beside this harness, [`load_dropped`] against the linked row's
 //! own Statement).
 //! Every leg builds a fresh instance of each, drives both with one script, and [`judge`]s the pair:
@@ -24,7 +24,7 @@ use busbar_contract::abi::plane::{
     PlaneOpenIn, PlaneOpenOut, RecordWrite, RefusalIn, RefusalOut, UnitCount, CLAIM_EXACT,
     CLAIM_OPEN, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_KERNEL, REFUSAL_KERNEL,
 };
-use busbar_plane_streaming::door;
+use busbar_plane_streaming::plane_door;
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::{
     in_head, load_dropped, load_linked, out_head, Bind, DispatchConfig, Dispatcher, Frame,
@@ -184,7 +184,7 @@ fn dropped_path() -> Result<PathBuf, String> {
 impl Rig {
     /// The dispatcher, the linked row's Statement, and where the dropped-in door lives.
     pub fn boot() -> Self {
-        let row = LinkedRow::of(door::door).expect("the streaming door states itself");
+        let row = LinkedRow::of(plane_door::door).expect("the streaming door states itself");
         Rig {
             dispatcher: Dispatcher::new(DispatchConfig::default()),
             count: Cell::new(0),
@@ -210,7 +210,7 @@ impl Rig {
 
     /// A fresh instance of the LINKED door.
     pub fn linked(&self) -> Plugin<Plane> {
-        let row = LinkedRow::of(door::door).expect("the streaming door states itself");
+        let row = LinkedRow::of(plane_door::door).expect("the streaming door states itself");
         load_linked::<Plane>(&row, self.bind("linked")).expect("the linked streaming door loads")
     }
 
@@ -450,6 +450,36 @@ pub fn arrive(p: &Plugin<Plane>, claim: u32) -> Arrived {
     }
 }
 
+/// ONE RECORD WRITE a door's answer made, read back: its op (`RECORD_PUT`, a record of the door's
+/// own, or `RECORD_AUDIT`, the unit's audit row on the kernel's chain: the one fixed record), its
+/// kind (a put's record kind; an audit row's outcome), its key (an audit row's action) and its
+/// value (an audit row's resource).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    /// `RECORD_PUT` | `RECORD_AUDIT`.
+    pub op: u32,
+    /// A put's record kind; an audit row's outcome (`AUDIT_*`).
+    pub kind: u32,
+    /// The key: an audit row's action.
+    pub key: String,
+    /// The value: an audit row's resource.
+    pub value: String,
+}
+
+/// The first `written` record writes in `records`, read back over `arena`.
+fn rows(records: &[RecordWrite], written: u32, arena: &[u8]) -> Vec<Row> {
+    let n = (written as usize).min(records.len());
+    records[..n]
+        .iter()
+        .map(|w| Row {
+            op: w.op,
+            kind: w.kind,
+            key: at(arena, w.key),
+            value: at(arena, w.value),
+        })
+        .collect()
+}
+
 /// What `refusal` rendered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rendered {
@@ -463,6 +493,8 @@ pub struct Rendered {
     pub status: u32,
     /// The record writes it made.
     pub records: u32,
+    /// Each of them, read back.
+    pub rows: Vec<Row>,
 }
 
 /// The kernel refuses unit `unit` on `dialect` with `status` and `words`: the door renders it.
@@ -518,6 +550,7 @@ pub fn refusal_for(
             .collect(),
         status: out.status,
         records: out.records_written,
+        rows: rows(&records, out.records_written, &arena),
     }
 }
 
@@ -620,6 +653,8 @@ pub struct Answer {
     pub need: u32,
     /// The record writes it made.
     pub records: u32,
+    /// Each of them, read back.
+    pub rows: Vec<Row>,
 }
 
 impl Answer {
@@ -681,6 +716,7 @@ pub fn piece(p: &Plugin<Plane>, x: &Piece<'_>) -> Answer {
         units_needed: o.units_needed,
         need: o.need,
         records: o.records_written,
+        rows: rows(&records, o.records_written, &arena),
     }
 }
 
@@ -714,6 +750,8 @@ pub struct Log {
     pub units: Vec<(u32, u32, u64)>,
     /// Record writes across every answer.
     pub records: u32,
+    /// Each of them, read back, in the order they were written.
+    pub rows: Vec<Row>,
     /// Answers that carried the session's end.
     pub done: u32,
 }
@@ -760,6 +798,7 @@ impl<'p> Session<'p> {
             self.log.units.clone_from(&a.units);
         }
         self.log.records += a.records;
+        self.log.rows.extend(a.rows.iter().cloned());
         if a.done {
             self.log.done += 1;
         }
