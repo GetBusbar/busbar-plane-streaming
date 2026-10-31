@@ -18,13 +18,12 @@ mod selectors {
         assert!(!matches_selector(&s, "/other/inbound"));
     }
 
-    /// Twilio Media Streams is a streaming DIALECT carried by the WebSocket transport, not a
-    /// transport of its own (the design lists five transports and no telephony one). Its claim is
-    /// on the WebSocket transport, one path level under `/twilio`, and authenticates under the
-    /// `webhook-signature` alternative alone: Twilio holds no busbar bearer or API key. Without the
-    /// claim the dialect's reader and codec are unreachable: no arrival ever names it.
+    /// The test-only claim table the voice conformance harness reads (`claims::DIALECT_CLAIMS`, no
+    /// door publishes it) names Twilio Media Streams on the WebSocket transport, one path level
+    /// under `/twilio`, under the `webhook-signature` alternative alone, as the door's line does
+    /// (the test below holds the line itself).
     #[test]
-    fn twilio_media_streams_is_claimed_on_the_websocket_carrier_under_the_webhook_signature() {
+    fn the_harness_claim_table_names_twilio_on_the_websocket_carrier_under_the_webhook_signature() {
         use crate::claims::{dialect_for, Dialect, DIALECT_CLAIMS, WS_TRANSPORT};
 
         let twilio: Vec<_> = DIALECT_CLAIMS
@@ -52,6 +51,42 @@ mod selectors {
         assert_eq!(dialect_for("/twilio"), None);
         assert_eq!(dialect_for("/twilio/a/b"), None);
         assert_eq!(dialect_for("/v1/realtime"), Some(Dialect::OpenaiRealtime));
+    }
+
+    /// Twilio Media Streams is a streaming DIALECT carried by the WebSocket transport, not a
+    /// transport of its own (the design lists five transports and no telephony one). Its line on
+    /// the door's guest list (`plane_door::ROUTES`, the routes the plane publishes) is an upgrade
+    /// on the WebSocket transport, one `{call_id}` segment under `/twilio`, and authenticates under
+    /// the `webhook-signature` alternative alone: Twilio holds no busbar bearer or API key. (Audit
+    /// S83: this was asserted over a test-only claim table no door publishes.)
+    #[test]
+    fn twilio_media_streams_is_claimed_on_the_websocket_carrier_under_the_webhook_signature() {
+        use crate::claims::WS_TRANSPORT;
+        use crate::plane_door::{DIALECTS_BY_NAME, ROUTES, SIGNATURE_AUTH};
+        use crate::provider::TWILIO_MEDIA_STREAMS;
+
+        let twilio: Vec<_> = ROUTES
+            .iter()
+            .filter(|r| DIALECTS_BY_NAME[r.dialect as usize] == TWILIO_MEDIA_STREAMS)
+            .collect();
+        assert_eq!(
+            twilio.len(),
+            1,
+            "exactly one line speaks the Twilio dialect"
+        );
+        let line = twilio[0];
+        assert_eq!(
+            line.carrier, WS_TRANSPORT,
+            "Twilio rides the WebSocket transport"
+        );
+        assert!(line.upgrade, "a WebSocket upgrade");
+        assert_eq!((line.verb, line.target), ("GET", "/twilio/{call_id}"));
+        assert_eq!(line.auth, SIGNATURE_AUTH);
+        assert_eq!(
+            line.refusal_dialect, line.dialect,
+            "refused in its own dialect"
+        );
+        assert!(!line.ticket, "the carrier takes no busbar ticket");
     }
 }
 
