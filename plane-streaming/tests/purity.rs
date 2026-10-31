@@ -1,8 +1,6 @@
-//! Purity gates: the properties every plane in the design is held to — pure over its inputs, no input
-//! or output of its own, no interior-mutable state across calls — checked here rather than asserted in
-//! prose. The streaming plane inherits its behaviour from the voice adapter, so it must inherit the
-//! purity too: a wrapper that added a cell, a lock or an atomic would be a plane that kept state of its
-//! own across calls, and the whole point of the reframe is that it does not.
+//! Purity gates, checked here rather than asserted in prose: the plane names no kernel-side crate,
+//! holds no tool-executor port, and intercepts no reply. (The plane does keep state across calls by
+//! design, its sessions and units behind locks; no gate here claims otherwise.)
 
 // ── THE KERNEL-SIDE FORBID LIST ───────────────────────────────────────────────────────────────
 //
