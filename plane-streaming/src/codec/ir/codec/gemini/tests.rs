@@ -18,13 +18,23 @@ fn down(src: &Value) -> Vec<Metered> {
     GeminiLiveCodec.meter_down(src.to_string().as_bytes())
 }
 
-/// The audio the meter counts in a caller frame: each blob's stated format and decoded length.
+/// The audio the meter counts in a caller frame: each blob's stated format and decoded length;
+/// nothing for a frame whose audio the meter refuses ([`refused`]).
 fn up(src: &Value) -> Vec<(Option<AudioFormat>, usize)> {
     let bytes = src.to_string().into_bytes();
     let top = Lite::read(&bytes).expect("the frame is JSON");
     let mut counted = Vec::new();
-    GeminiLiveCodec.uplink_audio(&top, &mut |format, len| counted.push((format, len)));
-    counted
+    match GeminiLiveCodec.uplink_audio(&top, &mut |format, len| counted.push((format, len))) {
+        Ok(()) => counted,
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Whether the meter refuses a caller frame's audio as audio it cannot meter.
+fn refused(src: &Value) -> bool {
+    let bytes = src.to_string().into_bytes();
+    let top = Lite::read(&bytes).expect("the frame is JSON");
+    GeminiLiveCodec.uplink_audio(&top, &mut |_, _| {}).is_err()
 }
 
 // ── the locked `setup` ───────────────────────────────────────────────────────────────────────────
@@ -113,13 +123,21 @@ fn realtime_input_audio_counts_each_blob_at_its_stated_rate() {
 }
 
 #[test]
-fn realtime_input_prefers_ga_audio_over_media_chunks() {
-    // When BOTH spellings are present the GA single blob wins (one count), so a GA peer's audio is
-    // never counted twice.
+fn realtime_input_with_both_audio_spellings_is_refused() {
+    // When BOTH spellings carry audio the meter would read the GA blob alone while the far end may
+    // read both, so the frame's audio is audio the plane cannot meter (audit S3): refused, never
+    // counted once and relayed twice. A non-audio chunk beside the GA blob is not audio.
     let src = json!({
         "realtimeInput": {
             "audio": { "mimeType": "audio/pcm;rate=16000", "data": b64(b"ga") },
             "mediaChunks": [ { "mimeType": "audio/pcm;rate=16000", "data": b64(b"legacy") } ]
+        }
+    });
+    assert!(refused(&src));
+    let src = json!({
+        "realtimeInput": {
+            "audio": { "mimeType": "audio/pcm;rate=16000", "data": b64(b"ga") },
+            "mediaChunks": [ { "mimeType": "image/jpeg", "data": b64(b"frame") } ]
         }
     });
     assert_eq!(up(&src), vec![(Some(AudioFormat::Pcm16At16k), 2)]);

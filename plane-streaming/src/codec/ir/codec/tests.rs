@@ -31,7 +31,9 @@ fn up(src: &Value) -> Vec<(Option<AudioFormat>, usize)> {
     let bytes = src.to_string().into_bytes();
     let top = peek::Lite::read(&bytes).expect("the frame is JSON");
     let mut counted = Vec::new();
-    OpenAiRealtimeCodec.uplink_audio(&top, &mut |format, len| counted.push((format, len)));
+    OpenAiRealtimeCodec
+        .uplink_audio(&top, &mut |format, len| counted.push((format, len)))
+        .expect("the OpenAI dialect refuses no uplink audio");
     counted
 }
 

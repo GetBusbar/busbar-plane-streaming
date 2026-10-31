@@ -194,6 +194,19 @@ impl<'de> Visitor<'de> for HeadVisitor {
 /// or a lone trailing digit.
 #[must_use]
 pub fn base64_len(b64: &str) -> Option<usize> {
+    digits_len(b64, b"+/")
+}
+
+/// [`base64_len`] over either base64 alphabet, the standard one (`+`, `/`) and the URL-safe one
+/// (`-`, `_`), as a protobuf JSON far end (Gemini Live) reads a `bytes` field: the length a decode
+/// in the blob's own alphabet yields. `None` where neither alphabet decodes it.
+#[must_use]
+pub fn base64_len_any_alphabet(b64: &str) -> Option<usize> {
+    digits_len(b64, b"+/-_")
+}
+
+/// The decoded length of `b64` whose non-alphanumeric digits are `extra`.
+fn digits_len(b64: &str, extra: &[u8]) -> Option<usize> {
     let mut digits = 0_usize;
     let mut padded = false;
     for &b in b64.as_bytes() {
@@ -204,7 +217,7 @@ pub fn base64_len(b64: &str) -> Option<usize> {
             padded = true;
             continue;
         }
-        if padded || !(b.is_ascii_alphanumeric() || b == b'+' || b == b'/') {
+        if padded || !(b.is_ascii_alphanumeric() || extra.contains(&b)) {
             return None;
         }
         digits += 1;

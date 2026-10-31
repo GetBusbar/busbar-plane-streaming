@@ -68,6 +68,8 @@ pub struct SessionPump<C> {
     audio_in: AudioFormat,
     /// The governed splices every caller frame takes under the lock, built once at the lock.
     rules: Vec<Rule>,
+    /// Whether the session already said, once, that it refused a caller's audio it cannot meter.
+    told_unmeterable: bool,
 }
 
 impl<C> SessionPump<C>
@@ -92,6 +94,7 @@ where
             turn: TurnCounters::default(),
             locked_config,
             audio_in,
+            told_unmeterable: false,
         }
     }
 
@@ -198,6 +201,20 @@ where
                 spliced = Some(bytes);
             }
         }
+        // Audio the plane cannot meter is refused, never relayed unmetered: the frame goes
+        // nowhere, nothing of it is counted, and the session says so once.
+        if let Some(top) = &read {
+            if self.codec.uplink_audio(top, &mut |_, _| {}).is_err() {
+                if !std::mem::replace(&mut self.told_unmeterable, true) {
+                    tracing::warn!(
+                        "a caller frame carries audio the streaming plane cannot meter (a format \
+                         other than the PCM rates it counts, or data that does not decode); the \
+                         frame is not relayed, and nor is any like it on this session"
+                    );
+                }
+                return out;
+            }
+        }
         // The frame goes to the far end: the format it names is the one the far end now reads,
         // and its audio is counted at it.
         if let Some(named) = switch {
@@ -205,7 +222,8 @@ where
         }
         if let Some(top) = &read {
             let (turn, audio_in) = (&mut self.turn, self.audio_in);
-            self.codec.uplink_audio(top, &mut |format, len| {
+            // Read meterable above: the second read admits what the first one checked.
+            let _ = self.codec.uplink_audio(top, &mut |format, len| {
                 turn.admit_audio(format.unwrap_or(audio_in), len);
             });
         }
