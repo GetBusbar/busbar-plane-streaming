@@ -851,3 +851,23 @@ fn a_dropped_frame_naming_a_format_leaves_the_meter_on_the_format_the_far_end_re
     p.settle_open_turn(&mut sink);
     assert_eq!(billed_audio_seconds(&sink), 6, "48 000 bytes of µ-law are 6 s");
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S23, MONEY): a caller may send its audio as a user
+/// item's `input_audio` content part (`conversation.item.create`) rather than an append; the far end
+/// consumes it all the same, so it is counted at the session's uplink format. One second of PCM16
+/// in one part bills 1 `audio_seconds_in`. RED: only `input_audio_buffer.append` was counted, and
+/// the item's audio billed 0.
+#[test]
+fn a_user_items_input_audio_part_is_counted_as_uplink_audio() {
+    for mut p in [pump(), locked_pump()] {
+        let item = wire(serde_json::json!({"type":"conversation.item.create","item":{
+            "type":"message","role":"user","content":[
+                {"type":"input_text","text":"hello"},
+                {"type":"input_audio","audio": busbar_contract::media::base64_encode(&[0u8; 48_000])}
+            ]}}));
+        assert_eq!(p.on_client_frame(item).upstream.len(), 1, "a user item is relayed");
+        let mut sink = Turns::default();
+        p.settle_open_turn(&mut sink);
+        assert_eq!(billed_audio_seconds(&sink), 1, "48 000 bytes of PCM16 are 1 s");
+    }
+}
