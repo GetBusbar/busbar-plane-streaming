@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! Usage and rate-limit extraction.
+//! Usage extraction.
 //!
-//! `response.done.usage` (audio vs text are SEPARATE token classes, audio dominates) and
-//! `rate_limits.updated` are EXTRACTED, never client-translated. This is the metering/audit tap that
+//! `response.done.usage` (audio vs text are SEPARATE token classes, audio dominates) is EXTRACTED,
+//! never client-translated; `rate_limits.updated` is not read. This is the metering/audit tap that
 //! the plane folds into counts per class (whose labels core never interprets) for the kernel's
 //! metering + `journal_append_scoped`. The same move the LLM reader makes with `IrUsage`.
 
