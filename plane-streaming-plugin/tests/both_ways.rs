@@ -1395,8 +1395,8 @@ fn project_at(
 }
 
 /// A session door projects the session-open params it locks as the view's body; a hook's rewrite is
-/// patched over them and THAT is answered (kept for the session the unit opens); a rewrite that does
-/// not read back refuses; a one-request door projects no body and takes no rewrite. Both ways.
+/// patched over them and THAT is answered (kept for the session the unit opens); a one-request door
+/// projects no body and takes no rewrite. Both ways.
 #[test]
 fn a_session_open_is_projected_for_the_hooks_and_a_rewrite_patches_it() {
     let d = Dispatcher::new(DispatchConfig::default());
@@ -1417,7 +1417,6 @@ fn a_session_open_is_projected_for_the_hooks_and_a_rewrite_patches_it() {
             "the unnamed key keeps its value: {body}"
         );
         assert!(rewritten, "answered as rewritten");
-        assert_eq!(project(p, 2, br#"{"voice":7}"#).0, Outcome::Refused);
         assert_eq!(project(p, 0, b""), (Outcome::Ready, String::new(), false));
         assert_eq!(project(p, 0, br#"{"x":1}"#).0, Outcome::Refused);
     }
@@ -2692,5 +2691,27 @@ fn a_session_at_the_session_bound_is_refused_at_its_arrival_in_words() {
             "session 1 ends"
         );
         assert_eq!(arrive_plain(MAX_SESSIONS + 1).0, Outcome::Ready);
+    }
+}
+
+/// RED (audit plane-streaming round 52b0f93ac9, S52; lead ruling, the one hook-rewrite rule): a
+/// session-open rewrite busbar cannot apply (not JSON, not an object, or not a session config once
+/// patched) leaves the open UNMODIFIED: the projection answers the locked params, not as rewritten,
+/// and nothing is kept for the unit (the plane says so in one log line naming the hook stage). RED:
+/// the open was refused, bare. Both ways.
+#[test]
+fn a_session_open_rewrite_that_cannot_be_applied_leaves_the_open_unmodified() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    for p in &[linked(&d), dropped(&d)] {
+        assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let (_, locked, _) = project(p, 2, b"");
+        for rewrite in [&br#"{"voice":7}"#[..], b"not json", b"[1,2]"] {
+            assert_eq!(
+                project(p, 2, rewrite),
+                (Outcome::Ready, locked.clone(), false),
+                "{}",
+                String::from_utf8_lossy(rewrite)
+            );
+        }
     }
 }
