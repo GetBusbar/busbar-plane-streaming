@@ -2351,6 +2351,9 @@ fn an_sdp_offer_at_the_call_bound_is_refused_at_its_arrival() {
             read(a.out.head.error),
             "busbar is holding as many realtime calls as it admits at once; retry once one has ended"
         );
+        // Each placed call is a live session too, so the session bound is reached with it: one
+        // other caller's session ends, and the oldest caller's call is still there to attach to.
+        assert_eq!(cancel_unit(p, 1_001), Outcome::Ready);
         assert_eq!(
             arrive_sideband(p, 901, sideband_to(&first)),
             Outcome::Ready,

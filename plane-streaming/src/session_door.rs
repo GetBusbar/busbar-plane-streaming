@@ -499,6 +499,13 @@ impl Sessions {
         self.rewritten.get(&unit)
     }
 
+    /// Whether as many sessions are live as the door keeps ([`MAX_SESSIONS`]): a new one is
+    /// refused.
+    #[must_use]
+    pub fn full(&self) -> bool {
+        self.live.len() >= MAX_SESSIONS
+    }
+
     /// Stream `stream`'s session, when one is open.
     pub fn get(&mut self, stream: u64) -> Option<&mut Live> {
         self.live.get_mut(&stream)

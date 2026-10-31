@@ -602,11 +602,18 @@ pub const REFUSAL_OFFERS_FULL: u32 = 3;
 /// [`MAX_UNITS`] units in flight (a 429, its words [`CALLS_FULL_TEXT`]).
 pub const REFUSAL_UNITS_FULL: u32 = 4;
 
-/// The status [`REFUSAL_CALLS_FULL`], [`REFUSAL_OFFERS_FULL`] and [`REFUSAL_UNITS_FULL`] wear.
+/// The plane's refusal code for a session (a door that opens one) arriving while the instance
+/// holds [`crate::session_door::MAX_SESSIONS`] live sessions (a 429, its words
+/// [`CALLS_FULL_TEXT`]).
+pub const REFUSAL_SESSIONS_FULL: u32 = 5;
+
+/// The status [`REFUSAL_CALLS_FULL`], [`REFUSAL_OFFERS_FULL`], [`REFUSAL_UNITS_FULL`] and
+/// [`REFUSAL_SESSIONS_FULL`] wear.
 pub const STATUS_CALLS_FULL: u32 = 429;
 
-/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`], and a request unit refused at
-/// [`MAX_UNITS`], are answered with.
+/// The words an SDP offer refused at [`MAX_BROKERED_CALLS`], a request unit refused at
+/// [`MAX_UNITS`], and a session refused at [`crate::session_door::MAX_SESSIONS`], are answered
+/// with.
 pub const CALLS_FULL_TEXT: &str =
     "busbar is holding as many realtime calls as it admits at once; retry once one has ended";
 
@@ -1339,6 +1346,15 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
     out.set(|o| &o.dialect, a.dialect);
     // Every door is keyed, signed or ticketed: a unit on it needs a principal.
     out.set(|o| &o.principal_need, PRINCIPAL_REQUIRED);
+    // A SESSION on an instance holding as many live sessions as it keeps is refused before its
+    // first piece (and before a sideband's call is held for it), in the bound's words: no live
+    // session is dropped for it.
+    if a.door.is_session() && instance.get().is_some_and(|p| lock(&p.sessions).full()) {
+        out.set(|o| &o.refusal, REFUSAL_SESSIONS_FULL);
+        out.set(|o| &o.refusal_status, STATUS_CALLS_FULL);
+        out.error(CALLS_FULL_TEXT);
+        return Outcome::Refused;
+    }
     // THE SIDEBAND DOOR controls a call busbar placed: its `{call_id}` is busbar's own. A call
     // busbar does not hold is no door's (a 404). A held call is kept until the unit's session
     // opens, where it is resolved for its own caller only. At the bound the arrival is refused: no
@@ -1561,6 +1577,11 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         sessions.get(given.stream())
     };
     let Some(live) = live else {
+        // A session admitted alongside others checked at once, past the bound, is refused in the
+        // bound's words.
+        if given.from() == FROM_CALLER && sessions.full() {
+            out.error(CALLS_FULL_TEXT);
+        }
         return Outcome::Refused;
     };
     if let Some(upstream) = upstream {
