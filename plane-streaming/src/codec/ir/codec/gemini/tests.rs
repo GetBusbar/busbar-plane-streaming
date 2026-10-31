@@ -491,3 +491,38 @@ fn a_stated_but_unrecognized_rate_is_refused_not_substring_matched() {
         "240000 is a stated rate this dialect does not recognize, not an untagged blob"
     );
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S17): an operator lock that turns barge-in off
+/// (`server_vad` with `interrupt_response: false`) is told to Gemini Live in its own field,
+/// `realtimeInputConfig.activityHandling: NO_INTERRUPTION`, as OpenAI Realtime is told it; barge-in
+/// on is Gemini's default and names nothing. RED: the knob was dropped, so the lock held on one
+/// dialect and silently not on the other.
+#[test]
+fn a_lock_that_turns_barge_in_off_is_told_to_gemini() {
+    let vad = |interrupt_response| SessionConfig {
+        turn_detection: Some(Some(IrVad::ServerVad {
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
+            create_response: true,
+            interrupt_response,
+        })),
+        ..SessionConfig::default()
+    };
+    let off = setup_from_session_config(&vad(false));
+    assert_eq!(
+        off["setup"]["realtimeInputConfig"]["activityHandling"], "NO_INTERRUPTION",
+        "{off}"
+    );
+    assert_eq!(
+        off["setup"]["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"],
+        500
+    );
+    let on = setup_from_session_config(&vad(true));
+    assert!(
+        on["setup"]["realtimeInputConfig"]
+            .get("activityHandling")
+            .is_none(),
+        "{on}"
+    );
+}
