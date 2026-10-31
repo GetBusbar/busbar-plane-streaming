@@ -80,6 +80,30 @@ mod style {
         }
     }
 
+    /// Whether `line` names a parity-binding identifier anywhere in it, its last four bytes
+    /// included.
+    fn names_binding_identifier(line: &str) -> bool {
+        line.as_bytes()
+            .windows(4)
+            .any(|w| w[0] == b'P' && w[1] == b'B' && w[2] == b'-' && w[3].is_ascii_digit())
+    }
+
+    /// The scan reads every position of a line, the end included (audit S84: an identifier closing
+    /// a line was never examined).
+    #[test]
+    fn a_binding_identifier_is_found_wherever_the_line_holds_it() {
+        let id = ["P", "B-7"].concat();
+        for line in [
+            format!("see {id}"),
+            id.clone(),
+            format!("{id} first"),
+            format!("a {id} b"),
+        ] {
+            assert!(names_binding_identifier(&line), "{line}");
+        }
+        assert!(!names_binding_identifier("PB-x and PB"));
+    }
+
     #[test]
     fn no_section_sign_or_parity_binding_identifier_anywhere_in_source() {
         let mut offenders = Vec::new();
@@ -88,15 +112,8 @@ mod style {
                 if line.contains('\u{00A7}') {
                     offenders.push(format!("{}:{}: section sign", path.display(), n + 1));
                 }
-                let bytes = line.as_bytes();
-                for i in 0..bytes.len().saturating_sub(4) {
-                    if bytes[i] == b'P'
-                        && bytes[i + 1] == b'B'
-                        && bytes[i + 2] == b'-'
-                        && bytes[i + 3].is_ascii_digit()
-                    {
-                        offenders.push(format!("{}:{}: binding identifier", path.display(), n + 1));
-                    }
+                if names_binding_identifier(line) {
+                    offenders.push(format!("{}:{}: binding identifier", path.display(), n + 1));
                 }
             }
         });
