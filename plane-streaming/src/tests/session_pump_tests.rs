@@ -871,3 +871,54 @@ fn a_user_items_input_audio_part_is_counted_as_uplink_audio() {
         assert_eq!(billed_audio_seconds(&sink), 1, "48 000 bytes of PCM16 are 1 s");
     }
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S3, MONEY): Gemini Live audio the plane cannot meter
+/// (a stated rate other than 16 or 24 kHz, an `audio/*` mime other than PCM, data that does not
+/// decode, or a GA `audio` blob beside legacy audio chunks the meter would not read) is REFUSED, as
+/// `audio_format_from_mime` promises: the frame goes nowhere and nothing of it is counted, never
+/// relayed unmetered. Audio it can meter is relayed and counted, in either base64 alphabet, and a
+/// non-audio chunk (video) is relayed as before. RED: every such frame was relayed and billed 0
+/// `audio_seconds_in`.
+#[test]
+fn gemini_audio_the_plane_cannot_meter_goes_nowhere_and_counts_nothing() {
+    let pcm16k = |data: String| serde_json::json!({"mimeType":"audio/pcm;rate=16000","data":data});
+    let b64 = |n: usize| busbar_contract::media::base64_encode(&vec![0u8; n]);
+    let refused = [
+        gemini_uplink(48_000, 9_600),
+        gemini_uplink(44_100, 9_600),
+        wire(serde_json::json!({"realtimeInput":{"audio":{"mimeType":"audio/wav","data":b64(9_600)}}})),
+        wire(serde_json::json!({"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"!!!!"}}})),
+        wire(serde_json::json!({"realtimeInput":{"mediaChunks":[
+            pcm16k(b64(3_200)),
+            {"mimeType":"AUDIO/PCM;rate=48000","data":b64(9_600)}
+        ]}})),
+        wire(serde_json::json!({"realtimeInput":{
+            "audio": pcm16k(b64(2)),
+            "mediaChunks":[pcm16k(b64(32_000))]
+        }})),
+    ];
+    for frame in refused {
+        let mut p = SessionPump::new(crate::codec::ir::GeminiLiveCodec, None);
+        let sent = String::from_utf8_lossy(&frame.0).into_owned();
+        let out = p.on_client_frame(frame);
+        assert!(out.upstream.is_empty(), "refused, never relayed unmetered: {sent}");
+        let mut sink = Turns::default();
+        p.settle_open_turn(&mut sink);
+        assert!(sink.closed.is_empty(), "nothing of a refused frame is counted: {sent}");
+    }
+    let url_safe = busbar_contract::media::base64_encode(&vec![0xfb_u8; 32_000])
+        .replace('+', "-")
+        .replace('/', "_");
+    assert!(url_safe.contains('-') && url_safe.contains('_'));
+    let mut p = SessionPump::new(crate::codec::ir::GeminiLiveCodec, None);
+    let meterable = wire(serde_json::json!({"realtimeInput":{"audio": pcm16k(url_safe)}}));
+    assert_eq!(p.on_client_frame(meterable).upstream.len(), 1, "URL-safe base64 is relayed");
+    let video = wire(serde_json::json!({"realtimeInput":{"mediaChunks":[
+        {"mimeType":"image/jpeg","data":b64(30)}
+    ]}}));
+    assert_eq!(p.on_client_frame(video).upstream.len(), 1, "a video chunk is relayed");
+    let mut sink = Turns::default();
+    p.settle_open_turn(&mut sink);
+    assert_eq!(sink.closed.len(), 1);
+    assert_eq!(sink.closed[0].1.audio_ms_in, 1000, "the URL-safe second is counted");
+}
