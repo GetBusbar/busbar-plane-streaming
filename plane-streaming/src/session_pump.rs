@@ -149,6 +149,9 @@ where
     /// whose own reader might read them differently.
     pub fn on_client_frame(&mut self, frame: WireEvent) -> Outbound {
         let mut out = Outbound::default();
+        // The uplink format the frame switches the session to, committed only once the frame is
+        // relayed: a frame that goes nowhere configures nothing at the far end, so nothing here.
+        let mut switch = None;
         // The frame is read once, as strictly as a whole-frame read, its audio left where it lies.
         // An object naming none of the dialect's governed members passes every check and every
         // splice as it came (`LockedKeys::GOVERNED`); any other frame takes the checks and the
@@ -172,12 +175,33 @@ where
             };
             match (locked_format, named) {
                 (Some(locked), Some(named)) if locked != named => return out,
-                (None, Some(named)) => self.audio_in = named,
+                (None, Some(named)) => switch = Some(named),
                 _ => {}
             }
             if self.locked_config.is_some() && self.codec.authors_instructions(&frame.0) {
                 return out;
             }
+        }
+        // The governed splices; `None` = the frame goes as it came.
+        let mut spliced = None;
+        if !plain && !self.rules.is_empty() {
+            let mut bytes = Cow::Borrowed(&frame.0[..]);
+            for rule in &self.rules {
+                match splice(&bytes, rule) {
+                    Some(edited) => bytes = Cow::Owned(edited),
+                    None => return out,
+                }
+            }
+            // At least one rule ran, so the bytes are already the splice's own.
+            let bytes = bytes.into_owned();
+            if bytes[..] != frame.0[..] {
+                spliced = Some(bytes);
+            }
+        }
+        // The frame goes to the far end: the format it names is the one the far end now reads,
+        // and its audio is counted at it.
+        if let Some(named) = switch {
+            self.audio_in = named;
         }
         if let Some(top) = &read {
             let (turn, audio_in) = (&mut self.turn, self.audio_in);
@@ -185,23 +209,9 @@ where
                 turn.admit_audio(format.unwrap_or(audio_in), len);
             });
         }
-        if plain || self.rules.is_empty() {
-            out.upstream.push(frame);
-            return out;
-        }
-        let mut bytes = Cow::Borrowed(&frame.0[..]);
-        for rule in &self.rules {
-            match splice(&bytes, rule) {
-                Some(spliced) => bytes = Cow::Owned(spliced),
-                None => return out,
-            }
-        }
-        // At least one rule ran, so the bytes are already the splice's own.
-        let bytes = bytes.into_owned();
-        out.upstream.push(if bytes[..] == frame.0[..] {
-            frame
-        } else {
-            WireEvent(bytes.into())
+        out.upstream.push(match spliced {
+            Some(bytes) => WireEvent(bytes.into()),
+            None => frame,
         });
         out
     }
