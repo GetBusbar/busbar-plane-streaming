@@ -81,10 +81,16 @@ fn a_present_usage_that_is_not_an_object_bills_the_floor_in_both_dialects() {
     for usage in [json!("n/a"), json!(42), json!([1, 2])] {
         let src = json!({"type": "response.done", "response": {"usage": usage}});
         let ir = OpenAiRealtimeCodec.meter_down(&wire(&src));
-        assert!(floored(&ir, &src), "OpenAI usage {usage} bills the floor: {ir:?}");
+        assert!(
+            floored(&ir, &src),
+            "OpenAI usage {usage} bills the floor: {ir:?}"
+        );
         let src = json!({"usageMetadata": usage});
         let ir = GeminiLiveCodec.meter_down(&wire(&src));
-        assert!(floored(&ir, &src), "Gemini usageMetadata {usage} bills the floor: {ir:?}");
+        assert!(
+            floored(&ir, &src),
+            "Gemini usageMetadata {usage} bills the floor: {ir:?}"
+        );
     }
     let src = json!({"type": "response.done", "response": {"usage": null}});
     let ir = OpenAiRealtimeCodec.meter_down(&wire(&src));
@@ -94,7 +100,8 @@ fn a_present_usage_that_is_not_an_object_bills_the_floor_in_both_dialects() {
     );
     let ir = GeminiLiveCodec.meter_down(&wire(&json!({"usageMetadata": null})));
     assert!(
-        ir.iter().all(|m| matches!(m, Metered::Usage(u) if !u.floor)),
+        ir.iter()
+            .all(|m| matches!(m, Metered::Usage(u) if !u.floor)),
         "a null Gemini usageMetadata bills no floor: {ir:?}"
     );
 }
