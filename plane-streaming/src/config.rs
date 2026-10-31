@@ -44,10 +44,9 @@ fn default_max_output_tokens() -> u32 {
 
 /// The locked session defaults an absent `streams.session:` opens with.
 ///
-/// The IR's own `IrVad::ServerVad` wire default is `silence_duration_ms = 200` (`ir/control.rs`),
-/// which is what a RAW wire decode round-trip must keep. The `streams:`-LEVEL default is 500ms — a
-/// plane posture, not a wire fact — so it is synthesized HERE (when the operator writes no
-/// `turn_detection`) rather than by changing the IR's own default, keeping the two distinct.
+/// An operator who writes no `turn_detection` gets server VAD with OpenAI's published knobs
+/// (threshold 0.5, 300 ms of prefix padding, 500 ms of silence), the same values the IR's
+/// `IrVad::ServerVad` takes for a knob a written `server_vad` leaves out.
 fn default_session() -> SessionConfig {
     SessionConfig {
         // `Some(Some(..))` — a CONFIGURED detector. The outer `Some` says the operator default names

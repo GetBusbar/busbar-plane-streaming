@@ -270,8 +270,10 @@ fn default_threshold() -> f32 {
 fn default_prefix_padding_ms() -> u32 {
     300
 }
+/// OpenAI's published default (the openai-openapi spec, `turn_detection.silence_duration_ms`:
+/// "Defaults to 500ms"), which the far end's own `session.created` reports.
 fn default_silence_duration_ms() -> u32 {
-    200
+    500
 }
 fn default_true() -> bool {
     true
