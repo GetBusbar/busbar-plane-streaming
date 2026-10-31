@@ -379,6 +379,7 @@ dependencies = [
  "busbar-plugin-loader",
  "busbar-test-kit",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
