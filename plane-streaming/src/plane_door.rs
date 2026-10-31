@@ -83,7 +83,7 @@ use crate::driven::{Door, Rejected, Reply, FIELD_CONTENT_LENGTH};
 use crate::meta;
 use crate::provider::{GEMINI_LIVE, OPENAI_REALTIME, TWILIO_MEDIA_STREAMS};
 use crate::request_unit::{self, Answer, Piece, RequestUnit};
-use crate::session_door::{committed_session_config, Live, Sessions, Side, CEILING_TICK_NS};
+use crate::session_door::{applied_rewrite, Live, Sessions, Side, CEILING_TICK_NS};
 
 /// The name the plane's Statement carries.
 pub const NAME: &str = crate::codec::PLANE_KEY;
@@ -1985,7 +1985,8 @@ slot!(Start, GenIn, OutHead, |_, _, _out| { Outcome::Ready });
 // bound. A session door projects the session-open params it locks (the telephony door's µ-law, else
 // the section's session) as the view's body, the session-open the hooks screen; a hook's rewrite is
 // patched over them ([`committed_session_config`]), kept for the session the unit opens, and THAT is
-// projected and answered. A rewrite that does not read back refuses the open. A one-request door
+// projected and answered. A rewrite that cannot be applied leaves the open unmodified (one log
+// line names the hook stage), the locked params projected. A one-request door
 // projects its view with no body, and takes no rewrite.
 slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
     let Some(p) = instance.get() else {
@@ -2022,24 +2023,26 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
                 locked = ticketed;
             }
         }
-        let params = if rewrite.is_empty() {
-            locked
-        } else {
-            match committed_session_config(&locked, rewrite) {
-                Ok(params) => {
-                    if !lock(&p.sessions).rewrite(given.unit(), params.clone()) {
-                        out.error(CALLS_FULL_TEXT);
-                        return Outcome::Refused;
-                    }
-                    params
+        // A rewrite that cannot be applied leaves the open unmodified (and says so): the locked
+        // params are projected, not as rewritten, and nothing is kept for the unit.
+        let applied = (!rewrite.is_empty())
+            .then(|| applied_rewrite(&locked, rewrite))
+            .flatten();
+        let rewritten = applied.is_some();
+        let params = match applied {
+            Some(params) => {
+                if !lock(&p.sessions).rewrite(given.unit(), params.clone()) {
+                    out.error(CALLS_FULL_TEXT);
+                    return Outcome::Refused;
                 }
-                Err(_) => return Outcome::Refused,
+                params
             }
+            None => locked,
         };
         let Ok(body) = serde_json::to_vec(&params) else {
             return Outcome::Refused;
         };
-        (Some(body), !rewrite.is_empty())
+        (Some(body), rewritten)
     } else if rewrite.is_empty() {
         (None, false)
     } else {

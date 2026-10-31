@@ -334,6 +334,25 @@ fn a_session_open_rewrite_patches_the_locked_params_or_refuses() {
     }
 }
 
+/// A session-open rewrite that cannot be applied leaves the open unmodified and says so: one log
+/// line naming the session-open hook stage and why (audit S52, the one hook-rewrite rule); one that
+/// applies says nothing.
+#[test]
+fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
+    let locked = SessionConfig::default();
+    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
+    let (bad, good) = tracing::subscriber::with_default(cap.clone(), || {
+        (
+            applied_rewrite(&locked, br#"{"voice":7}"#),
+            applied_rewrite(&locked, br#"{"voice":"marin"}"#),
+        )
+    });
+    assert_eq!(bad, None);
+    assert_eq!(good.and_then(|g| g.voice).as_deref(), Some("marin"));
+    assert_eq!(cap.count("session-open hook"), 1, "{:?}", cap.messages());
+    assert!(cap.contains("not a session config"), "{:?}", cap.messages());
+}
+
 /// A session opened after its open's hooks rewrote the params opens under the rewritten params,
 /// once; a stream with none opens under what its door locks.
 #[test]
