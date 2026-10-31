@@ -27,7 +27,7 @@ use busbar_contract::abi::plane::{FROM_CALLER, FROM_FAR_END, UNITS_REPORTED};
 use busbar_plane_streaming::codec::ir::codec::OpenAiRealtimeCodec;
 use busbar_plane_streaming::codec::ir::config::SessionConfig;
 use busbar_plane_streaming::codec::ir::GeminiLiveCodec;
-use busbar_plane_streaming::door::{read_settings, RIDES_LIVE_SOCKET, RIDES_REALTIME_SOCKET};
+use busbar_plane_streaming::plane_door::{read_settings, RIDES_LIVE_SOCKET, RIDES_REALTIME_SOCKET};
 use busbar_plane_streaming::driven::{GEMINI_SOCKET_PATH, REALTIME_SOCKET_PATH};
 use busbar_plane_streaming::session_door::with_ceilings;
 use busbar_plane_streaming::session_door::PER_SESSION_CLASS;
