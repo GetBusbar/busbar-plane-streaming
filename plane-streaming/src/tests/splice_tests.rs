@@ -270,7 +270,10 @@ fn a_frame_repeating_the_governed_member_is_refused_never_amplified() {
         frame.push_str(r#","session":{}"#);
     }
     frame.push('}');
-    assert!(splice(frame.as_bytes(), &locked).is_none(), "a thousand copies");
+    assert!(
+        splice(frame.as_bytes(), &locked).is_none(),
+        "a thousand copies"
+    );
     for frame in [
         &br#"{"session":{},"session":{}}"#[..],
         br#"{"session":1,"session":{"voice":"verse"}}"#,

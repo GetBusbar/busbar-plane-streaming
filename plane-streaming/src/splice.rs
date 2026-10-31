@@ -452,12 +452,17 @@ impl LockedKeys for GeminiLiveCodec {
 }
 
 /// `frame` with `rule` applied to every top-level `rule.at` object; the frame unchanged when it
-/// holds none. `None` when the frame is not one JSON object.
+/// holds none. `None` when the frame is not one JSON object, or names `rule.at` more than once at
+/// its top level: no conformant peer repeats the member, and rebuilding the locked object for each
+/// copy would let one cheap frame cost the plane and the far end a locked object per copy.
 #[must_use]
 pub fn splice(frame: &[u8], rule: &Rule) -> Option<Vec<u8>> {
     let open = ws(frame, 0);
     let (members, close) = members(frame, open)?;
     if ws(frame, close) != frame.len() {
+        return None;
+    }
+    if members.iter().filter(|m| m.key == rule.at).nth(1).is_some() {
         return None;
     }
     let mut out = Vec::with_capacity(frame.len() + 64);
