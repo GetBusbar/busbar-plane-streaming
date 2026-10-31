@@ -284,3 +284,17 @@ fn a_frame_repeating_the_governed_member_is_refused_never_amplified() {
     let once = splice(br#"{"session":{}}"#, &locked).expect("one copy is spliced");
     assert!(text(&once).contains("xxxx"));
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S12): the OpenAI Realtime error event the plane
+/// authors when a session reaches its ceiling carries the `error.type` the dialect's error event
+/// requires, as the plane's other authored error (the budget cut) does. RED: it carried none.
+#[test]
+fn the_ceiling_error_event_states_its_error_type() {
+    let frame = OpenAiRealtimeCodec
+        .ceiling_frame("session_expired", "the session reached its ceiling")
+        .expect("OpenAI Realtime has an in-band error");
+    let v: Value = serde_json::from_slice(&frame).expect("json");
+    assert_eq!(v["type"], "error");
+    assert_eq!(v["error"]["type"], "invalid_request_error", "{v}");
+    assert_eq!(v["error"]["code"], "session_expired");
+}
