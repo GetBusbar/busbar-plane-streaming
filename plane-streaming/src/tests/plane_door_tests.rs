@@ -633,7 +633,10 @@ fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
     for code in [101, 200, 204, 299] {
         assert!(upgrade_accepted(PIECE_HAS_STATUS, code, success), "{code}");
     }
-    assert!(upgrade_accepted(PIECE_HAS_STATUS, 0, success), "a class and no number");
+    assert!(
+        upgrade_accepted(PIECE_HAS_STATUS, 0, success),
+        "a class and no number"
+    );
     for code in [100, 300, 401, 404, 429, 500, 503] {
         assert!(!upgrade_accepted(PIECE_HAS_STATUS, code, 0), "{code}");
     }

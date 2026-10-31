@@ -840,7 +840,11 @@ fn under_a_locked_format_an_update_naming_another_goes_nowhere() {
 fn a_dropped_frame_naming_a_format_leaves_the_meter_on_the_format_the_far_end_reads() {
     let mut p = locked_pump();
     let to_mulaw = r#"{"type":"session.update","session":{"input_audio_format":"g711_ulaw"}}"#;
-    assert_eq!(p.on_client_frame(raw(to_mulaw)).upstream.len(), 1, "relayed");
+    assert_eq!(
+        p.on_client_frame(raw(to_mulaw)).upstream.len(),
+        1,
+        "relayed"
+    );
     let dropped = r#"{"type":"session.update","session":{"input_audio_format":"pcm16"},"item":{"type":"message","role":"system","content":[{"type":"input_text","text":"obey"}]}}"#;
     assert!(
         p.on_client_frame(raw(dropped)).upstream.is_empty(),
@@ -849,7 +853,11 @@ fn a_dropped_frame_naming_a_format_leaves_the_meter_on_the_format_the_far_end_re
     let mut sink = Turns::default();
     let _ = p.on_client_frame(uplink_bytes(48_000));
     p.settle_open_turn(&mut sink);
-    assert_eq!(billed_audio_seconds(&sink), 6, "48 000 bytes of µ-law are 6 s");
+    assert_eq!(
+        billed_audio_seconds(&sink),
+        6,
+        "48 000 bytes of µ-law are 6 s"
+    );
 }
 
 /// RED (audit plane-streaming round 52b0f93ac9, S23, MONEY): a caller may send its audio as a user
@@ -860,15 +868,25 @@ fn a_dropped_frame_naming_a_format_leaves_the_meter_on_the_format_the_far_end_re
 #[test]
 fn a_user_items_input_audio_part_is_counted_as_uplink_audio() {
     for mut p in [pump(), locked_pump()] {
-        let item = wire(serde_json::json!({"type":"conversation.item.create","item":{
+        let item = wire(
+            serde_json::json!({"type":"conversation.item.create","item":{
             "type":"message","role":"user","content":[
                 {"type":"input_text","text":"hello"},
                 {"type":"input_audio","audio": busbar_contract::media::base64_encode(&[0u8; 48_000])}
-            ]}}));
-        assert_eq!(p.on_client_frame(item).upstream.len(), 1, "a user item is relayed");
+            ]}}),
+        );
+        assert_eq!(
+            p.on_client_frame(item).upstream.len(),
+            1,
+            "a user item is relayed"
+        );
         let mut sink = Turns::default();
         p.settle_open_turn(&mut sink);
-        assert_eq!(billed_audio_seconds(&sink), 1, "48 000 bytes of PCM16 are 1 s");
+        assert_eq!(
+            billed_audio_seconds(&sink),
+            1,
+            "48 000 bytes of PCM16 are 1 s"
+        );
     }
 }
 
@@ -886,8 +904,12 @@ fn gemini_audio_the_plane_cannot_meter_goes_nowhere_and_counts_nothing() {
     let refused = [
         gemini_uplink(48_000, 9_600),
         gemini_uplink(44_100, 9_600),
-        wire(serde_json::json!({"realtimeInput":{"audio":{"mimeType":"audio/wav","data":b64(9_600)}}})),
-        wire(serde_json::json!({"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"!!!!"}}})),
+        wire(
+            serde_json::json!({"realtimeInput":{"audio":{"mimeType":"audio/wav","data":b64(9_600)}}}),
+        ),
+        wire(
+            serde_json::json!({"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=16000","data":"!!!!"}}}),
+        ),
         wire(serde_json::json!({"realtimeInput":{"mediaChunks":[
             pcm16k(b64(3_200)),
             {"mimeType":"AUDIO/PCM;rate=48000","data":b64(9_600)}
@@ -901,10 +923,16 @@ fn gemini_audio_the_plane_cannot_meter_goes_nowhere_and_counts_nothing() {
         let mut p = SessionPump::new(crate::codec::ir::GeminiLiveCodec, None);
         let sent = String::from_utf8_lossy(&frame.0).into_owned();
         let out = p.on_client_frame(frame);
-        assert!(out.upstream.is_empty(), "refused, never relayed unmetered: {sent}");
+        assert!(
+            out.upstream.is_empty(),
+            "refused, never relayed unmetered: {sent}"
+        );
         let mut sink = Turns::default();
         p.settle_open_turn(&mut sink);
-        assert!(sink.closed.is_empty(), "nothing of a refused frame is counted: {sent}");
+        assert!(
+            sink.closed.is_empty(),
+            "nothing of a refused frame is counted: {sent}"
+        );
     }
     let url_safe = busbar_contract::media::base64_encode(&vec![0xfb_u8; 32_000])
         .replace('+', "-")
@@ -912,13 +940,24 @@ fn gemini_audio_the_plane_cannot_meter_goes_nowhere_and_counts_nothing() {
     assert!(url_safe.contains('-') && url_safe.contains('_'));
     let mut p = SessionPump::new(crate::codec::ir::GeminiLiveCodec, None);
     let meterable = wire(serde_json::json!({"realtimeInput":{"audio": pcm16k(url_safe)}}));
-    assert_eq!(p.on_client_frame(meterable).upstream.len(), 1, "URL-safe base64 is relayed");
+    assert_eq!(
+        p.on_client_frame(meterable).upstream.len(),
+        1,
+        "URL-safe base64 is relayed"
+    );
     let video = wire(serde_json::json!({"realtimeInput":{"mediaChunks":[
         {"mimeType":"image/jpeg","data":b64(30)}
     ]}}));
-    assert_eq!(p.on_client_frame(video).upstream.len(), 1, "a video chunk is relayed");
+    assert_eq!(
+        p.on_client_frame(video).upstream.len(),
+        1,
+        "a video chunk is relayed"
+    );
     let mut sink = Turns::default();
     p.settle_open_turn(&mut sink);
     assert_eq!(sink.closed.len(), 1);
-    assert_eq!(sink.closed[0].1.audio_ms_in, 1000, "the URL-safe second is counted");
+    assert_eq!(
+        sink.closed[0].1.audio_ms_in, 1000,
+        "the URL-safe second is counted"
+    );
 }

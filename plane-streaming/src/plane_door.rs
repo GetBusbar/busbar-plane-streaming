@@ -1752,8 +1752,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
 fn upgrade_accepted(flags: u32, code: u32, class: u32) -> bool {
     flags & PIECE_HAS_STATUS != 0
         && ((101..300).contains(&code)
-            || (code == 0
-                && class == u32::from(busbar_contract::abi::transport::STATUS_SUCCESS)))
+            || (code == 0 && class == u32::from(busbar_contract::abi::transport::STATUS_SUCCESS)))
 }
 
 // `on_piece`: the mint door's piece, answered by the unit's [`RequestUnit`] with a ticket busbar
