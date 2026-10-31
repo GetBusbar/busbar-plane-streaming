@@ -1645,8 +1645,8 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
                                     .bytes()
                                     .eq_ignore_ascii_case(crate::driven::FIELD_LOCATION.as_bytes())
                             })
-                            .and_then(|f| std::str::from_utf8(f.value().bytes()).ok())
-                            .and_then(crate::ticket::call_id_of);
+                            .and_then(|f| std::str::from_utf8(f.value().bytes()).ok());
+                        let upstream = provider_call(upstream);
                         if let (Some(call), Some(upstream)) = (live.placed_call(), upstream) {
                             lock(&p.brokered).named(call, upstream);
                         }
@@ -1770,6 +1770,21 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         p.wake_driver();
     }
     Outcome::Ready
+}
+
+/// The provider's call a success answering busbar's call names in its `Location`, or `None`, said
+/// in one log line: the call is placed (and billed), but no sideband can attach to it and nothing
+/// frees its row before it expires.
+fn provider_call(location: Option<&str>) -> Option<String> {
+    let call = location.and_then(crate::ticket::call_id_of);
+    if call.is_none() {
+        tracing::warn!(
+            location = location.unwrap_or("(none)"),
+            "the provider answered busbar's realtime call with a success naming no call it can be \
+             reached by; no sideband can attach to it, and its row is held until it expires"
+        );
+    }
+    call
 }
 
 /// Whether a far-end piece with `flags` and status `code` (class `class`) is the far end accepting
