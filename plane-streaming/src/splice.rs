@@ -196,7 +196,7 @@ impl LockedKeys for OpenAiRealtimeCodec {
     fn ceiling_frame(&self, code: &str, message: &str) -> Option<Vec<u8>> {
         serde_json::to_vec(&serde_json::json!({
             "type": "error",
-            "error": { "code": code, "message": message },
+            "error": { "type": "invalid_request_error", "code": code, "message": message },
         }))
         .ok()
     }
