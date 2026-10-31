@@ -647,3 +647,19 @@ fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
     ));
     assert!(!upgrade_accepted(0, 101, success), "no status stated");
 }
+
+/// A success answering busbar's call that names no provider call is said in one log line (audit
+/// S45): the call is billed, but no sideband can attach to it and nothing frees its row.
+#[test]
+fn a_success_naming_no_provider_call_is_said_in_one_log_line() {
+    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
+    let named = tracing::subscriber::with_default(cap.clone(), || {
+        (
+            provider_call(None),
+            provider_call(Some("/v1/realtime/calls/x")),
+            provider_call(Some("/v1/realtime/calls/rtc_ok")),
+        )
+    });
+    assert_eq!(named, (None, None, Some("rtc_ok".to_string())));
+    assert_eq!(cap.count("naming no call"), 2, "{:?}", cap.messages());
+}
