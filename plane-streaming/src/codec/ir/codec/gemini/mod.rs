@@ -12,7 +12,7 @@
 //! in-band error message (it reports errors with the socket's close).
 
 use super::peek::{base64_len, Head, Lite};
-use super::{billed_count, usage_floor, DuplexReader, Metered};
+use super::{billed_count, usage_floor, usage_object, DuplexReader, Metered};
 use crate::codec::ir::config::{IrVad, MaxOutputTokens, SessionConfig};
 use crate::codec::ir::media::AudioFormat;
 use crate::codec::ir::usage::IrDuplexUsage;
@@ -228,6 +228,7 @@ fn modality_split(details: Option<&Value>) -> Result<Split, String> {
 /// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
 /// present-but-unreadable one is an `Err` the caller turns into a refusal.
 fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
+    usage_object(u, wire::USAGE_METADATA)?;
     let prompt = modality_split(u.get("promptTokensDetails"))?;
     let tool = modality_split(u.get("toolUsePromptTokensDetails"))?;
     let response = modality_split(u.get("responseTokensDetails"))?;
@@ -284,9 +285,9 @@ impl DuplexReader for GeminiLiveCodec {
             _ => 0,
         };
         let mut out = vec![Metered::ToolOpen; opened];
-        if let Some(um) = v.get(wire::USAGE_METADATA) {
-            // A present-but-unreadable billed count bills the plane's floor and says so,
-            // never meters it at zero.
+        if let Some(um) = v.get(wire::USAGE_METADATA).filter(|um| !um.is_null()) {
+            // A `usageMetadata` that is not an object, or a present-but-unreadable billed count,
+            // bills the plane's floor and says so, never meters it at zero; a `null` one is none.
             out.push(Metered::Usage(
                 usage_from_metadata(um)
                     .unwrap_or_else(|message| usage_floor(frame.len(), &message)),
