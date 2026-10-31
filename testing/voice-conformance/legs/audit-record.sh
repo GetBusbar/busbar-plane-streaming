@@ -10,8 +10,13 @@
 # THE DOOR'S HALF (judged, linked AND dropped door): the tail states the `streaming_session` audit kind
 # and the one `streaming.session.open` operation class; every one of the five doors' units arrives
 # as that operation; and the door writes NO record row of its own — it declares no record kind, and
-# across two whole sessions, a mint and a refusal its answers carry zero record writes — so the
-# kernel's one fixed record is the only row (never doubled). RED arm: a door that writes a row fails.
+# across two whole sessions, a mint and a refusal its answers carry no record put — so the
+# kernel's one fixed record is the only row (never doubled). The one row the battery sees is that
+# record: the mint's refusal of a key outside the session model's grant (this host serves no
+# entitlement check) writes the unit's audit row (contract RECORD_AUDIT, "the one fixed record, not
+# a record of the plane's"), `rejected` as `realtime_ticket.mint` on `pool:<model>`, never the key
+# (R10 grant rulings, lead 2026-10-30, plane-streaming #64); the sessions and the kernel's refusal
+# write none. RED arms: a door that writes a row of its own, a doubled row, a row naming the key.
 #
 # NOT THE DOOR'S: the door does not write the session's audit row — the plane is a pure kind and the
 # kernel writes the one fixed record at the unit's audit step (the streaming door's served leg, one line

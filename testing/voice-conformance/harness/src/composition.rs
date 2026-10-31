@@ -10,20 +10,20 @@
 use busbar_contract::abi::host::conn::connector::DIRECTION_OUTBOUND;
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{
-    class_of, reason_code, reason_of, RefusalClass, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
-    PIECE_HAS_STATUS, PIECE_LAST, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, ROUTE_DIRECT, ROUTE_LOCAL,
-    ROUTE_POOL,
+    class_of, reason_code, reason_of, RefusalClass, AUDIT_REJECTED, FROM_CALLER, FROM_FAR_END,
+    FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST, PRINCIPAL_NONE, PRINCIPAL_REQUIRED, RECORD_AUDIT,
+    RECORD_PUT, ROUTE_DIRECT, ROUTE_LOCAL, ROUTE_POOL,
 };
 use busbar_contract::caps::ReasonCode;
 use busbar_contract::media::base64_encode;
 use busbar_kernel::plane_driver::refusal_status;
 use busbar_plane_streaming::claims::WS_TRANSPORT;
-use busbar_plane_streaming::door::{
-    refusal_body, refusal_render, AUDIT_KIND, LIVE_STYLE, MINTED_NONE, REALTIME_STYLE,
-    REFUSAL_NO_DOOR, RIDES_LIVE_SOCKET, RIDES_REALTIME_CALL, RIDES_REALTIME_SOCKET,
-};
 use busbar_plane_streaming::driven::{
-    mint_failed, GEMINI_SOCKET_PATH, REALTIME_SOCKET_PATH, SESSION_OPEN_ACTION,
+    mint_not_granted, GEMINI_SOCKET_PATH, REALTIME_SOCKET_PATH, SESSION_OPEN_ACTION,
+};
+use busbar_plane_streaming::plane_door::{
+    refusal_body, refusal_render, AUDIT_KIND, LIVE_STYLE, REALTIME_STYLE, REFUSAL_NO_DOOR,
+    RIDES_LIVE_SOCKET, RIDES_REALTIME_CALL, RIDES_REALTIME_SOCKET,
 };
 use busbar_plane_streaming::provider::{GEMINI_LIVE, OPENAI_REALTIME};
 use busbar_plane_streaming::session_door::PER_SESSION_CLASS;
@@ -34,8 +34,8 @@ use serde_json::{json, Value};
 use crate::codec_legs::{caller_norms, far_norms, frame, usage_tokens, Dialect, Norm};
 use crate::door::{
     arrive, dials_socket, drive, judge, judge_planted, open, piece, refusal, refusal_for, request,
-    result, session, Answer, Arrived, Emission, Log, Opened, Piece, Rendered, Rig, Session, MODEL,
-    PUBLIC, SESSION,
+    result, session, Answer, Arrived, Emission, Log, Opened, Piece, Rendered, Rig, Row, Session,
+    MODEL, PUBLIC, SESSION,
 };
 
 // ── the frames the legs push ────────────────────────────────────────────────────────────────────
@@ -194,21 +194,33 @@ fn cred_check(o: &CredObs) -> Result<String, String> {
         return Err(format!("expected two far requests, saw {:?}", o.rides));
     }
     // THE MINT DIALS NOTHING (row 132, `BUSBAR-1.6.0.md` l.766: "Tickets are busbar-minted"): it
-    // names the LOCAL route, and its answer goes to the caller alone. This host serves no ticket,
-    // so the answer is the served plane's 502, never a request to the provider.
+    // names the LOCAL route, and its answer goes to the caller alone.
     let (arrived, minted) = &o.mint;
-    let refused = mint_failed(MINTED_NONE);
     if arrived.outcome != Outcome::Ready
         || arrived.route != (ROUTE_LOCAL, String::new())
         || minted.to_far
         || minted.need != 0
         || !minted.verb.is_empty()
         || !minted.target.is_empty()
+    {
+        return Err(format!(
+            "the mint reached for the provider instead of minting: {arrived:?} {minted:?}"
+        ));
+    }
+    // THE GRANT FIRST (R10 grant ruling, lead 2026-10-30, plane-streaming #64): before it mints,
+    // the door asks `entitlement.check` over `pool:<the session's model>`, and anything but the
+    // host's "entitled" is a refusal, never a default open. This host serves no entitlement
+    // check, so the key is outside the grant: the caller is answered 403 `not_granted`, naming
+    // the model and never the key, with nothing minted and nothing dialled.
+    let refused = mint_not_granted(MODEL);
+    if minted.outcome != Outcome::Ready
+        || !minted.done
         || minted.status != u32::from(refused.status)
         || refused.body.public() != Some(minted.emitted.as_slice())
     {
         return Err(format!(
-            "the mint reached for the provider instead of minting: {arrived:?} {minted:?}"
+            "the mint of a key outside the session model's grant was not refused 403 \
+             not_granted: {minted:?}"
         ));
     }
     for r in &o.rides {
@@ -264,8 +276,9 @@ fn cred_check(o: &CredObs) -> Result<String, String> {
         }
     }
     Ok(
-        "the mint dials nothing (LOCAL route; busbar mints the ticket, row 132); every far \
-         request (the sideband and Gemini sockets) rides a declared outbound need whose auth \
+        "the mint dials nothing (LOCAL route; busbar mints the ticket, row 132) and a key \
+         outside the session model's grant is answered 403 not_granted before any ticket (R10 \
+         grant ruling); every far request (the sideband and Gemini sockets) rides a declared outbound need whose auth \
          style the kernel binds the provider credential to; none carries a credential field, and \
          each dialect states its far end's credential style. Busbar's own call at the SDP door is \
          judged by the plane's both-ways tests under a host that serves tickets. Resolving the \
@@ -291,12 +304,23 @@ fn provider_credential(rig: &Rig, slice: &str) -> bool {
         planted.mint.1.need = RIDES_REALTIME_CALL;
         planted
     };
+    // A mint that opens by default: the key outside the grant is minted a ticket.
+    let open_by_default = |o: &CredObs| {
+        let mut planted = o.clone();
+        planted.mint.1.status = 200;
+        planted.mint.1.emitted = br#"{"value":"ek_planted","expires_at":1}"#.to_vec();
+        planted
+    };
     judge_planted(
         slice,
         "the door's far requests ride declared needs and carry no credential; the mint dials nothing",
         &rig.both(cred_script),
         &cred_check,
-        &[("credential", &credential), ("brokered mint", &brokered)],
+        &[
+            ("credential", &credential),
+            ("brokered mint", &brokered),
+            ("mint open by default", &open_by_default),
+        ],
     )
 }
 
@@ -477,8 +501,14 @@ fn error_of(r: &Rendered) -> (String, String) {
     )
 }
 
+/// THE GRANT KINDS THE TAIL STATES, `scope`'s first: `session`, the plane's own, and `pool`, the
+/// kind the kernel's pool guard judges a routed entry by, which the mint door asks
+/// `entitlement.check` over (`pool:<the session's model>`) before it mints (R10 grant ruling, lead
+/// 2026-10-30, plane-streaming #64): a mint dials nothing, so no kernel route check reaches it.
+const SCOPE_KINDS: [&str; 2] = ["session", "pool"];
+
 fn scope_check(o: &ScopeObs) -> Result<String, String> {
-    if o.scope_kinds != ["session"] {
+    if o.scope_kinds != SCOPE_KINDS {
         return Err(format!("the tail's grant kinds are {:?}", o.scope_kinds));
     }
     for (claim, a) in SCOPE_CLAIMS.iter().zip(&o.arrivals) {
@@ -507,8 +537,9 @@ fn scope_check(o: &ScopeObs) -> Result<String, String> {
         return Err(format!("the grant refusal rendered as {:?}", o.refused));
     }
     Ok(
-        "the door declares the `session` grant kind, every one of its six doors asks for a \
-         principal (none admits anonymously) under the one session-open operation, a sideband \
+        "the door declares the `session` grant kind, then the `pool` kind its mint asks \
+         entitlement.check over before it mints (R10 grant ruling), every one of its six doors \
+         asks for a principal (none admits anonymously) under the one session-open operation, a sideband \
          for a call busbar did not place is refused 404, an unpublished claim is refused 404 \
          with the plane's own code, and a grant refusal renders as the dialect's \
          permission_error. Matching the key's grants (wildcard, explicit, another pool, an empty \
@@ -1087,7 +1118,23 @@ struct AuditObs {
     op_classes: Vec<String>,
     record_kinds: Vec<String>,
     op_of: Vec<(Outcome, u32)>,
-    records: u32,
+    /// Every record write the door's answers made, named by the unit that made it.
+    rows: Vec<(&'static str, Row)>,
+}
+
+/// THE ONE AUDIT ROW the battery's units carry (contract `RECORD_AUDIT`: "THE UNIT'S AUDIT RECORD,
+/// a row on the kernel's own audit chain (the one fixed record), not a record of the plane's"):
+/// the mint's refusal of a key outside the session model's grant, `rejected`, as
+/// `realtime_ticket.mint` on `pool:<the session's model>`, naming the pool and never the key (R10
+/// grant rulings 1 and 2, lead 2026-10-30, plane-streaming #64). This host serves no
+/// entitlement check, so the mint is that refusal.
+fn mint_refused_row() -> Row {
+    Row {
+        op: RECORD_AUDIT,
+        kind: AUDIT_REJECTED,
+        key: "realtime_ticket.mint".to_string(),
+        value: format!("pool:{MODEL}"),
+    }
 }
 
 fn audit_script(p: &Plugin<Plane>) -> AuditObs {
@@ -1108,23 +1155,26 @@ fn audit_script(p: &Plugin<Plane>) -> AuditObs {
             (a.outcome, a.op_class)
         })
         .collect();
-    let mut records = 0;
-    for stream in [80, 81] {
+    let mut rows = Vec::new();
+    for (stream, unit) in [(80, "session 80"), (81, "session 81")] {
         let mut s = Session::open(p, stream, 5);
         s.push(FROM_CALLER, 0, &uplink(100));
         s.push(FROM_FAR_END, 0, USAGE_DONE);
         s.push(FROM_CALLER, PIECE_LAST, &[]);
-        records += s.log.records;
+        rows.extend(s.log.rows.into_iter().map(|r| (unit, r)));
     }
-    // The mint's whole unit: busbar mints the ticket (row 132), dialling nothing.
-    records += piece(p, &request(82, 0, FROM_CALLER, PIECE_LAST, &[])).records;
-    records += refusal(p, 83, 0, 403, "refused").records;
+    // The mint's whole unit: busbar mints the ticket (row 132), dialling nothing; the key here is
+    // outside the session model's grant, so it is refused and audited (R10).
+    let mint = piece(p, &request(82, 0, FROM_CALLER, PIECE_LAST, &[]));
+    rows.extend(mint.rows.into_iter().map(|r| ("mint", r)));
+    let refused = refusal(p, 83, 0, 403, "refused");
+    rows.extend(refused.rows.into_iter().map(|r| ("kernel refusal", r)));
     AuditObs {
         audit_kind: served.audit_kind.to_string(),
         op_classes: served.op_classes.iter().map(|c| (*c).to_string()).collect(),
         record_kinds,
         op_of,
-        records,
+        rows,
     }
 }
 
@@ -1150,30 +1200,70 @@ fn audit_check(o: &AuditObs) -> Result<String, String> {
             o.op_of
         ));
     }
-    if o.records != 0 {
+    let own: Vec<_> = o
+        .rows
+        .iter()
+        .filter(|(_, r)| r.op != RECORD_AUDIT)
+        .collect();
+    if !own.is_empty() {
         return Err(format!(
-            "the door wrote {} record row(s) of its own beside the kernel's one fixed record",
-            o.records
+            "the door wrote {} record row(s) of its own beside the kernel's one fixed record: \
+             {own:?}",
+            own.len()
+        ));
+    }
+    // Every audit row is the unit's one fixed record: exactly the mint refusal's, once.
+    let want = [("mint", mint_refused_row())];
+    if o.rows != want {
+        return Err(format!(
+            "the units' audit rows are {:?}, not the mint refusal's one row {want:?}",
+            o.rows
         ));
     }
     Ok(format!(
         "every door's unit is the one `{SESSION_OPEN_ACTION}` operation under the `{AUDIT_KIND}` \
-         audit kind, and the door writes NO row of its own across two whole sessions, a mint and \
-         a refusal (it declares no record kind), so the kernel's one fixed record per unit is the \
-         only row; writing that row is the kernel's audit step"
+         audit kind, and the door writes NO record of its own across two whole sessions, a mint and \
+         a refusal (it declares no record kind); the only row is a unit's one fixed record on the \
+         kernel's chain: the mint's refusal of a key outside the session model's grant, \
+         `rejected` as `realtime_ticket.mint` on `pool:{MODEL}` (R10), once, and none for the \
+         sessions or the kernel's refusal; writing that row on the chain is the kernel's audit \
+         step"
     ))
 }
 
 fn audit_record(rig: &Rig, slice: &str) -> bool {
-    judge(
+    judge_planted(
         slice,
         "the audit kind and operation the kernel's one row is written under",
         &rig.both(audit_script),
         &audit_check,
-        &|o: &AuditObs| AuditObs {
-            records: o.records + 1,
-            ..o.clone()
-        },
+        &[
+            ("a row of the door's own", &|o: &AuditObs| {
+                let mut planted = o.clone();
+                planted.rows.push((
+                    "session 80",
+                    Row {
+                        op: RECORD_PUT,
+                        kind: 0,
+                        key: "session".to_string(),
+                        value: "planted".to_string(),
+                    },
+                ));
+                planted
+            }),
+            ("the one record doubled", &|o: &AuditObs| {
+                let mut planted = o.clone();
+                planted.rows.push(("mint", mint_refused_row()));
+                planted
+            }),
+            ("a refusal row naming the key", &|o: &AuditObs| {
+                let mut planted = o.clone();
+                for (_, r) in &mut planted.rows {
+                    r.value = "key:sk-caller".to_string();
+                }
+                planted
+            }),
+        ],
     )
 }
 

@@ -6,7 +6,9 @@
 #
 # LEG: session-scope — the plane's `session` grant kind, at the door.
 #
-# THE DOOR'S HALF (judged, linked AND dropped door): the tail declares the `session` grant kind; every
+# THE DOOR'S HALF (judged, linked AND dropped door): the tail declares the `session` grant kind, then
+# `pool`, the kind its mint asks entitlement.check over (`pool:<model>`) before it mints (R10 grant
+# ruling, lead 2026-10-30, plane-streaming #64); every
 # one of the five doors asks for a principal (none admits anonymously) under the one session-open
 # operation; an unpublished claim is refused 404 with the plane's own code; a grant refusal renders as
 # the dialect's permission_error. RED arm: a door that admits anonymously fails.
