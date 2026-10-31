@@ -72,3 +72,29 @@ fn gemini_live_absent_counts_still_read_as_zero() {
     };
     assert_eq!((u.text_in, u.text_out, u.cached), (0, 50, 0));
 }
+
+/// RED (audit plane-streaming round 52b0f93ac9, S57): a usage report that is PRESENT but is not an
+/// object (a string, a number, an array) is unreadable usage on a delivered turn: it bills the
+/// floor and says so, never an all-zero report. A JSON `null` is no report, as an absent one is.
+#[test]
+fn a_present_usage_that_is_not_an_object_bills_the_floor_in_both_dialects() {
+    for usage in [json!("n/a"), json!(42), json!([1, 2])] {
+        let src = json!({"type": "response.done", "response": {"usage": usage}});
+        let ir = OpenAiRealtimeCodec.meter_down(&wire(&src));
+        assert!(floored(&ir, &src), "OpenAI usage {usage} bills the floor: {ir:?}");
+        let src = json!({"usageMetadata": usage});
+        let ir = GeminiLiveCodec.meter_down(&wire(&src));
+        assert!(floored(&ir, &src), "Gemini usageMetadata {usage} bills the floor: {ir:?}");
+    }
+    let src = json!({"type": "response.done", "response": {"usage": null}});
+    let ir = OpenAiRealtimeCodec.meter_down(&wire(&src));
+    assert!(
+        matches!(ir.as_slice(), [Metered::Usage(u)] if !u.floor && *u == IrDuplexUsage::default()),
+        "a null OpenAI usage is no report: {ir:?}"
+    );
+    let ir = GeminiLiveCodec.meter_down(&wire(&json!({"usageMetadata": null})));
+    assert!(
+        ir.iter().all(|m| matches!(m, Metered::Usage(u) if !u.floor)),
+        "a null Gemini usageMetadata bills no floor: {ir:?}"
+    );
+}
