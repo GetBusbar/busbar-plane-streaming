@@ -376,7 +376,29 @@ fn a_rewritten_session_open_locks_the_rewritten_params_once() {
         ..cfg.session.clone()
     };
     assert!(sessions.rewrite(7, rewritten));
-    assert!(sessions.get_or_open(7, Door::Sideband, &cfg).is_some());
+    // The session opens LOCKED to the rewrite: a caller's session update takes its voice (audit
+    // S78: a rewrite consumed but not applied is caught here, not only by the stash emptying).
+    let update = br#"{"type":"session.update","session":{}}"#;
+    let locked_voice = |live: &mut Live| {
+        live.from_caller(update, false);
+        let emit = live.next(true);
+        matches!(&emit.frame, Some((Side::FarEnd, f)) if text(f).contains(r#""voice":"marin""#))
+    };
+    let live = sessions
+        .get_or_open(7, Door::Sideband, &cfg)
+        .expect("a session door");
+    assert!(
+        locked_voice(live),
+        "the rewritten voice is the session's lock"
+    );
+    let plain = sessions
+        .get_or_open(8, Door::Sideband, &cfg)
+        .expect("a session door");
+    assert!(
+        !locked_voice(plain),
+        "a stream with no rewrite keeps the section's lock"
+    );
+    sessions.close(8);
     sessions.close(7);
     assert!(
         sessions.rewritten.is_empty(),
