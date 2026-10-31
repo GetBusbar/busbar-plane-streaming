@@ -116,7 +116,10 @@ pub fn call_location(id: &str) -> String {
     format!("{CALLS_PATH}/{id}")
 }
 
-/// A call id in a `Location`: the last path segment that is one, less any query or fragment.
+/// A call id in a `Location`: the last path segment that is one, less any query or fragment. A
+/// segment holding anything but ASCII letters, digits, `_` and `-` is none (the rule a sideband
+/// arrival's id is held to, `crate::driven::sideband_call_id`): the id is spliced into a dialled
+/// query, so nothing that could carry another parameter is taken from an untrusted answer.
 #[must_use]
 pub fn call_id_of(location: &str) -> Option<String> {
     location
@@ -125,6 +128,10 @@ pub fn call_id_of(location: &str) -> Option<String> {
         .unwrap_or(location)
         .rsplit('/')
         .find(|seg| seg.starts_with(CALL_ID_PREFIX) && seg.len() > CALL_ID_PREFIX.len())
+        .filter(|seg| {
+            seg.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        })
         .map(str::to_string)
 }
 
