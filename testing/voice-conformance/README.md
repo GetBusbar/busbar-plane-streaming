@@ -40,14 +40,14 @@ money steps, the transport), which a plane cannot see and the harness therefore 
 |---|---|---|
 | `spec-per-dialect` | `openai`, `gemini`, `twilio` | every fixture: what it decodes to, and the door's relay of it by the session rules; the `twilio` slice also replays `transcript.jsonl`, one whole call |
 | `replay` | `default` | each captured transcript through one session: its decoded skeleton; the door's relay and skeleton |
-| `provider-credential` | 1 | every far request rides a declared outbound need; none carries a credential |
+| `provider-credential` | 1 | every far request rides a declared outbound need; none carries a credential; the mint dials nothing and refuses a key outside the grant 403 (R10) |
 | `metering-lease` | 1 | a session's units, reported per declared class, once per turn; the fee once answered |
-| `session-scope` | 1 | the `session` grant kind; every door asks for a principal; 404 off the guest list |
+| `session-scope` | 1 | the `session` grant kind, then `pool` (the mint's grant check, R10); every door asks for a principal; 404 off the guest list |
 | `gemini-live-route` | 1 | the Gemini Live door: claim, arrival, and the handshake across it |
 | `provider-dial` | 1 | a session's far frames ride the dialect's socket need; the host connector dials |
 | `admit-refusal` | 1 | a refusal renders in the dialect's shape and opens nothing, dials nothing; a policy refusal wears its 4xx, never `server_error` |
 | `route-failover` | 1 | each ATTEMPT answered afresh on the pass need; nothing reaches the caller early |
-| `audit-record` | 1 | the audit kind and operation the kernel's one row is written under; no door row |
+| `audit-record` | 1 | the audit kind and operation the kernel's one row is written under; no door row; the mint refusal's one audit row, `realtime_ticket.mint` on `pool:<model>` (R10) |
 | `exit-terminal` | 1 | one session, one end; an ended stream is refused on every side |
 | `tool-reply` | 1 | a tool call is relayed to the caller byte for byte and never answered by busbar; the turn's usage report reaches the caller too, and is reported as units (Law 11, Law 5) |
 | `twilio-route` | 1 | the Twilio claim: ws transport, one-level `/twilio` prefix, `webhook-signature` the only alternative, a principal asked for; the session opens on the `event`-tagged `start` frame |
