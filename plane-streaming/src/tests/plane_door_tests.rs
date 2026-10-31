@@ -185,6 +185,7 @@ fn a_refusal_is_rendered_in_the_dialects_error_shape() {
     for (status, kind) in [
         (401, "authentication_error"),
         (403, "permission_error"),
+        (404, "not_found_error"),
         (429, "rate_limit_error"),
         (400, "invalid_request_error"),
         (503, "server_error"),
