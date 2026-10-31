@@ -1859,8 +1859,8 @@ slot!(OnPiece, OnPieceIn, OnPieceOut, |instance, input, out| {
     outcome
 });
 
-// The refusal render, the admin serve and the hook projection are declined: a declined unit is
-// charged nothing.
+// The admin serve is declined (a declined unit is charged nothing); hydrate and start answer
+// ready with nothing to do. The refusal render and the hook projection are the slots below.
 
 /// A refusal in the realtime dialects' error shape (the OpenAI REST error envelope, which both
 /// the session doors and the one-request doors answer a refused open in): the kernel's status read
