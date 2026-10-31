@@ -93,7 +93,9 @@ pub(crate) fn setup_locked(cfg: &SessionConfig) -> serde_json::Map<String, Value
 }
 
 /// THE `setup` FRAME a session locked to `cfg` is told, with the locked session's members in Gemini's
-/// shape. Modalities are UPPERCASED to Gemini's enum tokens; the OpenAI-only VAD knobs have no
+/// shape. Modalities are UPPERCASED to Gemini's enum tokens; server VAD's padding and silence
+/// windows are `automaticActivityDetection`'s, and barge-in off (`interrupt_response: false`) is
+/// `activityHandling: NO_INTERRUPTION`; the activation `threshold` and `create_response` have no
 /// Gemini field.
 pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
     let mut setup = serde_json::Map::new();
@@ -153,15 +155,18 @@ pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
         Some(Some(IrVad::ServerVad {
             prefix_padding_ms,
             silence_duration_ms,
+            interrupt_response,
             ..
         })) => {
-            setup.insert(
-                "realtimeInputConfig".into(),
-                json!({ "automaticActivityDetection": {
-                    "prefixPaddingMs": prefix_padding_ms,
-                    "silenceDurationMs": silence_duration_ms,
-                }}),
-            );
+            let mut config = json!({ "automaticActivityDetection": {
+                "prefixPaddingMs": prefix_padding_ms,
+                "silenceDurationMs": silence_duration_ms,
+            }});
+            // Barge-in off is Gemini's `activityHandling`; on is its default, and names nothing.
+            if !interrupt_response {
+                config["activityHandling"] = json!("NO_INTERRUPTION");
+            }
+            setup.insert("realtimeInputConfig".into(), config);
         }
         Some(Some(IrVad::SemanticVad { .. })) => {
             // Semantic VAD has no Gemini knob set; enable automatic detection generically.
