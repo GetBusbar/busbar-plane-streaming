@@ -30,6 +30,9 @@ use busbar_plugin_loader::dispatch::{
     LinkedRow, LoadedDoor, NoSink, Plugin,
 };
 
+#[path = "support/admission_ticket.rs"]
+mod admission_ticket;
+
 fn z<T>() -> T {
     // SAFETY: every `in`/`out` here is plain C data; all-zero is a valid value of each.
     unsafe { zeroed() }

@@ -181,7 +181,9 @@ PY
   expect 1 "no RED arm rows is red" twilio "$r"
   plant "$r"; echo "no build" >"$r/subject-failed"
   expect 1 "a subject that did not build is red" twilio "$r"
-  rm -rf "$t"; [ "$rc" = 0 ] && [ "$ok" = 0 ]
+  local execution_rc=0
+  python3 -I "$here/testing/voice-conformance/tests/test_execution.py" || execution_rc=$?
+  rm -rf "$t"; [ "$rc" = 0 ] && [ "$ok" = 0 ] && [ "$execution_rc" = 0 ]
 }
 [ "${1:-}" = --selftest ] && { selftest; exit $?; }
 
