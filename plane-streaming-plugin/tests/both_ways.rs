@@ -812,7 +812,7 @@ struct TicketHost {
 /// The record unit 50's ticket locks: a session config naming its instructions.
 const TICKET_RECORD: &[u8] = br#"{"instructions":"from-ticket"}"#;
 
-impl busbar_contract::services::double::ServicesDouble for TicketHost {
+impl busbar_test_kit::services_double::ServicesDouble for TicketHost {
     fn entitlement_check(
         &self,
         _caller: &busbar_contract::services::Caller,
@@ -884,19 +884,27 @@ impl busbar_contract::services::double::ServicesDouble for TicketHost {
 
 /// A dispatcher whose host serves tickets and randomness ([`TicketHost`]) to a key granted the
 /// session's model (`pool:m-cap`), and that host.
-fn ticket_host() -> (Dispatcher, Arc<TicketHost>) {
+fn ticket_host() -> (
+    Dispatcher,
+    Arc<busbar_test_kit::services_double::Double<TicketHost>>,
+) {
     ticket_host_granting(&["pool:m-cap"])
 }
 
 /// [`ticket_host`] for a key granted exactly `granted`.
-fn ticket_host_granting(granted: &'static [&'static str]) -> (Dispatcher, Arc<TicketHost>) {
-    let host = Arc::new(TicketHost {
+fn ticket_host_granting(
+    granted: &'static [&'static str],
+) -> (
+    Dispatcher,
+    Arc<busbar_test_kit::services_double::Double<TicketHost>>,
+) {
+    let host = Arc::new(busbar_test_kit::services_double::Double(TicketHost {
         draws: std::sync::atomic::AtomicU64::new(0xa0),
         minted: std::sync::Mutex::new(Vec::new()),
         granted,
         once: false,
         took: std::sync::atomic::AtomicBool::new(false),
-    });
+    }));
     let d = Dispatcher::with_services(DispatchConfig::default(), host.clone());
     (d, host)
 }
@@ -2644,13 +2652,13 @@ fn an_sdp_open_answered_short_answers_its_201_and_location_on_the_re_call() {
 #[test]
 fn a_short_sdp_projection_re_called_keeps_the_tickets_session() {
     for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
-        let host = Arc::new(TicketHost {
+        let host = Arc::new(busbar_test_kit::services_double::Double(TicketHost {
             draws: std::sync::atomic::AtomicU64::new(0xa0),
             minted: std::sync::Mutex::new(Vec::new()),
             granted: &["pool:m-cap"],
             once: true,
             took: std::sync::atomic::AtomicBool::new(false),
-        });
+        }));
         let d = Dispatcher::with_services(DispatchConfig::default(), host);
         let p = door(&d);
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);

@@ -18,7 +18,7 @@ struct AdmissionHost {
     draws: AtomicUsize,
 }
 
-impl busbar_contract::services::double::ServicesDouble for AdmissionHost {
+impl busbar_test_kit::services_double::ServicesDouble for AdmissionHost {
     fn ticket_take(
         &self,
         _: &busbar_contract::services::Caller,
@@ -48,12 +48,17 @@ impl busbar_contract::services::double::ServicesDouble for AdmissionHost {
     }
 }
 
-fn host(admission: Admission) -> (Dispatcher, Arc<AdmissionHost>) {
-    let host = Arc::new(AdmissionHost {
+fn host(
+    admission: Admission,
+) -> (
+    Dispatcher,
+    Arc<busbar_test_kit::services_double::Double<AdmissionHost>>,
+) {
+    let host = Arc::new(busbar_test_kit::services_double::Double(AdmissionHost {
         admission,
         takes: AtomicUsize::new(0),
         draws: AtomicUsize::new(0),
-    });
+    }));
     (
         Dispatcher::with_services(DispatchConfig::default(), host.clone()),
         host,
