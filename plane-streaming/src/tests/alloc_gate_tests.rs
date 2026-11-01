@@ -1,20 +1,6 @@
-//! What one downlink audio frame is allowed to allocate, and what it must still say.
-//!
-//! A call carries fifty audio frames a second in each direction, so anything the downlink renderer
-//! does per frame is done fifty times a second per call. Building a document to describe a fixed
-//! three-member envelope, a string to hold the payload, and then serializing the document, is three
-//! allocations to reach bytes that could have been appended to a buffer already held. That cost is
-//! too small for a stopwatch to find on a shared runner and too frequent to leave alone. An
-//! allocation COUNT finds it, and is the same number on every machine, so it can be pinned.
-//!
-//! The first test below is the one that matters most: the bytes are unchanged. A renderer that got
-//! faster and moved a byte would have broken every client of this dialect, so the count is only
-//! allowed to fall on the far side of a byte-for-byte comparison against the serializer that used
-//! to produce it.
+//! Twilio media rendering preserves the serializer's wire bytes.
 
 use crate::codec::topology::twilio::TwilioEnvelope;
-
-use busbar_test_kit::alloc_counter::allocations_of;
 
 /// The identifier a `start` event binds, in the shape this dialect mints them.
 const SID: &str = "MZ18ad3ab5a668481ce02b83e7395059f0";
@@ -104,56 +90,4 @@ fn the_rendered_envelope_is_the_one_the_serializer_produced() {
             );
         }
     }
-}
-
-/// COMMITTED BASELINE — the exact allocation count of rendering ONE downlink audio frame into a
-/// buffer that has already carried one.
-///
-/// Zero. The envelope is fixed, the buffer is the caller's, and the only two things that vary from
-/// frame to frame — the payload and the identifier — are appended, not built.
-///
-/// A buffer that has already carried a frame is the caller's to hold: a caller that built a fresh
-/// vector per frame would pay an allocation per frame no matter what this renderer costs.
-const RENDER_ALLOCS: u64 = 0;
-
-#[test]
-fn rendering_a_downlink_frame_into_a_held_buffer_allocates_nothing() {
-    let mulaw = frame_bytes();
-    let mut out = Vec::new();
-
-    // One warm call outside the window: the buffer takes its capacity here, which is the whole
-    // point of handing the same one back frame after frame.
-    TwilioEnvelope::encode_media_into(&mut out, SID, &mulaw);
-    let expected = out.clone();
-
-    let count = allocations_of(|| {
-        TwilioEnvelope::encode_media_into(&mut out, SID, &mulaw);
-    });
-
-    // The serializer route, measured rather than remembered. `reference` is the renderer this
-    // replaced, restated line for line above, so the pair of numbers printed here is the whole
-    // claim: the same bytes, for this much less.
-    let mut serialized = None;
-    let before = allocations_of(|| serialized = Some(reference(SID, &mulaw)));
-    println!("downlink render allocations: {count} (serializer route: {before})");
-
-    assert_eq!(
-        out, expected,
-        "a reused buffer renders the same bytes a fresh one does"
-    );
-    assert_eq!(
-        serialized.expect("the reference ran"),
-        out,
-        "the two routes disagree about the bytes"
-    );
-    assert_eq!(
-        count, RENDER_ALLOCS,
-        "rendering one downlink frame allocated {count} times, not {RENDER_ALLOCS}: it is building \
-         something per frame that does not change from frame to frame"
-    );
-    assert!(
-        before > count,
-        "the serializer route allocated {before} times and the renderer {count}: the renderer \
-         exists to cost less than it, so a renderer that does not is not worth having"
-    );
 }

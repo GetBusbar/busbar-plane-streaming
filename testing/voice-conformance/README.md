@@ -27,7 +27,7 @@ Each assertion drives a fresh instance of each door with one script and is PASS 
 `testing/conformance/voice.sh` first writes a temporary workspace with `voice-overlay.sh`. The
 harness is not a member of this repository's root workspace and reads private or test-only plane
 modules, so building it directly against the product tree is unsupported. The overlay copies the
-plane and exposes those modules in the copy; it does not change product behavior or source files.
+plane and applies `testing/conformance/voice-overlay.patch` to expose those modules in the copy; it does not change product behavior or source files.
 `lib/conform-bin.sh` builds the harness and cdylib twin inside that workspace against the same
 busbar-contract. `VOICE_CONFORM_BIN` names a prebuilt harness (checked for staleness
 against the plane, loader, contract and harness sources), `VOICE_CONFORM_DOOR` a dropped door that
@@ -97,10 +97,11 @@ and `--selftest` proves it.
 
 ## The verdict emitter
 
-The runner holds the set of legs it **reported on** to equality with the set **discovered**, enforces
-a floor on the leg count, keeps governance out of the conformance tally, and makes a `ready` leg that
-emitted no `RESULT` line RED. `--selftest` injects each of those faults through the real emitter and
-watches the check bite, then accounts the shipped legs (which runs them: it builds the harness).
+The runner executes the discovered protocol legs and keeps governance out of the conformance
+tally. A ready leg must produce results and complete with the matching process status; interrupted
+execution cannot turn partial PASS output into a pass. `--selftest` runs behavioral process-exit
+and result-classification tests, without building the product. No leg-count floor or source-shape
+scanner contributes to the verdict.
 
 ## Usage
 

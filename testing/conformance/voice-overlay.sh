@@ -20,11 +20,6 @@ cp -R "$root/testing/voice-conformance/harness" "$dest/testing/voice-conformance
 rm -rf "$dest"/plane-streaming/target "$dest"/plane-streaming-plugin/target
 sed -i.bak 's#^    "plane-streaming-plugin",#    "plane-streaming-plugin",\n    "testing/voice-conformance/harness",#' "$dest/Cargo.toml"
 sed -i.bak 's#^\[workspace.dependencies\]#[workspace.dependencies]\nbusbar-plane-streaming = { path = "plane-streaming" }\nbusbar-plane-streaming-plugin = { path = "plane-streaming-plugin" }#' "$dest/Cargo.toml"
-src="$dest/plane-streaming/src"
-sed -i.bak -e 's/^mod \([a-z_]*\);/pub mod \1;/' -e 's/^#!\[deny(missing_docs)\]//' "$src/lib.rs"
-# the fence on an item is dropped; the fence on each of the plane's own unit-test modules stays
-# (an out-of-line `mod <name>;`, after any `#[path = ...]`: they read the contract's test-only SDK
-# and `crate::tests`), and the tests directory is not touched. `voice.sh --selftest` holds this.
-find "$src" -name '*.rs' ! -path "$src/tests/*" -print0 \
-  | xargs -0 perl -0pi -e 's/^[ \t]*#\[cfg\(test\)\][ \t]*\n(?!(?:[ \t]*#\[[^\n]*\n)*[ \t]*(pub(\([a-z]+\))? )?mod [a-z_0-9]+;)//mg'
+# Visibility-only Rust changes prepared from syntax nodes; no regex rewriting of source.
+git -C "$dest" apply "$root/testing/conformance/voice-overlay.patch"
 find "$dest" -name '*.bak' -delete
