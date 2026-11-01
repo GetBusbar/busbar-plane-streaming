@@ -88,6 +88,12 @@ fn the_rendered_envelope_is_the_one_the_serializer_produced() {
                 out,
                 "the owning form and the rendering form disagree for {sid:?}"
             );
+            let expected = out.clone();
+            TwilioEnvelope::encode_media_into(&mut out, sid, payload);
+            assert_eq!(
+                out, expected,
+                "a reused buffer renders the same bytes a fresh one does"
+            );
         }
     }
 }
