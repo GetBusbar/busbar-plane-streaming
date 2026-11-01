@@ -1023,8 +1023,8 @@ impl Plane {
 
     /// The session config the SDP door's session on `stream` is locked to: the one already stated
     /// for it (a hook's rewrite, or a ticket's record the projection took), else the record of the
-    /// ticket that admitted it, else the section's session under its ceilings. `None` = the
-    /// ticket's record is not a session config, and the session is refused.
+    /// ticket that admitted it, else the section's session under its ceilings for a key-admitted
+    /// unit. `None` = the host could not take admission or its record is not a session config.
     fn lock_call(
         &self,
         sessions: &mut Sessions,
@@ -1034,9 +1034,9 @@ impl Plane {
         if let Some(stated) = sessions.rewritten(stream) {
             return Some(browser_lock(stated.clone(), cfg));
         }
-        let locked = match self.take_ticket() {
-            Ok(Some(record)) => crate::ticket::locked_by(&record).ok()?,
-            Ok(None) | Err(()) => cfg.session.clone(),
+        let locked = match self.take_ticket().ok()? {
+            Some(record) => crate::ticket::locked_by(&record).ok()?,
+            None => cfg.session.clone(),
         };
         let locked = browser_lock(locked, cfg);
         sessions.rewrite(stream, locked.clone()).then_some(locked)
@@ -2029,15 +2029,19 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         if let Some(stated) = stated {
             locked = stated;
         } else if door == Door::Sdp {
-            if let Ok(Some(record)) = p.take_ticket() {
-                let Ok(ticketed) = crate::ticket::locked_by(&record) else {
-                    return Outcome::Refused;
-                };
-                if !lock(&p.sessions).rewrite(given.unit(), ticketed.clone()) {
-                    out.error(CALLS_FULL_TEXT);
-                    return Outcome::Refused;
-                }
-                locked = ticketed;
+            locked = match p.take_ticket() {
+                Ok(Some(record)) => match crate::ticket::locked_by(&record) {
+                    Ok(ticketed) => ticketed,
+                    Err(_) => return Outcome::Refused,
+                },
+                Ok(None) => locked,
+                Err(()) => return Outcome::Refused,
+            };
+            // Both admission kinds are taken once. Keep key-admitted defaults too, before a
+            // short answer or a generation change can make the next crossing take them again.
+            if !lock(&p.sessions).rewrite(given.unit(), locked.clone()) {
+                out.error(CALLS_FULL_TEXT);
+                return Outcome::Refused;
             }
         }
         // Rejection preserves the session already accepted for this unit. Report it only when

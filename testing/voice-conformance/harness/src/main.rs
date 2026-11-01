@@ -15,6 +15,8 @@
 //! Output contract (the runner greps `^RESULT `): each assertion prints exactly one line
 //!   RESULT <slice> <PASS|FAIL> <detail>
 //! Non-`RESULT` lines (`SUBITEM`) are ignored by the runner.
+//! A completed invocation ends with `VOICE_COMPLETE <exit status>` (0 or 1). A panic or premature
+//! exit cannot turn earlier PASS lines into a completed leg; assertion failures still exit 1.
 //!
 //! ```text
 //! voice_conform spec <openai|gemini|twilio> <fixtures_dir>
@@ -62,5 +64,7 @@ fn main() {
         "composition" => composition::run(&rig, nth(&args, 2)),
         _ => usage(),
     };
+    let code = i32::from(code != 0);
+    println!("VOICE_COMPLETE {code}");
     std::process::exit(code);
 }

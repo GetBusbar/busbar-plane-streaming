@@ -147,8 +147,7 @@ leg_file() { printf '%s/%s.sh' "$VOICE_LEGS_DIR" "$1"; }
 # Prints the leg's per-slice lines and returns:
 #   0  pending, or ready and every slice PASS
 #   1  ready and at least one slice FAIL (a real conformance finding)
-#   2  ready but a slice produced NO result — the vacuous-ready trap, the scaffold's version of
-#      "armed and executed nothing". This is the fault the drop-in must never introduce silently.
+#   2  a ready slice did not complete successfully (including one that produced NO result).
 # A governance leg NEVER returns 1: its findings are observations, never a conformance verdict.
 _process_leg() {
   local name="$1" only_slice="${2:-}" rc=0
@@ -166,10 +165,25 @@ _process_leg() {
   fi
 
   # READY. Each slice must yield at least one RESULT line, or the leg is vacuous.
-  local s out results
+  local s out results execution_rc completion
   for s in "${LEG_SLICES[@]}"; do
-    out="$(leg_execute "$s" || true)"
+    execution_rc=0
+    out="$(leg_execute "$s")" || execution_rc=$?
     results="$(printf '%s\n' "$out" | grep -E '^RESULT ' || true)"
+    completion="${out##*$'\n'}"
+    # Assertion failures are a completed invocation with status 1, including the expected RED
+    # probe. The harness prints this terminal line only after its whole script returned. A panic,
+    # signal, build failure or an early exit after partial RESULT output is an execution failure.
+    if { [ "$execution_rc" -ne 0 ] && [ "$execution_rc" -ne 1 ]; } \
+       || [ "$completion" != "VOICE_COMPLETE $execution_rc" ] \
+       || { [ "$execution_rc" -eq 1 ] && ! printf '%s\n' "$results" | grep -qE '^RESULT [^ ]+ FAIL'; }; then
+      say "      · $s : EXECUTION FAILED — exit $execution_rc, no matching completed invocation"
+      if [ -n "${VOICE_RESULT_LOG:-}" ]; then
+        printf '%s\t%s\tEXECUTIONFAILED\texit %s, no matching completed invocation\n' \
+          "$name" "$s" "$execution_rc" >>"$VOICE_RESULT_LOG"
+      fi
+      rc=2; continue
+    fi
     if [ -z "$results" ]; then
       say "      · $s : NO RESULT — a READY leg that executed nothing is RED"
       # Additive, machine-readable mirror for testing/shadow-oracle/rigs-ledger.sh: it needs a
@@ -250,7 +264,8 @@ emit_verdict() {
   say "  accounting problems: $problems"
 
   if [ "$problems" -gt 0 ]; then
-    die "the battery's own accounting failed above — no verdict about busbar can be believed."
+    warn "FAIL: the battery did not complete cleanly above — no verdict about busbar can be believed."
+    return 2
   fi
   if [ "$conformance_fail" -gt 0 ]; then
     die "$conformance_fail conformance leg(s) failed. This IS a finding about busbar."
@@ -277,7 +292,7 @@ run_one_leg() {
          && say "leg '$name': PENDING (scaffold) — exiting 0; this is not a conformance pass" \
          || say "leg '$name': READY and passing" ;;
     1) die "leg '$name': conformance FAIL — a finding about busbar" ;;
-    2) die "leg '$name': READY but executed nothing — RED, not green" ;;
+    2) warn "FAIL: leg '$name': execution did not complete"; return 2 ;;
   esac
 }
 
@@ -300,10 +315,10 @@ selftest() {
   # Fixture leg writers. `_pending`, `_ready_pass`, `_ready_fail`, `_ready_vacuous`, `_gov` each
   # write a leg file honouring the contract, so the fixtures exercise the loader too.
   _pending()       { printf 'LEG_KIND=conformance\nLEG_STATUS=pending\nLEG_SLICES=(%s)\nleg_execute(){ :; }\n' "$2" >"$1"; }
-  _ready_pass()    { printf 'LEG_KIND=conformance\nLEG_STATUS=ready\nLEG_SLICES=(%s)\nleg_execute(){ echo "RESULT $1 PASS ok"; }\n' "$2" >"$1"; }
-  _ready_fail()    { printf 'LEG_KIND=conformance\nLEG_STATUS=ready\nLEG_SLICES=(%s)\nleg_execute(){ echo "RESULT $1 FAIL boom"; }\n' "$2" >"$1"; }
+  _ready_pass()    { printf 'LEG_KIND=conformance\nLEG_STATUS=ready\nLEG_SLICES=(%s)\nleg_execute(){ echo "RESULT $1 PASS ok"; echo "VOICE_COMPLETE 0"; }\n' "$2" >"$1"; }
+  _ready_fail()    { printf 'LEG_KIND=conformance\nLEG_STATUS=ready\nLEG_SLICES=(%s)\nleg_execute(){ echo "RESULT $1 FAIL boom"; echo "VOICE_COMPLETE 1"; return 1; }\n' "$2" >"$1"; }
   _ready_vacuous() { printf 'LEG_KIND=conformance\nLEG_STATUS=ready\nLEG_SLICES=(%s)\nleg_execute(){ echo "no result at all"; }\n' "$2" >"$1"; }
-  _gov_fail()      { printf 'LEG_KIND=governance\nLEG_STATUS=ready\nLEG_SLICES=(%s)\nleg_execute(){ echo "RESULT $1 FAIL observed"; }\n' "$2" >"$1"; }
+  _gov_fail()      { printf 'LEG_KIND=governance\nLEG_STATUS=ready\nLEG_SLICES=(%s)\nleg_execute(){ echo "RESULT $1 FAIL observed"; echo "VOICE_COMPLETE 0"; }\n' "$2" >"$1"; }
 
   probe() { ( VOICE_LEGS_DIR="$1" VOICE_MIN_LEGS="${3:-3}" ${VOICE_SELFTEST_DROP:+VOICE_SELFTEST_DROP="$VOICE_SELFTEST_DROP"} emit_verdict ) >/dev/null 2>&1; }
   check() {  # check <name> <legsdir> <want:accept|refuse> [minlegs]

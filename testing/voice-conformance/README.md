@@ -24,9 +24,12 @@ Each assertion drives a fresh instance of each door with one script and is PASS 
    would give) is refused by the same check. `VOICE_CONFORM_RED=1` makes the planted answers the
    subject; every conformance leg must then go RED.
 
-`lib/conform-bin.sh` builds the pair once (`cargo build -p voice-conformance-harness --bin
-voice_conform`, and the cdylib twin at the rev the root pins the plane, in this workspace and so
-against the host's busbar-contract: `cargo build --locked -p busbar-plane-streaming-plugin`); `VOICE_CONFORM_BIN` names a prebuilt harness (checked for staleness
+`testing/conformance/voice.sh` first writes a temporary workspace with `voice-overlay.sh`. The
+harness is not a member of this repository's root workspace and reads private or test-only plane
+modules, so building it directly against the product tree is unsupported. The overlay copies the
+plane and exposes those modules in the copy; it does not change product behavior or source files.
+`lib/conform-bin.sh` builds the harness and cdylib twin inside that workspace against the same
+busbar-contract. `VOICE_CONFORM_BIN` names a prebuilt harness (checked for staleness
 against the plane, loader, contract and harness sources), `VOICE_CONFORM_DOOR` a dropped door that
 is not in the profile directory beside it.
 
@@ -101,13 +104,37 @@ watches the check bite, then accounts the shipped legs (which runs them: it buil
 
 ## Usage
 
+Run the supported entry point from this repository, with `BUSBAR_CHECKOUT` naming the core source
+checkout at the revision this plugin pins. It prepares the overlay and runs the normal and RED
+batteries before writing the selected dialect's verdict:
+
 ```bash
-bash testing/voice-conformance/voice-conformance.sh --selftest
-bash testing/voice-conformance/voice-conformance.sh --verdict          # the default
-bash testing/voice-conformance/voice-conformance.sh --leg spec-per-dialect --slice openai
-VOICE_CONFORM_RED=1 bash testing/voice-conformance/voice-conformance.sh --verdict   # must be RED
-bash testing/voice-conformance/voice-conformance.sh --list
+export BUSBAR_CHECKOUT=/path/to/pinned/busbar
+export CARGO_TARGET_DIR=/path/to/voice-target
+output=$(mktemp -d)
+mkdir -p "$output/openai"
+CONFORMANCE_SUITE=voice-openai-realtime CONFORMANCE_OUT="$output/openai" \
+  bash testing/conformance/voice.sh openai
 ```
+
+Use `gemini` / `voice-gemini-live` or `twilio` / `voice-twilio` for the other dialects, with their
+own output directory. These commands build and execute the harness and dropped plugin.
+
+For a focused low-level leg, first prepare the same overlay explicitly and name its manifest:
+
+```bash
+workspace=$(mktemp -d)
+bash testing/conformance/voice-overlay.sh "$PWD" "$workspace"
+export VC_WORKSPACE_MANIFEST="$workspace/Cargo.toml"
+bash testing/voice-conformance/voice-conformance.sh --leg spec-per-dialect --slice openai
+VOICE_CONFORM_RED=1 bash testing/voice-conformance/voice-conformance.sh --verdict  # must exit 1
+```
+
+`--list` needs no overlay or build. The harness ends every completed invocation with
+`VOICE_COMPLETE 0` or `VOICE_COMPLETE 1`; assertion failures retain status 1, while a panic, signal,
+or missing completion makes the runner exit 2. The dialect judge requires both batteries' actual
+exit status and existing terminal summary before it grades their rows. A completed RED assertion
+failure remains the expected negative control; partial output is never a conformance pass.
 
 ## Layout
 

@@ -31,7 +31,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # judge <dialect> <run dir> <verdict file> <suite id>: the suite's verdict from the battery's rows.
 judge() {
 python3 -I - "$@" <<'PY'
-import json, os, sys
+import json, os, re, sys
 dialect, run, out, suite = sys.argv[1:5]
 standard = {"openai": "OpenAI Realtime API", "gemini": "Google Gemini Live API",
             "twilio": "Twilio Media Streams"}[dialect]
@@ -77,6 +77,27 @@ def who(leg, slice_, detail):
 
 if os.path.exists(os.path.join(run, "subject-failed")):
     verdict("fail", "the subject could not be built: " + open(os.path.join(run, "subject-failed")).read().strip())
+
+def completed(name):
+    """Use the runner's existing terminal summary and actual exit status, before grading rows."""
+    try:
+        with open(os.path.join(run, name + ".rc"), encoding="utf-8") as f:
+            code = f.read().strip()
+        with open(os.path.join(run, name + ".log"), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        verdict("fail", f"{name} has no execution status or complete log")
+    terminal = lines[-1] if lines else ""
+    if code == "0" and terminal.startswith("VOICE verdict: "):
+        return
+    if code == "1" and re.fullmatch(
+        r"FAIL: [1-9][0-9]* conformance leg\(s\) failed\. This IS a finding about busbar\.", terminal
+    ):
+        return
+    verdict("fail", f"{name} did not complete (exit {code}); see {name}.log")
+
+completed("battery")
+completed("red")
 normal, red = rows("results.tsv"), rows("red.tsv")
 if not normal:
     verdict("fail", "the battery wrote no results (see battery.log)")
@@ -158,6 +179,10 @@ PY
       printf 'twilio-media\t1\tPASS\tx\ntwilio-media\t2\tPASS\tx\ntwilio-metering\t1\tPASS\tx\n'
     } >"$1/results.tsv"
     sed 's/\tPASS\t/\tFAIL\t/' "$1/results.tsv" >"$1/red.tsv"
+    printf '0\n' >"$1/battery.rc"
+    printf '1\n' >"$1/red.rc"
+    printf 'VOICE verdict: completed fixture\n' >"$1/battery.log"
+    printf 'FAIL: 1 conformance leg(s) failed. This IS a finding about busbar.\n' >"$1/red.log"
   }
   expect() { # expect <want rc> <name> <dialect> <dir>
     local got=0
