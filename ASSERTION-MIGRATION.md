@@ -201,3 +201,9 @@ capacity tests do not repeatedly scan whole allocated buffers. Their loops,
 limits, thresholds, assertions, and product behavior are unchanged. The prior
 22f7294 native receipt remains evidence for that immutable source only; this
 normal successor requires its own qualification.
+
+
+The final independent review restored the absolute RELEASE-none predicate as
+well as parity: lease must be zero; READY error must be absent/empty; REFUSED
+must carry exactly `release: no such lease`. These are the two exact original
+`release_none_contract` alternatives, not a linked/dropped agreement substitute.

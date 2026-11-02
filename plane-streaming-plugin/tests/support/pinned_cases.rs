@@ -646,8 +646,9 @@ fn cases(p: &Plugin<Plane>, d: &Dispatcher) -> Vec<String> {
         if let Some(error) = &c.error {
             assert_credential_absent(error);
         }
+        assert_eq!(c.lease, 0, "release none publishes no lease");
         assert!(
-            c.outcome == Outcome::Ready
+            (c.outcome == Outcome::Ready && c.error.as_deref().unwrap_or_default().is_empty())
                 || (c.outcome == Outcome::Refused
                     && c.error.as_deref() == Some(b"release: no such lease".as_slice()))
         );
