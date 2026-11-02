@@ -661,6 +661,14 @@ const fn push(unit: u64, claim: u32, from: u32, flags: u32, bytes: &[u8]) -> Pus
     }
 }
 
+/// A session crossing keeps the stream identity on every caller and collection piece.
+const fn live_push(unit: u64, claim: u32, from: u32, flags: u32, bytes: &[u8]) -> Push<'_> {
+    Push {
+        stream: unit,
+        ..push(unit, claim, from, flags, bytes)
+    }
+}
+
 /// The ATTEMPT that opens `unit`'s first attempt.
 const fn attempt(unit: u64, claim: u32) -> Push<'static> {
     Push {
@@ -1957,6 +1965,13 @@ fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
             Outcome::Ready,
             "the plain socket is a published door"
         );
+        let initial = b.call(p, &live_push(50, PLAIN_CLAIM, FROM_CALLER, 0, &[]));
+        assert!(
+            initial.contains("session.update")
+                && initial.contains("far=true")
+                && initial.contains("verb=GET target=/v1/realtime?model=m-cap "),
+            "{initial}"
+        );
         let plain = b.call(
             p,
             &Push {
@@ -2031,7 +2046,7 @@ fn a_plain_session_dials_the_session_models_upstream_name() {
                 p,
                 &Push {
                     stream: 60,
-                    ..push(60, PLAIN_CLAIM, FROM_CALLER, 0, &uplink(100))
+                    ..push(60, PLAIN_CLAIM, FROM_CALLER, 0, &[])
                 },
             );
             assert!(
@@ -2097,6 +2112,8 @@ fn every_upstream_facing_model_field_names_the_upstream_model() {
             arrive_at(p, PLAIN_CLAIM, 71, "/v1/realtime?model=m-cap"),
             Outcome::Ready
         );
+        let initial = b.call(p, &live_push(71, PLAIN_CLAIM, FROM_CALLER, 0, &[]));
+        assert!(initial.contains("session.update"), "{initial}");
         let update = br#"{"type":"session.update","session":{"type":"realtime"}}"#;
         let spliced = b.call(
             p,
@@ -2300,7 +2317,7 @@ fn a_mint_for_a_key_outside_the_session_models_grant_is_refused() {
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(512);
-        let answer = b.call(p, &push(71, 0, FROM_CALLER, PIECE_LAST, &[]));
+        let answer = b.call(p, &live_push(71, 0, FROM_CALLER, PIECE_LAST, &[]));
         assert!(answer.contains("status=403"), "{answer}");
         assert!(answer.contains("not_granted"), "{answer}");
         assert!(answer.contains("m-cap"), "{answer}");
@@ -2840,5 +2857,146 @@ fn a_later_session_rewrite_keeps_prior_patches_through_short_recall_and_refusal(
             "invalid later rewrite keeps prior patches"
         );
         assert_eq!(view["instructions"], "from-second-hook");
+    }
+}
+
+/// A native client can wait for session.created. The host's initial empty crossing must dial
+/// and install governance before any audio; a short buffer replays that control exactly once.
+#[test]
+fn native_initialization_survives_short_buffers_before_any_provider_work() {
+    const LOCK: &[u8] = br#"{"session":{"model":"m-cap","instructions":"operator lock","input_audio_format":"g711_ulaw"},"max_output_tokens":127,"context_window_tokens":2048}"#;
+    let d = Dispatcher::new(DispatchConfig::default());
+    let mut transcripts = Vec::new();
+    for p in [linked(&d), dropped(&d)] {
+        assert_eq!(open(&p, 1, LOCK, Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(
+            arrive_at(&p, PLAIN_CLAIM, 301, "/v1/realtime?model=m-cap"),
+            Outcome::Ready
+        );
+        let mut b = Bufs::with_units(1, 9);
+        let short = b.call(&p, &live_push(301, PLAIN_CLAIM, FROM_CALLER, 0, &[]));
+        assert!(
+            short.starts_with("Ready") && short.contains("more=1"),
+            "{short}"
+        );
+        assert!(
+            b.last_units.is_empty(),
+            "initialization incurs no audio or accepted-session fee"
+        );
+        b.reply.resize(1 << 18, 0);
+        let initial = b.call(&p, &live_push(301, PLAIN_CLAIM, FROM_CALLER, 0, &[]));
+        assert!(
+            initial.contains("session.update")
+                && initial.contains("operator lock")
+                && initial.contains("audio/pcmu")
+                && initial.contains(r#""max_output_tokens":127"#)
+                && initial.contains(r#""post_instructions":1921"#),
+            "{initial}"
+        );
+        assert_eq!(
+            b.last_flags & (EMIT_TO_FAR_END | PIECE_OUT_TEXT),
+            EMIT_TO_FAR_END | PIECE_OUT_TEXT
+        );
+        let quiet = b.call(&p, &live_push(301, PLAIN_CLAIM, FROM_KERNEL, 0, &[]));
+        assert!(quiet.contains("emitted= more=0 far=false"), "{quiet}");
+        let sample = br#"{"type":"input_audio_buffer.append","audio":"AA=="}"#;
+        let audio = b.call(&p, &live_push(301, PLAIN_CLAIM, FROM_CALLER, 0, sample));
+        assert!(
+            audio.contains(std::str::from_utf8(sample).unwrap()),
+            "{audio}"
+        );
+        assert_eq!(
+            b.last_units, "4:1=1",
+            "fractional millisecond uses the installed mu-law format"
+        );
+        let end = b.call(
+            &p,
+            &live_push(301, PLAIN_CLAIM, FROM_CALLER, PIECE_LAST, &[]),
+        );
+        assert!(end.contains("done=true"), "{end}");
+        assert_eq!(
+            b.last_units, "4:1=1",
+            "settlement does not add a second rounded turn"
+        );
+        transcripts.push([short, initial, quiet, audio, end]);
+    }
+    assert_eq!(transcripts[0], transcripts[1]);
+}
+
+#[test]
+fn gemini_original_proto_audio_names_relay_exact_bytes_and_bill_fractional_samples() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    let mut transcripts = Vec::new();
+    for p in [linked(&d), dropped(&d)] {
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(
+            arrive_at(&p, 3, 302, "/v1/realtime/gemini/aliases"),
+            Outcome::Ready
+        );
+        let mut b = Bufs::with_units(1 << 18, 9);
+        let setup = b.call(&p, &live_push(302, 3, FROM_CALLER, 0, br#"{"setup":{}}"#));
+        assert!(setup.starts_with("Ready"), "{setup}");
+        let frame = br#"{ "realtime_input" : {"media_chunks":[{"mime_type":"audio/pcm;rate=16000","data":"AAA="}]}, "opaque-key" : "untouched" }"#;
+        let audio = b.call(&p, &live_push(302, 3, FROM_CALLER, 0, frame));
+        assert!(
+            audio.contains(std::str::from_utf8(frame).unwrap()),
+            "{audio}"
+        );
+        assert_eq!(b.last_units, "4:1=1");
+        let end = b.call(&p, &live_push(302, 3, FROM_CALLER, PIECE_LAST, &[]));
+        assert!(end.contains("done=true"), "{end}");
+        assert_eq!(b.last_units, "4:1=1");
+        transcripts.push([setup, audio, end]);
+    }
+    assert_eq!(transcripts[0], transcripts[1]);
+}
+
+#[test]
+fn cancelling_a_short_initial_lock_retires_the_unaccepted_session() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    for p in [linked(&d), dropped(&d)] {
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(
+            arrive_at(&p, PLAIN_CLAIM, 303, "/v1/realtime?model=m-cap"),
+            Outcome::Ready
+        );
+        let mut b = Bufs::with_units(1, 9);
+        let short = b.call(&p, &live_push(303, PLAIN_CLAIM, FROM_CALLER, 0, &[]));
+        assert!(short.contains("more=1"), "{short}");
+        assert!(b.last_units.is_empty());
+        assert_eq!(cancel_disposition(&p, 303), CANCEL_ABORTED);
+        b.reply.resize(1 << 18, 0);
+        let collect = b.call(&p, &live_push(303, PLAIN_CLAIM, FROM_KERNEL, 0, &[]));
+        assert!(
+            collect.starts_with("Refused") && !collect.contains("session.update"),
+            "{collect}"
+        );
+    }
+}
+
+#[test]
+fn native_initialization_uses_the_completed_session_open_hook_rewrite() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    for p in [linked(&d), dropped(&d)] {
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(
+            arrive_at(&p, PLAIN_CLAIM, 304, "/v1/realtime?model=m-cap"),
+            Outcome::Ready
+        );
+        let (outcome, _, rewritten) = project_at(
+            &p,
+            PLAIN_CLAIM,
+            304,
+            br#"{"instructions":"hook instruction","voice":"marin"}"#,
+            4096,
+        );
+        assert_eq!(outcome, Outcome::Ready);
+        assert!(rewritten);
+        let mut b = Bufs::with_units(1 << 18, 9);
+        let initial = b.call(&p, &live_push(304, PLAIN_CLAIM, FROM_CALLER, 0, &[]));
+        assert!(
+            initial.contains("hook instruction") && initial.contains(r#""voice":"marin""#),
+            "{initial}"
+        );
     }
 }

@@ -150,7 +150,6 @@ fn an_undecodable_or_misplaced_gemini_audio_payload_counts_nothing() {
     let blob = json!({ "mimeType": "audio/pcm;rate=16000", "data": b64(b"x") });
     assert!(up(&json!({ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": "!!!!" } } })).is_empty());
     assert!(up(&json!({ "realtimeInput": { "audio": blob }, "setup": {} })).is_empty());
-    assert!(up(&json!({ "realtimeInput": { "audio": blob }, "clientContent": {} })).is_empty());
     assert!(up(&json!({ "realtimeInput": { "audioStreamEnd": true } })).is_empty());
 }
 
@@ -178,10 +177,6 @@ fn transcription_audio_and_unknown_frames_meter_nothing() {
         json!({ "setupComplete": {} }),
         json!({ "setupComplete": {}, "usageMetadata": { "promptTokenCount": 5 } }),
         json!({ "toolCallCancellation": { "ids": ["fc_1"] } }),
-        json!({
-            "serverContent": { "turnComplete": true },
-            "toolCall": { "functionCalls": [ { "id": "fc_1", "name": "f", "args": {} } ] }
-        }),
         json!({ "goAway": { "timeLeft": "10s" } }),
     ] {
         assert!(down(&src).is_empty(), "{src}");
@@ -525,4 +520,171 @@ fn a_lock_that_turns_barge_in_off_is_told_to_gemini() {
             .is_none(),
         "{on}"
     );
+}
+
+#[test]
+fn proto_audio_names_are_accepted_at_every_consumed_level() {
+    for ri in ["realtimeInput", "realtime_input"] {
+        for chunks in ["mediaChunks", "media_chunks"] {
+            for mime in ["mimeType", "mime_type"] {
+                let mut blob = serde_json::Map::new();
+                blob.insert(mime.into(), json!("audio/pcm;rate=16000"));
+                blob.insert("data".into(), json!(b64(&[0; 32_000])));
+                let mut input = serde_json::Map::new();
+                input.insert(chunks.into(), json!([blob]));
+                let mut top = serde_json::Map::new();
+                top.insert(ri.into(), Value::Object(input));
+                assert_eq!(
+                    up(&Value::Object(top)),
+                    vec![(Some(AudioFormat::Pcm16At16k), 32_000)]
+                );
+            }
+        }
+    }
+    assert!(refused(&json!({"realtime_input": {
+        "audio": {"mime_type":"audio/pcm", "data":b64(b"ga")},
+        "media_chunks":[{"mime_type":"audio/pcm", "data":b64(b"legacy")}]
+    }})));
+}
+
+#[test]
+fn proto_audio_duplicates_follow_wire_order_and_malformed_values_refuse() {
+    for (frame, expected) in [
+        (
+            r#"{"realtimeInput":{"audio":{"mimeType":"audio/pcm;rate=24000","mime_type":"audio/pcm;rate=16000","data":"AAAA"}}}"#,
+            Some(AudioFormat::Pcm16At16k),
+        ),
+        (
+            r#"{"realtime_input":{"audio":{"mime_type":"audio/pcm;rate=16000","mimeType":"audio/pcm;rate=24000","data":"AAAA"}}}"#,
+            Some(AudioFormat::Pcm16),
+        ),
+        (
+            r#"{"client_content":{},"realtime_input":{"audio":{"mime_type":"audio/pcm","data":"AAAA"}}}"#,
+            Some(AudioFormat::Pcm16At16k),
+        ),
+        (
+            r#"{"realtime_input":{"audio":{"mime_type":"audio/pcm","data":"AAAA"}},"client_content":{}}"#,
+            None,
+        ),
+    ] {
+        let top = Lite::read(frame.as_bytes()).unwrap();
+        let mut got = Vec::new();
+        assert!(GeminiLiveCodec
+            .uplink_audio(&top, &mut |f, n| got.push((f, n)))
+            .is_ok());
+        assert_eq!(
+            got,
+            expected.map(|f| vec![(Some(f), 3)]).unwrap_or_default(),
+            "{frame}"
+        );
+    }
+    for frame in [
+        r#"{"realtime_input":"bad"}"#,
+        r#"{"realtime_input":{"media_chunks":{}}}"#,
+        r#"{"realtime_input":{"audio":{"mime_type":false,"data":"AAAA"}}}"#,
+        r#"{"realtime_input":{"audio":{"mime_type":false,"data":"AAAA"},"audio":{"mimeType":"audio/pcm","data":"AAAA"}}}"#,
+        r#"{"realtime_input":{"media_chunks":false,"mediaChunks":[]}}"#,
+        r#"{"realtime_input":{"audio":{"mimeType":"audio/pcm","data":"!!!!","data":"AAAA"}}}"#,
+        r#"{"realtime_input":{"audio":{"mime_type":false,"mimeType":"audio/pcm","data":"AAAA"}}}"#,
+        r#"{"realtime_input":"bad","realtimeInput":{"audio":{"mimeType":"audio/pcm","data":"AAAA"}}}"#,
+        r#"{"realtime_input":{"audio":{"mimeType":"audio/pcm","mime_type":null,"data":"AAAA"}}}"#,
+        r#"{"realtime_input":null,"realtimeInput":{"audio":{"mimeType":"audio/pcm","data":"AAAA"}}}"#,
+    ] {
+        let top = Lite::read(frame.as_bytes()).unwrap();
+        assert!(
+            GeminiLiveCodec.uplink_audio(&top, &mut |_, _| {}).is_err(),
+            "{frame}"
+        );
+    }
+}
+
+#[test]
+fn proto_usage_and_tool_aliases_keep_all_billable_classes() {
+    let src = json!({"tool_call":{"function_calls":[{"id":"one"},{"id":"two"}]},
+    "usage_metadata":{
+        "prompt_token_count":10, "response_token_count":7,
+        "tool_use_prompt_token_count":3, "thoughts_token_count":2,
+        "cached_content_token_count":4, "total_token_count":23,
+        "prompt_tokens_details":[{"modality":"AUDIO","token_count":5},{"modality":"IMAGE","token_count":2},{"modality":"VIDEO","token_count":1}],
+        "tool_use_prompt_tokens_details":[{"modality":"TEXT","token_count":3}],
+        "response_tokens_details":[{"modality":"AUDIO","token_count":6}]
+    }});
+    let got = down(&src);
+    assert_eq!(got.len(), 3);
+    assert!(matches!(got[0], Metered::ToolOpen));
+    assert!(matches!(got[1], Metered::ToolOpen));
+    let Metered::Usage(u) = got[2] else {
+        panic!("usage: {got:?}");
+    };
+    assert_eq!(
+        (
+            u.audio_in,
+            u.text_in,
+            u.image_in,
+            u.video_in,
+            u.audio_out,
+            u.text_out,
+            u.cached
+        ),
+        (5, 6, 2, 1, 6, 3, 4)
+    );
+}
+
+#[test]
+fn proto_usage_duplicate_aliases_are_ordered_and_invalid_selected_counts_floor() {
+    for (frame, want) in [
+        (
+            r#"{"usageMetadata":{"promptTokenCount":2,"prompt_token_count":5}}"#,
+            5,
+        ),
+        (
+            r#"{"usage_metadata":{"prompt_token_count":5,"promptTokenCount":2}}"#,
+            2,
+        ),
+        (
+            r#"{"usageMetadata":{"promptTokenCount":2},"usage_metadata":{"prompt_token_count":7}}"#,
+            7,
+        ),
+    ] {
+        let got = GeminiLiveCodec.meter_down(frame.as_bytes());
+        assert!(
+            matches!(got.as_slice(), [Metered::Usage(u)] if u.text_in == want && !u.floor),
+            "{got:?}"
+        );
+    }
+    for frame in [
+        r#"{"usage_metadata":{"prompt_token_count":false}}"#,
+        r#"{"usage_metadata":{"prompt_tokens_details":{}}}"#,
+        r#"{"usage_metadata":{"prompt_tokens_details":[{"token_count":false}]}}"#,
+        r#"{"usageMetadata":null,"usage_metadata":{"prompt_token_count":2}}"#,
+    ] {
+        let got = GeminiLiveCodec.meter_down(frame.as_bytes());
+        assert!(
+            matches!(got.as_slice(), [Metered::Usage(u)] if u.floor),
+            "{got:?}"
+        );
+    }
+}
+
+#[test]
+fn downlink_oneof_aliases_select_the_final_message() {
+    for (frame, opened) in [
+        (
+            r#"{"server_content":{},"tool_call":{"function_calls":[{}]}}"#,
+            1,
+        ),
+        (
+            r#"{"toolCall":{"functionCalls":[{}]},"server_content":{}}"#,
+            0,
+        ),
+        (
+            r#"{"tool_call":{"function_calls":[{},{}]},"toolCall":{"functionCalls":[{}]}}"#,
+            1,
+        ),
+    ] {
+        assert_eq!(
+            GeminiLiveCodec.meter_down(frame.as_bytes()),
+            vec![Metered::ToolOpen; opened]
+        );
+    }
 }

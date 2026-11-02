@@ -116,6 +116,18 @@
             }
           },
           {
+            "label": "initial provider lock before caller input",
+            "piece": {
+              "from": "caller"
+            },
+            "want": {
+              "outcome": "Ready",
+              "to_far_end": true,
+              "verb": "GET",
+              "target": "/v1/realtime?model=m-cap"
+            }
+          },
+          {
             "label": "caller audio",
             "piece": {
               "from": "caller",

@@ -790,7 +790,9 @@ pub struct Emission {
 pub struct Log {
     /// `what Outcome` per answer that was not a plain READY.
     pub anomalies: Vec<String>,
-    /// Every frame, in emission order.
+    /// The provider control frame emitted before a plain session's first caller message.
+    pub initialization: Option<Emission>,
+    /// Every subsequent frame, in emission order.
     pub emissions: Vec<Emission>,
     /// The last READY answer's cumulative units.
     pub units: Vec<(u32, u32, u64)>,
@@ -826,6 +828,26 @@ impl<'p> Session<'p> {
         };
         let a = piece(p, &session(stream, claim, FROM_CALLER, 0, &[]));
         s.note("open", &a);
+        if claim == 5 {
+            let initial = s.log.emissions.pop();
+            let valid = initial.as_ref().is_some_and(|e| {
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&e.frame) else {
+                    return false;
+                };
+                e.to_far
+                    && e.verb == "GET"
+                    && e.target == "/v1/realtime?model=m-cap"
+                    && v["type"] == "session.update"
+                    && v["session"]["type"] == "realtime"
+                    && v["session"]["max_output_tokens"] == 4096
+                    && v["session"]["truncation"]["token_limits"]["post_instructions"] == 28672
+            });
+            if !valid {
+                s.log.anomalies
+                    .push("missing or invalid initial plain session lock".into());
+            }
+            s.log.initialization = initial;
+        }
         s
     }
 

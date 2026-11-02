@@ -734,3 +734,44 @@ fn the_kept_session_params_refuse_at_the_bound_and_never_evict() {
     assert!(all.rewritten(0).is_some(), "and still nothing was evicted");
     assert!(all.rewritten(MAX_SESSIONS as u64).is_none());
 }
+
+#[test]
+fn plain_realtime_owes_its_lock_before_any_caller_or_provider_frame() {
+    let mut s = Live::open(Door::Realtime, &StreamsCfg::default()).unwrap();
+    assert!(
+        s.ready(),
+        "the native provider dial must not wait for caller audio"
+    );
+    let Some((Side::FarEnd, initial)) = s.next(true).frame else {
+        panic!("initial control");
+    };
+    let initial: serde_json::Value = serde_json::from_slice(&initial).unwrap();
+    assert_eq!(initial["type"], "session.update");
+    assert_eq!(initial["session"]["type"], "realtime");
+    assert!(
+        initial["session"].get("model").is_none(),
+        "the model is already in the dial query"
+    );
+    assert!(initial["session"]["max_output_tokens"].is_number());
+    assert_eq!(s.next(true), Emit::default(), "initialization is owed once");
+    s.from_caller(&[], false);
+    assert_eq!(s.next(true), Emit::default());
+    let audio = uplink(1000);
+    s.from_caller(&audio, false);
+    assert_eq!(s.next(true).frame, Some((Side::FarEnd, audio)));
+    assert_eq!(s.units(), vec![(seconds(), 1)]);
+}
+
+#[test]
+fn sideband_initial_crossing_opens_a_payload_free_socket_once() {
+    let mut s = sideband();
+    s.from_caller(&[], false);
+    assert!(s.take_opening());
+    assert_eq!(s.next(true).frame, Some((Side::FarEnd, Vec::new())));
+    s.from_caller(&[], false);
+    assert!(!s.take_opening());
+    assert_eq!(s.next(true), Emit::default());
+    let greeting = br#"{"type":"session.created","session":{}}"#;
+    s.from_far_end(greeting);
+    assert_eq!(s.next(false).frame, Some((Side::Caller, greeting.to_vec())));
+}

@@ -133,6 +133,15 @@ where
         units
     }
 
+    /// The locked session, once, for a native socket's initial upstream request. A carrier that
+    /// supplies its own setup (Gemini) or start (Twilio) does not ask for this initialization.
+    pub fn initial_lock(&mut self) -> Option<Vec<u8>> {
+        if std::mem::replace(&mut self.locked_told, true) {
+            return None;
+        }
+        self.pump.locked_update().map(|w| w.0.to_vec())
+    }
+
     /// `true` once the session has ended.
     #[cfg(test)]
     #[must_use]

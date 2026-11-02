@@ -29,7 +29,9 @@ pub enum Lite<'a> {
     Obj(Vec<(Cow<'a, str>, Lite<'a>)>),
     /// An array.
     Arr(Vec<Lite<'a>>),
-    /// A number, a boolean or `null`.
+    /// JSON `null` (ProtoJSON reads a null field as unset).
+    Null,
+    /// A number or a boolean.
     Other,
 }
 
@@ -112,7 +114,7 @@ impl<'de> Visitor<'de> for LiteVisitor {
     }
 
     fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(Lite::Other)
+        Ok(Lite::Null)
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {

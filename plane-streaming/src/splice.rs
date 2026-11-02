@@ -185,9 +185,12 @@ impl LockedKeys for OpenAiRealtimeCodec {
 
     /// A GA `session.update` carrying the locked session ([`SessionConfig::ga_session`]).
     fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>> {
+        // The model is selected by the socket query; session.update cannot change it.
+        let mut session = locked.ga_session();
+        session.remove("model");
         serde_json::to_vec(&serde_json::json!({
             "type": "session.update",
-            "session": Value::Object(locked.ga_session()),
+            "session": Value::Object(session),
         }))
         .ok()
     }

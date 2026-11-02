@@ -18,14 +18,9 @@ use crate::codec::ir::media::AudioFormat;
 use crate::codec::ir::usage::IrDuplexUsage;
 use serde_json::{json, Value};
 
-/// The Gemini Live top-level message keys the meter and the locked `setup` name.
+/// The canonical message keys the setup and usage conversion write.
 mod wire {
     pub const SETUP: &str = "setup";
-    pub const CLIENT_CONTENT: &str = "clientContent";
-    pub const REALTIME_INPUT: &str = "realtimeInput";
-    pub const SETUP_COMPLETE: &str = "setupComplete";
-    pub const SERVER_CONTENT: &str = "serverContent";
-    pub const TOOL_CALL: &str = "toolCall";
     pub const USAGE_METADATA: &str = "usageMetadata";
 }
 
@@ -269,36 +264,60 @@ impl DuplexReader for GeminiLiveCodec {
     /// none), then the `usageMetadata` any frame but a `setupComplete` carries.
     fn meter_down(&self, frame: &[u8]) -> Vec<Metered> {
         let metered = Head::read(frame).is_none_or(|h| {
-            h.keys
-                .iter()
-                .any(|k| k == wire::USAGE_METADATA || k == wire::TOOL_CALL)
+            h.keys.iter().any(|k| {
+                matches!(
+                    k.as_ref(),
+                    "usageMetadata" | "usage_metadata" | "toolCall" | "tool_call"
+                )
+            })
         });
         if !metered {
             return Vec::new();
         }
-        let Ok(v) = serde_json::from_slice::<Value>(frame) else {
+        let (Some(top), Ok(v)) = (Lite::read(frame), serde_json::from_slice::<Value>(frame)) else {
             return Vec::new();
         };
-        if v.get(wire::SETUP_COMPLETE).is_some() {
-            return Vec::new();
-        }
-        let opened = match (v.get(wire::SERVER_CONTENT), v.get(wire::TOOL_CALL)) {
-            (None, Some(tc)) => tc
-                .get("functionCalls")
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len),
-            _ => 0,
+        let read = || -> Result<Vec<Metered>, String> {
+            let kind = proto_member(
+                &top,
+                &[
+                    "setupComplete",
+                    "setup_complete",
+                    "serverContent",
+                    "server_content",
+                    "toolCall",
+                    "tool_call",
+                    "toolCallCancellation",
+                    "tool_call_cancellation",
+                    "goAway",
+                    "go_away",
+                    "sessionResumptionUpdate",
+                    "session_resumption_update",
+                ],
+            )
+            .map_err(|_| "ambiguous Gemini message".to_owned())?;
+            if kind.is_some_and(|(k, _)| matches!(k, "setupComplete" | "setup_complete")) {
+                return Ok(Vec::new());
+            }
+            let mut out = Vec::new();
+            if let Some((key, tc)) = kind.filter(|(k, _)| matches!(*k, "toolCall" | "tool_call")) {
+                let calls = proto_value(tc, &v[key], &["functionCalls", "function_calls"])?;
+                if let Some((_, calls)) = calls {
+                    let calls = calls
+                        .as_array()
+                        .ok_or("Gemini functionCalls is not an array")?;
+                    out.resize(calls.len(), Metered::ToolOpen);
+                }
+            }
+            if let Some((um_lite, um)) =
+                proto_value(&top, &v, &["usageMetadata", "usage_metadata"])?
+            {
+                let um = canonical_usage(um_lite, um)?;
+                out.push(Metered::Usage(usage_from_metadata(&um)?));
+            }
+            Ok(out)
         };
-        let mut out = vec![Metered::ToolOpen; opened];
-        if let Some(um) = v.get(wire::USAGE_METADATA).filter(|um| !um.is_null()) {
-            // A `usageMetadata` that is not an object, or a present-but-unreadable billed count,
-            // bills the plane's floor and says so, never meters it at zero; a `null` one is none.
-            out.push(Metered::Usage(
-                usage_from_metadata(um)
-                    .unwrap_or_else(|message| usage_floor(frame.len(), &message)),
-            ));
-        }
-        out
+        read().unwrap_or_else(|message| vec![Metered::Usage(usage_floor(frame.len(), &message))])
     }
 
     /// `realtimeInput`'s GA `audio` blob, else each legacy `mediaChunks[]` blob, at the format its
@@ -314,36 +333,230 @@ impl DuplexReader for GeminiLiveCodec {
         admit: &mut dyn FnMut(Option<AudioFormat>, usize),
     ) -> Result<(), crate::splice::Unmeterable> {
         use crate::splice::Unmeterable;
-        if top.get(wire::SETUP).is_some() || top.get(wire::CLIENT_CONTENT).is_some() {
+        // ProtoJSON accepts original proto names as well as lowerCamelCase. Its ordered
+        // duplicate/oneof rule is last-wins (or a parse refusal), never an arbitrary spelling:
+        // https://protobuf.dev/programming-guides/json/#duplicate-keys . Read the same final
+        // message the far end reads, without changing one byte of the relayed frame.
+        let Some((kind, ri)) = proto_member(
+            top,
+            &[
+                "setup",
+                "clientContent",
+                "client_content",
+                "realtimeInput",
+                "realtime_input",
+                "toolResponse",
+                "tool_response",
+            ],
+        )?
+        else {
+            return Ok(());
+        };
+        if !matches!(kind, "realtimeInput" | "realtime_input") {
             return Ok(());
         }
-        let Some(ri) = top.get(wire::REALTIME_INPUT) else {
-            return Ok(());
-        };
-        let is_audio = |b: &Lite<'_>| {
-            b.str_at("mimeType")
-                .get(..AUDIO_MIME_PREFIX.len())
-                .is_some_and(|p| p.eq_ignore_ascii_case(AUDIO_MIME_PREFIX))
-        };
-        let mut blob = |b: &Lite<'_>| match (
-            audio_format_from_mime(b.str_at("mimeType")),
-            base64_len_any_alphabet(b.str_at("data")),
-        ) {
-            (Some(format), Some(len)) => {
-                admit(Some(format), len);
-                Ok(())
+        // Validate overwritten realtime payloads too. ProtoJSON's duplicate rule chooses the
+        // final well-typed value; an earlier malformed value is not a second valid spelling.
+        if let Lite::Obj(members) = top {
+            for (key, value) in members {
+                if matches!(key.as_ref(), "realtimeInput" | "realtime_input")
+                    && !matches!(value, Lite::Null)
+                    && !std::ptr::eq(value, ri)
+                {
+                    realtime_audio(value, &mut |_, _| {})?;
+                }
             }
-            _ => Err(Unmeterable),
-        };
-        let chunks = match ri.get("mediaChunks") {
-            Some(Lite::Arr(chunks)) => chunks.as_slice(),
-            _ => &[],
-        };
-        match ri.get("audio") {
-            Some(_) if chunks.iter().any(is_audio) => Err(Unmeterable),
-            Some(audio) => blob(audio),
-            None => chunks.iter().filter(|c| is_audio(c)).try_for_each(blob),
         }
+        realtime_audio(ri, admit)
+    }
+}
+
+fn realtime_audio(
+    ri: &Lite<'_>,
+    admit: &mut dyn FnMut(Option<AudioFormat>, usize),
+) -> Result<(), crate::splice::Unmeterable> {
+    use crate::splice::Unmeterable;
+    let Lite::Obj(members) = ri else {
+        return Err(Unmeterable);
+    };
+    // Validate every spelling before applying last-wins, including an overwritten object.
+    for (key, value) in members {
+        match (key.as_ref(), value) {
+            ("audio", Lite::Null) | ("mediaChunks" | "media_chunks", Lite::Null) => {}
+            ("audio", value) => validate_blob(value)?,
+            ("mediaChunks" | "media_chunks", Lite::Arr(chunks)) => {
+                for chunk in chunks {
+                    validate_blob(chunk)?;
+                }
+            }
+            ("mediaChunks" | "media_chunks", _) => return Err(Unmeterable),
+            _ => {}
+        }
+    }
+    let is_audio = |b: &Lite<'_>| -> Result<bool, Unmeterable> {
+        Ok(proto_text(b, &["mimeType", "mime_type"])?
+            .get(..AUDIO_MIME_PREFIX.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(AUDIO_MIME_PREFIX)))
+    };
+    let mut blob = |b: &Lite<'_>| match (
+        audio_format_from_mime(proto_text(b, &["mimeType", "mime_type"])?),
+        base64_len_any_alphabet(proto_text(b, &["data"])?),
+    ) {
+        (Some(format), Some(len)) => {
+            admit(Some(format), len);
+            Ok(())
+        }
+        _ => Err(Unmeterable),
+    };
+    let chunks = match proto_member(ri, &["mediaChunks", "media_chunks"])? {
+        Some((_, Lite::Arr(chunks))) => chunks.as_slice(),
+        Some(_) => return Err(Unmeterable),
+        None => &[],
+    };
+    let audio = proto_member(ri, &["audio"])?;
+    for chunk in chunks {
+        if is_audio(chunk)? {
+            if audio.is_some() {
+                return Err(Unmeterable);
+            }
+            blob(chunk)?;
+        }
+    }
+    if let Some((_, audio)) = audio {
+        blob(audio)?;
+    }
+    Ok(())
+}
+
+/// A Blob's known scalar fields must be well-typed even when a later alias replaces them.
+/// Bytes use ProtoJSON's accepted standard/URL-safe and padded/unpadded base64 forms.
+fn validate_blob(blob: &Lite<'_>) -> Result<(), crate::splice::Unmeterable> {
+    use crate::splice::Unmeterable;
+    proto_text(blob, &["mimeType", "mime_type"])?;
+    proto_text(blob, &["data"])?;
+    let Lite::Obj(members) = blob else {
+        return Err(Unmeterable);
+    };
+    for (key, value) in members {
+        if key == "data" {
+            if let Lite::Str(data) = value {
+                if base64_len_any_alphabet(data).is_none() {
+                    return Err(Unmeterable);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Select the same ordered field in the borrowed shape and the numeric JSON value. Value keeps
+/// the last exact spelling; Lite also retains the ordering between its two accepted spellings.
+fn proto_value<'a, 'frame>(
+    top: &'a Lite<'frame>,
+    value: &'a Value,
+    names: &[&str],
+) -> Result<Option<(&'a Lite<'frame>, &'a Value)>, String> {
+    proto_member(top, names)
+        .map_err(|_| "ambiguous Gemini field".to_owned())?
+        .map(|(key, lite)| {
+            value
+                .get(key)
+                .map(|value| (lite, value))
+                .ok_or_else(|| "unreadable Gemini field".to_owned())
+        })
+        .transpose()
+}
+
+/// Only schema fields the usage meter consumes are named here. Arbitrary caller/tool payloads
+/// and the relayed frame remain untouched. Resolve aliases before the existing count validation.
+fn canonical_usage(top: &Lite<'_>, value: &Value) -> Result<Value, String> {
+    if !value.is_object() {
+        return Err("Gemini usageMetadata is not an object".into());
+    }
+    let mut out = serde_json::Map::new();
+    for (camel, snake) in [
+        ("promptTokenCount", "prompt_token_count"),
+        ("responseTokenCount", "response_token_count"),
+        ("totalTokenCount", "total_token_count"),
+        ("cachedContentTokenCount", "cached_content_token_count"),
+        ("toolUsePromptTokenCount", "tool_use_prompt_token_count"),
+        ("thoughtsTokenCount", "thoughts_token_count"),
+        ("promptTokensDetails", "prompt_tokens_details"),
+        ("responseTokensDetails", "response_tokens_details"),
+        (
+            "toolUsePromptTokensDetails",
+            "tool_use_prompt_tokens_details",
+        ),
+    ] {
+        if let Some((lite, value)) = proto_value(top, value, &[camel, snake])? {
+            let value = if camel.ends_with("Details") {
+                let (Lite::Arr(items), Some(values)) = (lite, value.as_array()) else {
+                    return Err("Gemini token details is not an array".into());
+                };
+                let mut details = Vec::new();
+                for (item, value) in items.iter().zip(values) {
+                    if !value.is_object() {
+                        return Err("Gemini token detail is not an object".into());
+                    }
+                    let mut detail = serde_json::Map::new();
+                    for (name, alias) in [("modality", "modality"), ("tokenCount", "token_count")] {
+                        if let Some((_, value)) = proto_value(item, value, &[name, alias])? {
+                            detail.insert(name.into(), value.clone());
+                        }
+                    }
+                    details.push(Value::Object(detail));
+                }
+                Value::Array(details)
+            } else {
+                value.clone()
+            };
+            out.insert(camel.into(), value);
+        }
+    }
+    Ok(Value::Object(out))
+}
+
+/// A known ProtoJSON field (or oneof), resolved in original wire order across its known
+/// spellings. Null is unset. A null beside another spelling is refused: peers may clear the
+/// preceding field or ignore the null, so neither interpretation may admit unmetered audio.
+fn proto_member<'a, 'frame>(
+    top: &'a Lite<'frame>,
+    names: &[&str],
+) -> Result<Option<(&'a str, &'a Lite<'frame>)>, crate::splice::Unmeterable> {
+    use crate::splice::Unmeterable;
+    let Lite::Obj(members) = top else {
+        return Err(Unmeterable);
+    };
+    let mut selected = None;
+    let mut saw_null = false;
+    for (key, value) in members.iter().filter(|(k, _)| names.contains(&k.as_ref())) {
+        let null = matches!(value, Lite::Null);
+        if selected.is_some() && (saw_null || null) {
+            return Err(Unmeterable);
+        }
+        saw_null |= null;
+        selected = Some((key.as_ref(), value));
+    }
+    Ok(selected.filter(|(_, value)| !matches!(value, Lite::Null)))
+}
+
+/// A known string field; absent/null is its protobuf default, an empty string. A malformed
+/// selected value is refused rather than silently reinterpreted as that default.
+fn proto_text<'a, 'frame>(
+    top: &'a Lite<'frame>,
+    names: &[&str],
+) -> Result<&'a str, crate::splice::Unmeterable> {
+    if let Lite::Obj(members) = top {
+        for (key, value) in members {
+            if names.contains(&key.as_ref()) && !matches!(value, Lite::Str(_) | Lite::Null) {
+                return Err(crate::splice::Unmeterable);
+            }
+        }
+    }
+    match proto_member(top, names)? {
+        Some((_, Lite::Str(text))) => Ok(text),
+        Some(_) => Err(crate::splice::Unmeterable),
+        None => Ok(""),
     }
 }
 

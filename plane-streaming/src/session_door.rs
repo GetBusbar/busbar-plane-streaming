@@ -131,6 +131,8 @@ pub struct Live {
     /// Busbar's own call an SDP door's session placed (row 132): the call a sideband names, freed
     /// when the session ends.
     placed: Option<String>,
+    /// A sideband's payload-free initial dial is still owed on its empty opening crossing.
+    attach_opening: bool,
     /// What the frame a caller-side answer is writing still owes the reply buffer.
     pub(crate) near: crate::piece::Owed,
     /// What the frame a far-side answer is writing still owes the reply buffer.
@@ -186,7 +188,7 @@ impl Live {
             cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg))),
             cfg,
         );
-        let unit = match door {
+        let mut unit = match door {
             Door::Sideband | Door::Realtime | Door::Sdp => {
                 Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, false))
             }
@@ -194,9 +196,13 @@ impl Live {
             Door::Gemini => Unit::Gemini(SessionUnit::open(GeminiLiveCodec, locked, false)),
             Door::Mint => return None,
         };
+        let mut queued = VecDeque::new();
+        if door == Door::Realtime {
+            queued.extend(each!(&mut unit, |u| u.initial_lock()).map(|f| (Side::FarEnd, f)));
+        }
         Some(Live {
             unit,
-            queued: VecDeque::new(),
+            queued,
             opening: false,
             ending: false,
             ceiling_secs: ceiling,
@@ -212,6 +218,7 @@ impl Live {
                 _ => None,
             },
             placed: None,
+            attach_opening: door == Door::Sideband,
             near: crate::piece::Owed::default(),
             far: crate::piece::Owed::default(),
             short_near: None,
@@ -318,6 +325,12 @@ impl Live {
     /// A caller piece; `last` = the caller's side ended.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8], last: bool) {
+        if std::mem::take(&mut self.attach_opening) && bytes.is_empty() && !last {
+            // The kernel's initial crossing opens the provider socket before the caller sends
+            // JSON. No text bit: this empty body is the dial's head alone, never an empty JSON
+            // message on the socket. An attached call already has its SDP session lock.
+            self.open_far(Vec::new());
+        }
         let plan = each!(&mut self.unit, |u| {
             let mut plan = if bytes.is_empty() {
                 Plan::default()

@@ -36,6 +36,10 @@ pub struct TurnCounters {
     audio_ms_before: u64,
     /// Admitted ingress audio short of a whole millisecond, in [`TICKS_PER_MS`] ticks (carried).
     audio_ticks_rem: u64,
+    /// The carried remainder when this turn opened: it is not new audio by itself.
+    audio_ticks_at_open: u64,
+    /// The rounded cumulative seconds already settled by earlier turns.
+    audio_seconds_before: u64,
 }
 
 /// The ticks a millisecond of audio divides into: the least common multiple of every format's bytes
@@ -66,7 +70,9 @@ impl TurnCounters {
     /// Whether nothing has been counted since the turn opened.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.audio_ms_in == 0 && self.tool_calls == 0
+        self.audio_ms_in == 0
+            && self.audio_ticks_rem == self.audio_ticks_at_open
+            && self.tool_calls == 0
     }
 
     /// Close the turn: answer its counters as they stood, and leave in their place the next turn's,
@@ -77,6 +83,8 @@ impl TurnCounters {
         *self = TurnCounters {
             audio_ms_before: closed.audio_ms_before.saturating_add(closed.audio_ms_in),
             audio_ticks_rem: closed.audio_ticks_rem,
+            audio_ticks_at_open: closed.audio_ticks_rem,
+            audio_seconds_before: closed.cumulative_audio_seconds(),
             ..TurnCounters::default()
         };
         closed
@@ -84,11 +92,20 @@ impl TurnCounters {
 
     /// The `audio_seconds_in` this turn bills: the session's cumulative seconds after it less the
     /// cumulative seconds before it, each converted through [`meta::audio_seconds_in`] — so a
-    /// session's turns sum to its total milliseconds converted once.
+    /// session's turns sum to its exact admitted duration rounded up once, including fractions.
     #[must_use]
     pub fn audio_seconds_in(&self) -> u64 {
-        let after = self.audio_ms_before.saturating_add(self.audio_ms_in);
-        meta::audio_seconds_in(after).saturating_sub(meta::audio_seconds_in(self.audio_ms_before))
+        self.cumulative_audio_seconds()
+            .saturating_sub(self.audio_seconds_before)
+    }
+
+    fn cumulative_audio_seconds(&self) -> u64 {
+        let ms = self.audio_ms_before.saturating_add(self.audio_ms_in);
+        // A fraction of a millisecond after an exact second is a fraction of the NEXT second.
+        // Divide before adding it, so the millisecond counter keeps its saturating range.
+        meta::audio_seconds_in(ms).saturating_add(u64::from(
+            ms.is_multiple_of(1_000) && self.audio_ticks_rem != 0,
+        ))
     }
 }
 
@@ -124,4 +141,56 @@ pub fn class_counts(
     .into_iter()
     .filter(|(_, n)| *n != 0)
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fractional_audio_is_nonempty_and_rounded_once_across_turns() {
+        let mut counters = TurnCounters::default();
+        counters.admit_audio(AudioFormat::Pcm16, 2);
+        assert!(!counters.is_empty());
+        assert_eq!(counters.audio_seconds_in(), 1);
+        assert_eq!(counters.close().audio_seconds_in(), 1);
+        assert!(
+            counters.is_empty(),
+            "a carried remainder is not a second admission"
+        );
+        assert_eq!(counters.audio_seconds_in(), 0);
+        counters.admit_audio(AudioFormat::Pcm16, 47_998);
+        assert_eq!(
+            counters.close().audio_seconds_in(),
+            0,
+            "the first exact second is already settled"
+        );
+        counters.admit_audio(AudioFormat::Pcm16At16k, 2);
+        assert_eq!(
+            counters.close().audio_seconds_in(),
+            1,
+            "a sample after an exact second enters the next one"
+        );
+        assert!(counters.is_empty());
+        assert_eq!(
+            counters.close().audio_seconds_in(),
+            0,
+            "close is idempotent"
+        );
+    }
+
+    #[test]
+    fn fractional_audio_after_one_second_survives_frame_splitting() {
+        for parts in [vec![48_002], vec![48_000, 2], vec![2; 24_001]] {
+            let mut counters = TurnCounters::default();
+            for bytes in parts {
+                counters.admit_audio(AudioFormat::Pcm16, bytes);
+            }
+            assert_eq!(counters.audio_seconds_in(), 2);
+            assert_eq!(
+                class_counts(None, counters),
+                vec![(meta::CLASS_AUDIO_SECONDS_IN, 2)]
+            );
+        }
+    }
 }
