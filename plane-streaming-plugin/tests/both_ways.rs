@@ -3,6 +3,10 @@
 
 //! Streaming plane behavior through both linked and dropped-in plugin doors.
 
+use busbar_contract::services::{
+    Caller, DiskDest, HookAsk, Later, NestAsk, Ran, Reading, RecordsList, Snapshot, Stored,
+    TrustKeyRef,
+};
 use std::mem::zeroed;
 use std::sync::Arc;
 
@@ -775,7 +779,160 @@ struct TicketHost {
 /// The record unit 50's ticket locks: a session config naming its instructions.
 const TICKET_RECORD: &[u8] = br#"{"instructions":"from-ticket"}"#;
 
-impl busbar_test_kit::services_double::ServicesDouble for TicketHost {
+impl busbar_contract::services::HostServices for TicketHost {
+    fn now(&self) -> Reading {
+        Reading {
+            wall_ns: 0,
+            mono_ns: 0,
+        }
+    }
+    fn dest_judge(&self, _dest: &str, _class: u32, _flags: u32, _later: Option<Later>) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn records_get(&self, _caller: &Caller, _kind: &str, _key: &[u8], _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn records_list(&self, _caller: &Caller, _list: RecordsList, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn records_claim(
+        &self,
+        _caller: &Caller,
+        _kind: &str,
+        _key: &[u8],
+        _ttl_ms: u64,
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn sign(&self, _caller: &Caller, _data: &[u8]) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_sight(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _hash: &str,
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn trust_unreached(&self, _caller: &Caller, _counterparty: &str) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_sight_item(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _item: &str,
+        _digest: &str,
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_decide(
+        &self,
+        _caller: &Caller,
+        _key: TrustKeyRef<'_>,
+        _expected: Option<&str>,
+        _approve: bool,
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_state(&self, _caller: &Caller, _counterparty: &str) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_serves(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _item: Option<&str>,
+        _digest: Option<&str>,
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_due(&self, _caller: &Caller) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_verify(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _payload: &[u8],
+        _signatures: &[u8],
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn session_emit(&self, _caller: &Caller, _session: u64, _bytes: &[u8]) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn records_secret(&self, _kind: &str, _id: &str, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn unit_nest(&self, _caller: &Caller, _unit: Option<u64>, _ask: NestAsk, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_open(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _kind: &str,
+        _record: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_find(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _reference: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_settle(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _handle: u64,
+        _record: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_resume(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _handle: u64,
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn disk_append(&self, _dest: &DiskDest, _bytes: Vec<u8>, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn verify_lookup(&self, _caller: &Caller, _key: &[u8], _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn verify_store(&self, _caller: &Caller, _key: &[u8], _entry: &[u8], _ttl_ms: u64) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn content_scan(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _content: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn hook_call(&self, _caller: &Caller, _unit: Option<u64>, _ask: HookAsk, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn snapshot_read(&self, _caller: &Caller, _scope: u32) -> Snapshot {
+        Snapshot::Refused(busbar_contract::services::UNSERVED)
+    }
     fn entitlement_check(
         &self,
         _caller: &busbar_contract::services::Caller,
@@ -843,27 +1000,19 @@ impl busbar_test_kit::services_double::ServicesDouble for TicketHost {
 }
 
 /// A dispatcher whose host serves tickets and randomness ([`TicketHost`]) to a key granted the
-fn ticket_host() -> (
-    Dispatcher,
-    Arc<busbar_test_kit::services_double::Double<TicketHost>>,
-) {
+fn ticket_host() -> (Dispatcher, Arc<TicketHost>) {
     ticket_host_granting(&["pool:m-cap"])
 }
 
 /// [`ticket_host`] for a key granted exactly `granted`.
-fn ticket_host_granting(
-    granted: &'static [&'static str],
-) -> (
-    Dispatcher,
-    Arc<busbar_test_kit::services_double::Double<TicketHost>>,
-) {
-    let host = Arc::new(busbar_test_kit::services_double::Double(TicketHost {
+fn ticket_host_granting(granted: &'static [&'static str]) -> (Dispatcher, Arc<TicketHost>) {
+    let host = Arc::new(TicketHost {
         draws: std::sync::atomic::AtomicU64::new(0xa0),
         minted: std::sync::Mutex::new(Vec::new()),
         granted,
         once: false,
         took: std::sync::atomic::AtomicBool::new(false),
-    }));
+    });
     let d = Dispatcher::with_services(DispatchConfig::default(), host.clone());
     (d, host)
 }
@@ -2470,13 +2619,13 @@ fn an_sdp_open_answered_short_answers_its_201_and_location_on_the_re_call() {
 #[test]
 fn a_short_sdp_projection_re_called_keeps_the_tickets_session() {
     for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
-        let host = Arc::new(busbar_test_kit::services_double::Double(TicketHost {
+        let host = Arc::new(TicketHost {
             draws: std::sync::atomic::AtomicU64::new(0xa0),
             minted: std::sync::Mutex::new(Vec::new()),
             granted: &["pool:m-cap"],
             once: true,
             took: std::sync::atomic::AtomicBool::new(false),
-        }));
+        });
         let d = Dispatcher::with_services(DispatchConfig::default(), host);
         let p = door(&d);
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
@@ -2792,20 +2941,10 @@ fn native_initialization_uses_the_completed_session_open_hook_rewrite() {
     }
 }
 
+#[path = "support/artifact.rs"]
+mod artifact;
 fn plugin_cdylib() -> std::path::PathBuf {
-    let path = std::path::PathBuf::from(
-        std::env::var_os("BUSBAR_PLUGIN_CDYLIB")
-            .expect("build this plugin and set BUSBAR_PLUGIN_CDYLIB to its fresh cdylib"),
-    );
-    assert!(
-        path.is_absolute(),
-        "BUSBAR_PLUGIN_CDYLIB must be absolute: {}",
-        path.display()
-    );
-    assert!(
-        path.is_file(),
-        "the built plugin cdylib is missing: {}",
-        path.display()
-    );
-    path
+    artifact::plugin_cdylib()
 }
+#[path = "support/pinned_cases.rs"]
+mod pinned_cases;

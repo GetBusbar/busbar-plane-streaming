@@ -1,3 +1,7 @@
+use busbar_contract::services::{
+    Caller, DiskDest, HookAsk, Later, NestAsk, Ran, Reading, RecordsList, Snapshot, Stored,
+    TrustKeyRef,
+};
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
@@ -18,7 +22,172 @@ struct AdmissionHost {
     draws: AtomicUsize,
 }
 
-impl busbar_test_kit::services_double::ServicesDouble for AdmissionHost {
+impl busbar_contract::services::HostServices for AdmissionHost {
+    fn now(&self) -> Reading {
+        Reading {
+            wall_ns: 0,
+            mono_ns: 0,
+        }
+    }
+    fn dest_judge(&self, _dest: &str, _class: u32, _flags: u32, _later: Option<Later>) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn records_get(&self, _caller: &Caller, _kind: &str, _key: &[u8], _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn records_list(&self, _caller: &Caller, _list: RecordsList, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn records_claim(
+        &self,
+        _caller: &Caller,
+        _kind: &str,
+        _key: &[u8],
+        _ttl_ms: u64,
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn sign(&self, _caller: &Caller, _data: &[u8]) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_sight(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _hash: &str,
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn trust_unreached(&self, _caller: &Caller, _counterparty: &str) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_sight_item(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _item: &str,
+        _digest: &str,
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_decide(
+        &self,
+        _caller: &Caller,
+        _key: TrustKeyRef<'_>,
+        _expected: Option<&str>,
+        _approve: bool,
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_state(&self, _caller: &Caller, _counterparty: &str) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_serves(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _item: Option<&str>,
+        _digest: Option<&str>,
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_due(&self, _caller: &Caller) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn trust_verify(
+        &self,
+        _caller: &Caller,
+        _counterparty: &str,
+        _payload: &[u8],
+        _signatures: &[u8],
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn entitlement_check(&self, _caller: &Caller, _unit: Option<u64>, _target: &str) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn session_emit(&self, _caller: &Caller, _session: u64, _bytes: &[u8]) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn ticket_mint(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _ttl_secs: u64,
+        _record: &[u8],
+    ) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn records_secret(&self, _kind: &str, _id: &str, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn unit_nest(&self, _caller: &Caller, _unit: Option<u64>, _ask: NestAsk, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_open(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _kind: &str,
+        _record: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_find(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _reference: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_settle(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _handle: u64,
+        _record: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn work_resume(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _handle: u64,
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn disk_append(&self, _dest: &DiskDest, _bytes: Vec<u8>, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn verify_lookup(&self, _caller: &Caller, _key: &[u8], _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn verify_store(&self, _caller: &Caller, _key: &[u8], _entry: &[u8], _ttl_ms: u64) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn content_scan(
+        &self,
+        _caller: &Caller,
+        _unit: Option<u64>,
+        _content: &[u8],
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn hook_call(&self, _caller: &Caller, _unit: Option<u64>, _ask: HookAsk, _later: Later) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
+    }
+    fn snapshot_read(&self, _caller: &Caller, _scope: u32) -> Snapshot {
+        Snapshot::Refused(busbar_contract::services::UNSERVED)
+    }
     fn ticket_take(
         &self,
         _: &busbar_contract::services::Caller,
@@ -48,17 +217,12 @@ impl busbar_test_kit::services_double::ServicesDouble for AdmissionHost {
     }
 }
 
-fn host(
-    admission: Admission,
-) -> (
-    Dispatcher,
-    Arc<busbar_test_kit::services_double::Double<AdmissionHost>>,
-) {
-    let host = Arc::new(busbar_test_kit::services_double::Double(AdmissionHost {
+fn host(admission: Admission) -> (Dispatcher, Arc<AdmissionHost>) {
+    let host = Arc::new(AdmissionHost {
         admission,
         takes: AtomicUsize::new(0),
         draws: AtomicUsize::new(0),
-    }));
+    });
     (
         Dispatcher::with_services(DispatchConfig::default(), host.clone()),
         host,
