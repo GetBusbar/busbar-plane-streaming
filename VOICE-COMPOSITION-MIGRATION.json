@@ -1,0 +1,134 @@
+{
+  "status": "SOURCE_MIGRATION_IN_PROGRESS_NOT_QUALIFIED",
+  "baseline": "5aa3edde9d768db666c6b43164ebf89612c56967",
+  "originals": {
+    "testing/voice-conformance/harness/src/composition.rs": "e568e9ee02453d23d86b18a5e2cc7da8bd736a89b84d4f933046040547ee3076",
+    "testing/voice-conformance/harness/src/governance.rs": "8f3161b8e13936dfb67cac91a53b97ed279568acdaf39c63c17692cd86777cae"
+  },
+  "composition": [
+    {
+      "family": "provider-credential",
+      "ordinary_test": "provider_credentials_stay_on_declared_needs_and_mint_dials_nothing",
+      "original_functions": [
+        "cred_script",
+        "cred_check"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "metering-lease",
+      "ordinary_test": "declared_units_fee_and_short_recall_settle_each_turn_once",
+      "original_functions": [
+        "meter_script",
+        "meter_check",
+        "meter_expected"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "session-scope",
+      "ordinary_test": "session_and_pool_grants_keep_principals_and_refuse_unpublished_claims",
+      "original_functions": [
+        "scope_script",
+        "scope_check"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "gemini-live-route",
+      "ordinary_test": "gemini_claim_arrival_and_handshake_keep_their_dialect",
+      "original_functions": [
+        "route_script",
+        "route_check"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "provider-dial",
+      "ordinary_test": "provider_frames_use_actual_declared_socket_needs_and_report_usage",
+      "original_functions": [
+        "dial_script",
+        "dial_check",
+        "dial_one"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "admit-refusal",
+      "ordinary_test": "all_policy_refusal_reasons_render_4xx_without_opening_or_dialing",
+      "original_functions": [
+        "admit_script",
+        "admit_check"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "route-failover",
+      "ordinary_test": "routes_and_attempts_preserve_fresh_dials_without_early_output",
+      "original_functions": [
+        "fail_script",
+        "fail_check",
+        "route_failover"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "audit-record",
+      "ordinary_test": "audit_metadata_and_mint_refusal_keep_one_kernel_row",
+      "original_functions": [
+        "audit_script",
+        "audit_check"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "exit-terminal",
+      "ordinary_test": "session_end_settles_once_then_refuses_every_side",
+      "original_functions": [
+        "exit_script",
+        "exit_check"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    },
+    {
+      "family": "tool-reply",
+      "ordinary_test": "tool_calls_usage_and_caller_replies_relay_exact_bytes",
+      "original_functions": [
+        "tool_script",
+        "tool_check"
+      ],
+      "destination": "plane-streaming-plugin/tests/voice_composition.rs"
+    }
+  ],
+  "observations": [
+    {
+      "original": "V1-barge-in-preemption",
+      "destination": "plane-streaming-plugin/tests/voice_observations.rs",
+      "classification": "non-gating policy observation, emits observed PASS/FAIL, no policy assert or conformance verdict"
+    },
+    {
+      "original": "V2-turn-budget-enforcement",
+      "destination": "plane-streaming-plugin/tests/voice_observations.rs",
+      "classification": "non-gating policy observation, emits observed PASS/FAIL, no policy assert or conformance verdict"
+    },
+    {
+      "original": "V3-metering-lease-settled",
+      "destination": "plane-streaming-plugin/tests/voice_observations.rs",
+      "classification": "non-gating policy observation, emits observed PASS/FAIL, no policy assert or conformance verdict"
+    },
+    {
+      "original": "V4-dialect-downscope",
+      "destination": "plane-streaming-plugin/tests/voice_observations.rs",
+      "classification": "non-gating policy observation, emits observed PASS/FAIL, no policy assert or conformance verdict"
+    },
+    {
+      "original": "D2-hard-close-on-exhaustion",
+      "destination": "plane-streaming-plugin/tests/voice_observations.rs",
+      "classification": "non-gating policy observation, emits observed PASS/FAIL, no policy assert or conformance verdict"
+    }
+  ],
+  "support": "Lead-owned support/voice_abi.rs concrete actual product operations only; no new Rig/Session/Log/Step/Act/Fold/judge/Plant runner layer.",
+  "framework_selfchecks": "Old planted wrong-answer comparator checks belong runner self-validation, require explicit ledger classification by lead before original retirement. No product assertion retirement inferred.",
+  "scope": "Original files/fixtures unchanged; no manifest/SDK/pin/public API changes by case author; actual artifact mandatory absolute BUSBAR_PLUGIN_CDYLIB as lead support contract.",
+  "qualification": "No builds/tests yet; finite actual linked/fresh dropped test lane coordinated by lead."
+}
