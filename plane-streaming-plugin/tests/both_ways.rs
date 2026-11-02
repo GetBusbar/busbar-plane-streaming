@@ -176,14 +176,7 @@ fn dropped(d: &Dispatcher) -> Plugin<Plane> {
 }
 
 fn dropped_bound(bound: Bind) -> Plugin<Plane> {
-    let exe = std::env::current_exe().expect("the test binary has a path");
-    let deps = exe.parent().expect("target/<profile>/deps");
-    let profile = deps.parent().expect("target/<profile>");
-    let file = busbar_plugin_loader::plugin_library_filename("busbar_plane_streaming_plugin");
-    let path = [profile.join(&file), deps.join(&file)]
-        .into_iter()
-        .find(|p| p.exists())
-        .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"));
+    let path = plugin_cdylib();
     let stated = row().statement;
     load_dropped::<Plane>(&path, &stated, bound).expect("the dropped streaming door loads")
 }
@@ -2335,16 +2328,7 @@ fn an_unreadable_usage_bills_the_floor_and_its_line_reaches_the_host_log() {
     let d = host();
     let floor = (USAGE_UNREADABLE.len() as u64 / 4).max(1);
     let stated = row().statement;
-    let path = {
-        let exe = std::env::current_exe().expect("the test binary has a path");
-        let deps = exe.parent().expect("target/<profile>/deps").to_path_buf();
-        let profile = deps.parent().expect("target/<profile>").to_path_buf();
-        let file = busbar_plugin_loader::plugin_library_filename("busbar_plane_streaming_plugin");
-        [profile.join(&file), deps.join(&file)]
-            .into_iter()
-            .find(|p| p.exists())
-            .unwrap_or_else(|| panic!("this crate's cdylib ({file}) is not built"))
-    };
+    let path = plugin_cdylib();
     for dropped_in in [false, true] {
         let log = Arc::new(HostLog::default());
         let bound = Bind {
@@ -2806,4 +2790,22 @@ fn native_initialization_uses_the_completed_session_open_hook_rewrite() {
             "{initial}"
         );
     }
+}
+
+fn plugin_cdylib() -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(
+        std::env::var_os("BUSBAR_PLUGIN_CDYLIB")
+            .expect("build this plugin and set BUSBAR_PLUGIN_CDYLIB to its fresh cdylib"),
+    );
+    assert!(
+        path.is_absolute(),
+        "BUSBAR_PLUGIN_CDYLIB must be absolute: {}",
+        path.display()
+    );
+    assert!(
+        path.is_file(),
+        "the built plugin cdylib is missing: {}",
+        path.display()
+    );
+    path
 }
