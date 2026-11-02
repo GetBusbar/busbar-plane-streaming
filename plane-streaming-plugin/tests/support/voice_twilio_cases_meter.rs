@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 use super::*;
-use busbar_plane_streaming::session_door::PER_SESSION_CLASS;
+const PER_SESSION_CLASS: u32 = 8;
 const USAGE_DONE: &[u8] = br#"{"type":"response.done","response":{"usage":{"input_token_details":{"audio_tokens":10,"text_tokens":3},"output_token_details":{"audio_tokens":20,"text_tokens":4}}}}"#;
 fn usage_units(secs: u64) -> String {
     format!("0:1=10 1:1=20 2:1=3 3:1=4 4:1={secs} {PER_SESSION_CLASS}:1=1")

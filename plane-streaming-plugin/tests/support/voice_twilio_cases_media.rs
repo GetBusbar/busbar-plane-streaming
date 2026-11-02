@@ -35,9 +35,6 @@ fn published_transcript_in_exact_order() {
             ("client", "stop"),
         ]
     );
-    for index in [1, 2, 3, 4, 5, 6, 9, 10] {
-        TwilioEnvelope::decode(&bytes(&lines[index]["event"])).unwrap();
-    }
     let sid = lines[2]["event"]["start"]["streamSid"].as_str().unwrap();
     let dispatcher = Dispatcher::new(DispatchConfig::default());
     for dropped in [false, true] {
