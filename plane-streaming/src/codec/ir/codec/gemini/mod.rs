@@ -273,8 +273,6 @@ impl DuplexReader for GeminiLiveCodec {
         top: &Lite<'_>,
         admit: &mut dyn FnMut(Option<AudioFormat>, usize),
     ) -> Result<(), crate::splice::Unmeterable> {
-        use crate::splice::Unmeterable;
-
         let Some((kind, ri)) = proto_member(
             top,
             &[
