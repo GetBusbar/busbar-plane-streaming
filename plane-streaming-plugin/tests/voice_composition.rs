@@ -681,7 +681,8 @@ fn routes_and_attempts_preserve_fresh_dials_without_early_output() {
 
 #[test]
 fn audit_rows_name_the_pool_once_and_never_create_private_records() {
-    use busbar_plane_streaming::{driven::SESSION_OPEN_ACTION, plane_door::AUDIT_KIND};
+    const SESSION_OPEN_ACTION: &str = "streaming.session.open";
+    const AUDIT_KIND: &str = "streaming_session";
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
         let d = Dispatcher::new(DispatchConfig::default());

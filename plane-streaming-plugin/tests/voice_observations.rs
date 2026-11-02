@@ -64,9 +64,8 @@ fn observation_v1_barge_in_preemption() {
 
 #[test]
 fn observation_v2_turn_budget_enforcement() {
-    use busbar_plane_streaming::{
-        session_door::CEILING_TICK_NS, session_pump::SESSION_CEILING_REASON,
-    };
+    const CEILING_TICK_NS: u64 = 1_000_000_000;
+    const SESSION_CEILING_REASON: &str = "session_expired";
     for dropped in [false, true] {
         let d = Dispatcher::new(DispatchConfig::default());
         let p = load(&d, "observe-ceiling", dropped);
