@@ -206,17 +206,6 @@ pub fn arrive(p: &Plugin<Plane>, claim: u32) -> Arrived {
     a.input.units_cap = units.len();
     a.out.head = out_head();
     let c = p.call(slot::ARRIVE, &mut a);
-    if c.outcome != Outcome::Ready {
-        return Arrived {
-            outcome: c.outcome,
-            dialect: 0,
-            op_class: 0,
-            principal: 0,
-            route: (0, String::new()),
-            refusal: (0, 0),
-            units: 0,
-        };
-    }
     Arrived {
         outcome: c.outcome,
         dialect: a.out.dialect,
