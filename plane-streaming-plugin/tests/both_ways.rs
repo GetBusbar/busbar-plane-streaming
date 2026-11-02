@@ -496,13 +496,13 @@ fn at(buf: &[u8], s: Span) -> String {
 struct Bufs {
     reply: Vec<u8>,
     units: Vec<UnitCount>,
-    fields: [OutField; 4],
-    arena: [u8; 256],
+    fields: Vec<OutField>,
+    arena: Vec<u8>,
     /// The units the last answer wrote (class, source, amount), or, short, the room it needed.
     last_units: String,
     /// The need the last answer named for its far request (`0` = none).
     last_need: u32,
-    records: [RecordWrite; 2],
+    records: Vec<RecordWrite>,
     /// The flags the last answer stated (`EMIT_*`, `PIECE_OUT_TEXT`).
     last_flags: u32,
     /// The audit rows the last answer wrote (`outcome action resource`), or, short, the room it
@@ -514,6 +514,7 @@ struct Bufs {
 }
 
 /// One piece pushed to a unit: whose it is, its flags, bytes, status and kept head fields.
+#[derive(Clone, Copy)]
 struct Push<'a> {
     unit: u64,
     /// A live session's stream (`0` = a request unit).
@@ -536,11 +537,11 @@ impl Bufs {
         Self {
             reply: vec![0; reply_cap],
             units: vec![z(); units],
-            fields: [z(); 4],
-            arena: [0; 256],
+            fields: vec![z(); 4],
+            arena: vec![0; 256],
             last_units: String::new(),
             last_need: 0,
-            records: [z(); 2],
+            records: vec![z(); 2],
             last_flags: 0,
             last_audit: String::new(),
             caller: CALLER_REF,
@@ -548,8 +549,7 @@ impl Bufs {
         }
     }
 
-    /// `push` answered: the outcome and what it wrote, as text.
-    fn call(&mut self, p: &Plugin<Plane>, push: &Push<'_>) -> String {
+    fn frame(&mut self, push: &Push<'_>) -> Frame<OnPieceIn, OnPieceOut> {
         let mut i: OnPieceIn = z();
         i.head = in_head();
         (i.unit, i.claim, i.from, i.flags) = (push.unit, push.claim, push.from, push.flags);
@@ -566,9 +566,22 @@ impl Bufs {
         (i.records_buf, i.records_cap) = (self.records.as_mut_ptr(), self.records.len());
         let mut o: OnPieceOut = z();
         o.head = out_head();
-        let mut f = Frame::new(i, o);
+        Frame::new(i, o)
+    }
+
+    /// `push` answered: the outcome and what it wrote, as text.
+    fn call(&mut self, p: &Plugin<Plane>, push: &Push<'_>) -> String {
+        let mut f = self.frame(push);
         let c = p.call(slot::ON_PIECE, &mut f);
-        let o = f.out;
+        self.answer(&c, f.out)
+    }
+
+    fn answer(&mut self, c: &busbar_plugin_loader::dispatch::Called, o: OnPieceOut) -> String {
+        if let Some(error) = &c.error {
+            pinned_cases::assert_credential_absent(error);
+        }
+        pinned_cases::assert_credential_absent(&self.reply);
+        pinned_cases::assert_credential_absent(&self.arena);
         self.last_need = o.need;
         self.last_flags = o.flags;
         self.last_audit = if o.records_needed != 0 {
@@ -2454,17 +2467,32 @@ fn a_request_unit_at_the_unit_bound_is_refused_at_its_arrival_in_words() {
 /// The host's envelope sink, keeping the text of every diagnostic and log record a call carried:
 /// what the host writes to the plugin's own log file.
 #[derive(Default)]
-struct HostLog(std::sync::Mutex<Vec<String>>);
+struct HostLog(
+    std::sync::Mutex<Vec<String>>,
+    std::sync::Mutex<Vec<Vec<u8>>>,
+    std::sync::atomic::AtomicBool,
+);
 
 impl busbar_plugin_loader::dispatch::EnvelopeSink for HostLog {
-    fn metric(&self, _: busbar_plugin_loader::dispatch::Metric<'_>) {}
+    fn metric(&self, metric: busbar_plugin_loader::dispatch::Metric<'_>) {
+        self.1
+            .lock()
+            .unwrap()
+            .extend(metric.labels.iter().map(|value| value.to_vec()));
+    }
     fn diag(&self, d: busbar_plugin_loader::dispatch::Diagnostic<'_>) {
+        self.1
+            .lock()
+            .unwrap()
+            .extend([d.name.to_vec(), d.text.to_vec()]);
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(String::from_utf8_lossy(d.text).into_owned());
     }
-    fn dropped(&self, _: busbar_plugin_loader::dispatch::Dropped) {}
+    fn dropped(&self, _: busbar_plugin_loader::dispatch::Dropped) {
+        self.2.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// A far end's usage report whose input count is a string, not a count.
@@ -2537,6 +2565,16 @@ fn an_unreadable_usage_bills_the_floor_and_its_line_reaches_the_host_log() {
                 .count(),
             1,
             "dropped-in {dropped_in}: one line reaches the host log: {lines:?}"
+        );
+        assert!(
+            log.1.lock().unwrap().iter().any(|record| record
+                .windows(b"usage is unreadable".len())
+                .any(|part| part == b"usage is unreadable")),
+            "both actual images positively exercise the complete envelope byte capture"
+        );
+        assert!(
+            !log.2.load(std::sync::atomic::Ordering::SeqCst),
+            "the diagnostic capture must not discard any envelope record"
         );
     }
 }

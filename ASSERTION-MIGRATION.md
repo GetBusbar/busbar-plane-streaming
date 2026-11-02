@@ -145,3 +145,49 @@ that it be preserved and flagged for root scope discussion rather than silently
 deleted or claimed migrated. Its assertion transfer/removal and artifact contract
 require a separate decision; this candidate covers the active two-member kit and
 macro consumers only.
+
+
+## Streaming credential envelope restoration
+
+The original a35493a5e7 canary assertion also inspected `take_heard()` diagnostic
+names/text and metric labels. The ordinary pinned 33-case test now binds its
+actual linked and freshly built dropped image to the existing concrete `HostLog`
+sink rather than `NoSink`. It scans owned complete envelope bytes, both actual
+Statements, the existing answer/audit transcript, and arrival errors/routes for
+the configured credential. Dropped envelope records fail the privacy assertion.
+The original seven spellings remain: raw, percent upper/lower, standard base64
+without padding, URL-safe base64 without padding, and lower/upper hex. The
+encoding is local to this one credential assertion; no new Cargo dependency or
+runner/checker framework is introduced.
+
+The existing `an_unreadable_usage_bills_the_floor_and_its_line_reaches_the_host_log`
+case retains its exact billing and one-warning assertions and additionally proves
+that the complete-byte capture receives the known diagnostic through each actual
+image, with no dropped envelopes. The 33-case lifecycle/session script and every
+existing crossing assertion remain unchanged. This successor is source-reviewed
+and formatted only; its native qualification is separate from the immutable
+preceding ecdf9ca6 run. No production source, manifest, lock, or excluded voice
+harness changed.
+
+
+The same source review also restored fields previously omitted from ordinary
+linked/dropped comparison: every concrete Called error/lease, all arrival
+refusal/status and Ready class/principal/dialect/units/route fields, session
+need/lane, and cancel disposition. The top-level PROJECT now uses the original
+claimed target and empty request body, unit zero, 256-byte arena, four signals,
+no message buffers, and compares `signals_len`. SERVE retains its original
+status/reply-written contract plus Called fields (the original did not compare
+its body/fields).
+
+The nine existing session pieces now use public `Dispatcher::submit_lent` with
+one actual minted ticket per session reused for its pieces; SERVE uses its own
+actual request ticket. Session buffers use the original eight unit/field/record
+slots and 1024-byte arena, with the fixture's reply sizes, member `m-cap`, and
+caller reference. A streaming-specific owned value keeps input bytes and output
+buffers alive through completion/cancellation; UnsafeCell and its two Send/Sync
+implementations permit only crossing writes while submitted and host output
+access after Done returns the joined frame. Reclamation does not assume when a
+worker releases its last owner clone. The existing Bufs defaults remain the same
+for all prior both-ways tests; Vec storage permits only these pinned buffers to
+use the original capacities. Original per-step first-crossing pins stay in place;
+actual resume deltas are reported separately without a scheduling-dependent pin.
