@@ -1,0 +1,1266 @@
+{
+  "source_before_retirement": "12b0a7b8a8601917048c8ce45756d86a8419366b",
+  "scope": "Paired removal of superseded bespoke runner after ordinary assertion transfer. SDK2-scoped native proofs retained; final SDK/current-root qualification separate.",
+  "original_files_sha256": {
+    "testing/voice-conformance/voice-conformance.sh": "6bb92433b3a872f4c9dcb6e6859c801b66b6c69c753c6b5c178d80902109aa02",
+    "testing/voice-conformance/README.md": "60c514932aa321e6bd750c137a6366ea46f7a1e5bab7b23b6c5e14734e0b8d84",
+    "testing/voice-conformance/tests/test_execution.py": "5f380c0dc489ac6132849dd11b4a2086f8d4124997229ef15ae45f683a687e08",
+    "testing/voice-conformance/harness/Cargo.toml": "9a1924c788954ebf9ff6e6edb9be88afe95e316f67d3d20049ec1759ec0652b3",
+    "testing/voice-conformance/legs/replay.sh": "7b5895d25d4d1991b3840ad1640afcc955920a1e07f7047264265ace6fa483df",
+    "testing/voice-conformance/legs/session-scope.sh": "0ff491440b880534dd311696fca4ab490fbbe3a429112d7537e8b813d0e519fb",
+    "testing/voice-conformance/legs/governance.sh": "22299b7eb1dba653a4b29b5e3b37faa2578b3cda79162c844dfdae7c65624df6",
+    "testing/voice-conformance/legs/provider-dial.sh": "7f7d29452d54a505853c13550549ad906fb5e7a944a67fc6c8c3e72a40804efb",
+    "testing/voice-conformance/legs/admit-refusal.sh": "6737bf2db40f3e7920785bc64ebb693736c7a037f787dde1a2e1dcb49161beed",
+    "testing/voice-conformance/legs/twilio-media.sh": "4452edb32fa4ffaed746c6aa720f0b42d722b853b24e21df0e71e1d48b86dd14",
+    "testing/voice-conformance/legs/provider-credential.sh": "c7405a7ff1fe9c23b90095bef4c75b59c186083851e49d34f5bee0966375edb9",
+    "testing/voice-conformance/legs/twilio-route.sh": "4291aa351ce33b0adceb7946dd9a87d8124ad73aec73e2dc15fe7a473286f017",
+    "testing/voice-conformance/legs/metering-lease.sh": "84f1401ec0decc4dce13669154a02e8f8dcdcdfb5d95c531cc50181391a7380c",
+    "testing/voice-conformance/legs/exit-terminal.sh": "89bf6bdb581b5cbe9a95bf9f258311ffabf313abfcdc4418b898efb31b0d7b54",
+    "testing/voice-conformance/legs/tool-reply.sh": "d01b728abc04906c78aa339d494b4f8481b272e688da87cdf48fcfd511a5eab4",
+    "testing/voice-conformance/legs/gemini-live-route.sh": "d56e54c96bab0c1ca5c868f04bf3f91d365c0e3f56f27d76b47058ef1224c94d",
+    "testing/voice-conformance/legs/twilio-metering.sh": "07dc9334314371b3fa542af8335769f6c7cc8c3eafd3a9a9fc1eb4e1fae9c6de",
+    "testing/voice-conformance/legs/audit-record.sh": "23f5c25046f42b1e96667f151a46f369c7b9c0395b1fe990ad6a202b396fff00",
+    "testing/voice-conformance/legs/route-failover.sh": "bb5c180ba14c1ad619f00433b0fd7e7a6c0f772d1a8fa24e639a30cd25fc0d2f",
+    "testing/voice-conformance/legs/spec-per-dialect.sh": "45ee996e9d0c0afa6b2d632002f7efc1bda134e0885a81a4bc2ccf3e5463820a",
+    "testing/voice-conformance/lib/conform-bin.sh": "f1cf8be1f63ea59f35bb9ddd0ac54a61b48bca495dedf4b8372154850361a40f",
+    "testing/voice-conformance/fixtures/gemini/serverContent.interrupted.json": "590ebb3b0d8521900a788f80dad227e0ba5acbe41057c3899ce99f43a983a38a",
+    "testing/voice-conformance/fixtures/gemini/toolCall.json": "dbf887007b36314249e1aa99f57c3d78ebf5f725fe6a9e3e1f360c2dc609fe20",
+    "testing/voice-conformance/fixtures/gemini/usageMetadata.json": "57882bc2baab9ae81a2b492c0d383834ce9766898b9bf5ed1be502972303da36",
+    "testing/voice-conformance/fixtures/gemini/toolResponse.json": "d404ad3fde217c1605f27a621695c3c0890ad357c36b497c7f86a5101886eb7c",
+    "testing/voice-conformance/fixtures/gemini/goAway.json": "8736567a7f598ab114d684cf6d43a68bf3fd14af54244d635b77bc05efc4a313",
+    "testing/voice-conformance/fixtures/gemini/serverContent.outputTranscription.json": "ae9d7b7a38011068ed0c00c1380018a6dcd73bf15a2d3cd79a6b6ddebfa5ef72",
+    "testing/voice-conformance/fixtures/gemini/setup.json": "1749a3ffbc004495a420152dddbb4997734009a2a74066f6c7f149cfe689db78",
+    "testing/voice-conformance/fixtures/gemini/serverContent.inputTranscription.json": "0373e40ca76bcd9066ed88a6a816a47ac1877ea932d602b1de54a3aecf9b35e8",
+    "testing/voice-conformance/fixtures/gemini/realtimeInput.json": "3d74ae9ab20e84925e317bb5364b48c8a77d0de5dd53476c41c4617874e35524",
+    "testing/voice-conformance/fixtures/gemini/transcript.jsonl": "8dc5f0b13846a9d386fe351343cc36ca43cca6773555eea2b8461e618cb18fdb",
+    "testing/voice-conformance/fixtures/gemini/serverContent.modelTurn.json": "12e0d763dd47bd3a9c9882b7bd173ebca981315032eaed1334d01031fc9bc270",
+    "testing/voice-conformance/fixtures/gemini/toolCallCancellation.json": "512fb026c615cdf5037cec89a44bec8be3e1dfcbd46bf28d6f6f63f36fad5b7c",
+    "testing/voice-conformance/fixtures/gemini/setupComplete.json": "4f9b14fdcb93a19bb3fe34d43588b8ad6f43cc7299b5e6b738fbf67b27bed75b",
+    "testing/voice-conformance/fixtures/gemini/serverContent.turnComplete.json": "d1a90318e660d73ec27f153a4b481d799dbe7e4bcf2fe2208e182eb098f0268f",
+    "testing/voice-conformance/fixtures/gemini/clientContent.json": "f1f30bb36d4232b41654b8d1a09a94222a730b0b46c11b5c6f237536774580e6",
+    "testing/voice-conformance/fixtures/gemini/realtimeInput.mediaChunks.json": "81db4236b1c930e41dd38ba76e2f261cea1743f4ae2ab14c38479f550c09deca",
+    "testing/voice-conformance/fixtures/gemini/realtimeInput.audioStreamEnd.json": "31354c541d70c81f158178373366f1d87868afcc19b053cd81c15b3be0238b77",
+    "testing/voice-conformance/fixtures/openai/session.created.json": "6920ca6b8534a4255c3f0164dcac50d7031dec39b2a56523d0aa96306c0f6623",
+    "testing/voice-conformance/fixtures/openai/error.json": "df11366931faa20d368b86c4a188b066b9fd69c12c62ddc997bf3f01a6b8288b",
+    "testing/voice-conformance/fixtures/openai/transcript.jsonl": "b36a46b18b5ed22cb8723ba3bb052ce1e82db7942da94dc5fe978c5544bbba93",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.clear.json": "d96760ac3e9f6a036fa8e2fa7c8b630b154290f77fc514f605e8b36e2fa695d5",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.speech_stopped.json": "6ef09c90416b67f2b73951683c59771adca8fca592229aef6d20d2e01e5caa53",
+    "testing/voice-conformance/fixtures/openai/session.update.ga_nested.json": "915adbe0daf53d9c64d7a95f85ea7956fb5713f9bd8ae7027d5af5f95765f1c1",
+    "testing/voice-conformance/fixtures/openai/session.update.json": "70640ebb77329d1b295ee13e26f57167f78174fcaefba4f8c3083825d659585a",
+    "testing/voice-conformance/fixtures/openai/session.update.semantic_vad.json": "dfa1ccfba25509c6cad9a804df93f5a911bd75a6c6229d9bf7c7812f74a23216",
+    "testing/voice-conformance/fixtures/openai/conversation.item.create.message.json": "15cad3bb383ec13054142379fce6fe2db49d8ea5bb060fa5eb5eb61f2af7bfda",
+    "testing/voice-conformance/fixtures/openai/conversation.item.truncate.json": "570c31d9ae749a1fc81edc07af7922786cc32656a97f2ce59b14a296abfec900",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.speech_started.json": "79ebe3d4864bf2c37ac78a7830cb8ca0e63027ac38454b4bafa13cce3efee9ce",
+    "testing/voice-conformance/fixtures/openai/response.cancel.json": "b79cd303acf774d13ba78fe5f953d0b88d60430e1686e1893e9a1363b9fa0d44",
+    "testing/voice-conformance/fixtures/openai/response.audio.delta.json": "8b097ba17ff10ffff3cdd72fc8646da6dbfafa5a307b0b8d79fe5527886646d0",
+    "testing/voice-conformance/fixtures/openai/conversation.item.create.function_call_output.json": "9a9bf0539a6164f02941ddd2f21c61003e874fedd119dc8640fdcea816eda643",
+    "testing/voice-conformance/fixtures/openai/response.audio.done.json": "2561531d8a8e8845e8bdea1bce69c930483d0a93f2689829b55a966f52d37051",
+    "testing/voice-conformance/fixtures/openai/response.create.json": "96bc3ee07e6c9513d5a7bd68c5b80a4b8303d0f6899227ed591c3c569c43e0ba",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.append.json": "baa4f21ae5307bc3e432029b4b36123106c49e81a490534150258b53e628733c",
+    "testing/voice-conformance/fixtures/openai/response.done.json": "4d8b49704c7074e46924d6c121aa718484402e27b4a19181ed43faea987c20dc",
+    "testing/voice-conformance/fixtures/openai/response.function_call_arguments.delta.json": "68cd7ffbf37195d5dd5f7111e3b7753ea0cf37efd364434483b05f842f8c72b6",
+    "testing/voice-conformance/fixtures/openai/response.function_call_arguments.done.json": "8dd0e401456e1a9870c672602fc39078af9404659f995aa4ac092c58d5978f9c",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.commit.json": "dcf4490c1275cd3875fd129c2b1af103056990a81a7439ad435fa0d8724294f0",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.stop.json": "d41b62b06fe5956d347754bdd73e14934e5edbe91c75f329960d9877ea638ec9",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.mark.json": "60f65f529a8f4127e8d5e3e2da8bf1aad26cd781944ec34e3a4d19f25da9eb87",
+    "testing/voice-conformance/fixtures/twilio/transcript.jsonl": "16e5ec404d98c32f5f1c0b1f3e66d59cefa03ab83a808ffe719a66f3bd8a5eeb",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.start.json": "c175b86db23b6e65792e2b329aa478677da0d02250a381055e12ea79735925cb",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.media.json": "ef624163fca51b266d0a31e5de95994cae4abe0a981ee2390146366f08bddea9",
+    "testing/voice-conformance/fixtures/twilio/to-twilio.clear.json": "4fde2c2477f07f230afcda2a717af9d2113754623c44bea7b38127f4cfe8f454",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.connected.json": "e1fa438ad758032befb9a028fc700e4ca050a9be98543d69d8b806b25a052ffd",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.dtmf.json": "17826d57d5cb33e015bfd273c4b5a95d0dbd0cb868e177449d044a333ddaa9b8",
+    "testing/voice-conformance/fixtures/twilio/to-twilio.media.json": "7374199a8f5d1def71caa410276ee018a27709a91a0df7d8d54e3368529b12d1",
+    "testing/voice-conformance/fixtures/twilio/to-twilio.mark.json": "961eba963f01f25730656ebc8d5cbd0aa89081feabbfcef500e0e62986e56cdb",
+    "testing/voice-conformance/harness/src/twilio_legs.rs": "87a10336ca7540c824fffed769b35d85d00bf45f706755eccba59b314a68dea3",
+    "testing/voice-conformance/harness/src/codec_legs.rs": "64e93d92263390fa1ae50f51a4722a20c75099f5bf8074b7241695f5f3a65684",
+    "testing/voice-conformance/harness/src/governance.rs": "8f3161b8e13936dfb67cac91a53b97ed279568acdaf39c63c17692cd86777cae",
+    "testing/voice-conformance/harness/src/composition.rs": "e568e9ee02453d23d86b18a5e2cc7da8bd736a89b84d4f933046040547ee3076",
+    "testing/voice-conformance/harness/src/decode.rs": "23b2169f24284e00b32c8108d0362c9dbfbbf63e607313f8b1912a0f9265ec21",
+    "testing/voice-conformance/harness/src/main.rs": "5c4d5252ac8c035b72a56af53c1d300c962609e93874e6aca8803a49420d1320",
+    "testing/voice-conformance/harness/src/door.rs": "776436a5464a05a94e063a9cd7868e89c64183047c2e026ab1555ada4bafa55c"
+  },
+  "fixtures_sha256": {
+    "testing/voice-conformance/fixtures/gemini/serverContent.interrupted.json": "590ebb3b0d8521900a788f80dad227e0ba5acbe41057c3899ce99f43a983a38a",
+    "testing/voice-conformance/fixtures/gemini/toolCall.json": "dbf887007b36314249e1aa99f57c3d78ebf5f725fe6a9e3e1f360c2dc609fe20",
+    "testing/voice-conformance/fixtures/gemini/usageMetadata.json": "57882bc2baab9ae81a2b492c0d383834ce9766898b9bf5ed1be502972303da36",
+    "testing/voice-conformance/fixtures/gemini/toolResponse.json": "d404ad3fde217c1605f27a621695c3c0890ad357c36b497c7f86a5101886eb7c",
+    "testing/voice-conformance/fixtures/gemini/goAway.json": "8736567a7f598ab114d684cf6d43a68bf3fd14af54244d635b77bc05efc4a313",
+    "testing/voice-conformance/fixtures/gemini/serverContent.outputTranscription.json": "ae9d7b7a38011068ed0c00c1380018a6dcd73bf15a2d3cd79a6b6ddebfa5ef72",
+    "testing/voice-conformance/fixtures/gemini/setup.json": "1749a3ffbc004495a420152dddbb4997734009a2a74066f6c7f149cfe689db78",
+    "testing/voice-conformance/fixtures/gemini/serverContent.inputTranscription.json": "0373e40ca76bcd9066ed88a6a816a47ac1877ea932d602b1de54a3aecf9b35e8",
+    "testing/voice-conformance/fixtures/gemini/realtimeInput.json": "3d74ae9ab20e84925e317bb5364b48c8a77d0de5dd53476c41c4617874e35524",
+    "testing/voice-conformance/fixtures/gemini/transcript.jsonl": "8dc5f0b13846a9d386fe351343cc36ca43cca6773555eea2b8461e618cb18fdb",
+    "testing/voice-conformance/fixtures/gemini/serverContent.modelTurn.json": "12e0d763dd47bd3a9c9882b7bd173ebca981315032eaed1334d01031fc9bc270",
+    "testing/voice-conformance/fixtures/gemini/toolCallCancellation.json": "512fb026c615cdf5037cec89a44bec8be3e1dfcbd46bf28d6f6f63f36fad5b7c",
+    "testing/voice-conformance/fixtures/gemini/setupComplete.json": "4f9b14fdcb93a19bb3fe34d43588b8ad6f43cc7299b5e6b738fbf67b27bed75b",
+    "testing/voice-conformance/fixtures/gemini/serverContent.turnComplete.json": "d1a90318e660d73ec27f153a4b481d799dbe7e4bcf2fe2208e182eb098f0268f",
+    "testing/voice-conformance/fixtures/gemini/clientContent.json": "f1f30bb36d4232b41654b8d1a09a94222a730b0b46c11b5c6f237536774580e6",
+    "testing/voice-conformance/fixtures/gemini/realtimeInput.mediaChunks.json": "81db4236b1c930e41dd38ba76e2f261cea1743f4ae2ab14c38479f550c09deca",
+    "testing/voice-conformance/fixtures/gemini/realtimeInput.audioStreamEnd.json": "31354c541d70c81f158178373366f1d87868afcc19b053cd81c15b3be0238b77",
+    "testing/voice-conformance/fixtures/openai/session.created.json": "6920ca6b8534a4255c3f0164dcac50d7031dec39b2a56523d0aa96306c0f6623",
+    "testing/voice-conformance/fixtures/openai/error.json": "df11366931faa20d368b86c4a188b066b9fd69c12c62ddc997bf3f01a6b8288b",
+    "testing/voice-conformance/fixtures/openai/transcript.jsonl": "b36a46b18b5ed22cb8723ba3bb052ce1e82db7942da94dc5fe978c5544bbba93",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.clear.json": "d96760ac3e9f6a036fa8e2fa7c8b630b154290f77fc514f605e8b36e2fa695d5",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.speech_stopped.json": "6ef09c90416b67f2b73951683c59771adca8fca592229aef6d20d2e01e5caa53",
+    "testing/voice-conformance/fixtures/openai/session.update.ga_nested.json": "915adbe0daf53d9c64d7a95f85ea7956fb5713f9bd8ae7027d5af5f95765f1c1",
+    "testing/voice-conformance/fixtures/openai/session.update.json": "70640ebb77329d1b295ee13e26f57167f78174fcaefba4f8c3083825d659585a",
+    "testing/voice-conformance/fixtures/openai/session.update.semantic_vad.json": "dfa1ccfba25509c6cad9a804df93f5a911bd75a6c6229d9bf7c7812f74a23216",
+    "testing/voice-conformance/fixtures/openai/conversation.item.create.message.json": "15cad3bb383ec13054142379fce6fe2db49d8ea5bb060fa5eb5eb61f2af7bfda",
+    "testing/voice-conformance/fixtures/openai/conversation.item.truncate.json": "570c31d9ae749a1fc81edc07af7922786cc32656a97f2ce59b14a296abfec900",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.speech_started.json": "79ebe3d4864bf2c37ac78a7830cb8ca0e63027ac38454b4bafa13cce3efee9ce",
+    "testing/voice-conformance/fixtures/openai/response.cancel.json": "b79cd303acf774d13ba78fe5f953d0b88d60430e1686e1893e9a1363b9fa0d44",
+    "testing/voice-conformance/fixtures/openai/response.audio.delta.json": "8b097ba17ff10ffff3cdd72fc8646da6dbfafa5a307b0b8d79fe5527886646d0",
+    "testing/voice-conformance/fixtures/openai/conversation.item.create.function_call_output.json": "9a9bf0539a6164f02941ddd2f21c61003e874fedd119dc8640fdcea816eda643",
+    "testing/voice-conformance/fixtures/openai/response.audio.done.json": "2561531d8a8e8845e8bdea1bce69c930483d0a93f2689829b55a966f52d37051",
+    "testing/voice-conformance/fixtures/openai/response.create.json": "96bc3ee07e6c9513d5a7bd68c5b80a4b8303d0f6899227ed591c3c569c43e0ba",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.append.json": "baa4f21ae5307bc3e432029b4b36123106c49e81a490534150258b53e628733c",
+    "testing/voice-conformance/fixtures/openai/response.done.json": "4d8b49704c7074e46924d6c121aa718484402e27b4a19181ed43faea987c20dc",
+    "testing/voice-conformance/fixtures/openai/response.function_call_arguments.delta.json": "68cd7ffbf37195d5dd5f7111e3b7753ea0cf37efd364434483b05f842f8c72b6",
+    "testing/voice-conformance/fixtures/openai/response.function_call_arguments.done.json": "8dd0e401456e1a9870c672602fc39078af9404659f995aa4ac092c58d5978f9c",
+    "testing/voice-conformance/fixtures/openai/input_audio_buffer.commit.json": "dcf4490c1275cd3875fd129c2b1af103056990a81a7439ad435fa0d8724294f0",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.stop.json": "d41b62b06fe5956d347754bdd73e14934e5edbe91c75f329960d9877ea638ec9",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.mark.json": "60f65f529a8f4127e8d5e3e2da8bf1aad26cd781944ec34e3a4d19f25da9eb87",
+    "testing/voice-conformance/fixtures/twilio/transcript.jsonl": "16e5ec404d98c32f5f1c0b1f3e66d59cefa03ab83a808ffe719a66f3bd8a5eeb",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.start.json": "c175b86db23b6e65792e2b329aa478677da0d02250a381055e12ea79735925cb",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.media.json": "ef624163fca51b266d0a31e5de95994cae4abe0a981ee2390146366f08bddea9",
+    "testing/voice-conformance/fixtures/twilio/to-twilio.clear.json": "4fde2c2477f07f230afcda2a717af9d2113754623c44bea7b38127f4cfe8f454",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.connected.json": "e1fa438ad758032befb9a028fc700e4ca050a9be98543d69d8b806b25a052ffd",
+    "testing/voice-conformance/fixtures/twilio/from-twilio.dtmf.json": "17826d57d5cb33e015bfd273c4b5a95d0dbd0cb868e177449d044a333ddaa9b8",
+    "testing/voice-conformance/fixtures/twilio/to-twilio.media.json": "7374199a8f5d1def71caa410276ee018a27709a91a0df7d8d54e3368529b12d1",
+    "testing/voice-conformance/fixtures/twilio/to-twilio.mark.json": "961eba963f01f25730656ebc8d5cbd0aa89081feabbfcef500e0e62986e56cdb"
+  },
+  "codec": {
+    "base": "5aa3edde9d768db666c6b43164ebf89612c56967",
+    "cases": [
+      {
+        "old": "codec_legs::spec(openai/conversation.item.create.function_call_output.json) -> spec_codec + relay_check",
+        "new": "openai_conversation_item_create_function_call_output",
+        "fixture_sha256": "9a9bf0539a6164f02941ddd2f21c61003e874fedd119dc8640fdcea816eda643",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/conversation.item.create.message.json) -> spec_codec + relay_check",
+        "new": "openai_conversation_item_create_message",
+        "fixture_sha256": "15cad3bb383ec13054142379fce6fe2db49d8ea5bb060fa5eb5eb61f2af7bfda",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/conversation.item.truncate.json) -> spec_codec + relay_check",
+        "new": "openai_conversation_item_truncate",
+        "fixture_sha256": "570c31d9ae749a1fc81edc07af7922786cc32656a97f2ce59b14a296abfec900",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/error.json) -> spec_codec + relay_check",
+        "new": "openai_error",
+        "fixture_sha256": "df11366931faa20d368b86c4a188b066b9fd69c12c62ddc997bf3f01a6b8288b",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/input_audio_buffer.append.json) -> spec_codec + relay_check",
+        "new": "openai_input_audio_buffer_append",
+        "fixture_sha256": "baa4f21ae5307bc3e432029b4b36123106c49e81a490534150258b53e628733c",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/input_audio_buffer.clear.json) -> spec_codec + relay_check",
+        "new": "openai_input_audio_buffer_clear",
+        "fixture_sha256": "d96760ac3e9f6a036fa8e2fa7c8b630b154290f77fc514f605e8b36e2fa695d5",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/input_audio_buffer.commit.json) -> spec_codec + relay_check",
+        "new": "openai_input_audio_buffer_commit",
+        "fixture_sha256": "dcf4490c1275cd3875fd129c2b1af103056990a81a7439ad435fa0d8724294f0",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/input_audio_buffer.speech_started.json) -> spec_codec + relay_check",
+        "new": "openai_input_audio_buffer_speech_started",
+        "fixture_sha256": "79ebe3d4864bf2c37ac78a7830cb8ca0e63027ac38454b4bafa13cce3efee9ce",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/input_audio_buffer.speech_stopped.json) -> spec_codec + relay_check",
+        "new": "openai_input_audio_buffer_speech_stopped",
+        "fixture_sha256": "6ef09c90416b67f2b73951683c59771adca8fca592229aef6d20d2e01e5caa53",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/response.audio.delta.json) -> spec_codec + relay_check",
+        "new": "openai_response_audio_delta",
+        "fixture_sha256": "8b097ba17ff10ffff3cdd72fc8646da6dbfafa5a307b0b8d79fe5527886646d0",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/response.audio.done.json) -> spec_codec + relay_check",
+        "new": "openai_response_audio_done",
+        "fixture_sha256": "2561531d8a8e8845e8bdea1bce69c930483d0a93f2689829b55a966f52d37051",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/response.cancel.json) -> spec_codec + relay_check",
+        "new": "openai_response_cancel",
+        "fixture_sha256": "b79cd303acf774d13ba78fe5f953d0b88d60430e1686e1893e9a1363b9fa0d44",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/response.create.json) -> spec_codec + relay_check",
+        "new": "openai_response_create",
+        "fixture_sha256": "96bc3ee07e6c9513d5a7bd68c5b80a4b8303d0f6899227ed591c3c569c43e0ba",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "{\"event_id\":\"evt_client_0008\",\"response\":{\"modalities\":[\"audio\",\"text\"],\"output_audio_format\":\"pcm16\",\"temperature\":0.8,\"tool_choice\":\"auto\",\"voice\":\"alloy\",\"max_output_tokens\":512},\"type\":\"response.create\"}"
+      },
+      {
+        "old": "codec_legs::spec(openai/response.done.json) -> spec_codec + relay_check",
+        "new": "openai_response_done",
+        "fixture_sha256": "4d8b49704c7074e46924d6c121aa718484402e27b4a19181ed43faea987c20dc",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/response.function_call_arguments.delta.json) -> spec_codec + relay_check",
+        "new": "openai_response_function_call_arguments_delta",
+        "fixture_sha256": "68cd7ffbf37195d5dd5f7111e3b7753ea0cf37efd364434483b05f842f8c72b6",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/response.function_call_arguments.done.json) -> spec_codec + relay_check",
+        "new": "openai_response_function_call_arguments_done",
+        "fixture_sha256": "8dd0e401456e1a9870c672602fc39078af9404659f995aa4ac092c58d5978f9c",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/session.created.json) -> spec_codec + relay_check",
+        "new": "openai_session_created",
+        "fixture_sha256": "6920ca6b8534a4255c3f0164dcac50d7031dec39b2a56523d0aa96306c0f6623",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(openai/session.update.ga_nested.json) -> spec_codec + relay_check",
+        "new": "openai_session_update_ga_nested",
+        "fixture_sha256": "915adbe0daf53d9c64d7a95f85ea7956fb5713f9bd8ae7027d5af5f95765f1c1",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "{\"event_id\":\"evt_client_0001g\",\"session\":{\"audio\":{\"input\":{\"format\":\"pcm16\",\"noise_reduction\":{\"type\":\"static\"},\"transcription\":{\"model\":\"whisper-1\"},\"turn_detection\":{\"create_response\":true,\"interrupt_response\":true,\"prefix_padding_ms\":300,\"silence_duration_ms\":500,\"threshold\":0.5,\"type\":\"server_vad\"}},\"output\":{\"format\":\"pcm16\",\"speed\":1.0,\"voice\":\"marin\"}},\"output_modalities\":[\"audio\"],\"parallel_tool_calls\":true,\"tool_choice\":\"auto\",\"model\":\"m-cap\",\"truncation\":{\"retention_ratio\":1.0,\"token_limits\":{\"post_instructions\":28672},\"type\":\"retention_ratio\"},\"type\":\"realtime\",\"max_output_tokens\":1024},\"type\":\"session.update\"}"
+      },
+      {
+        "old": "codec_legs::spec(openai/session.update.json) -> spec_codec + relay_check",
+        "new": "openai_session_update",
+        "fixture_sha256": "70640ebb77329d1b295ee13e26f57167f78174fcaefba4f8c3083825d659585a",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "{\"event_id\":\"evt_client_0001\",\"session\":{\"input_audio_format\":\"pcm16\",\"input_audio_transcription\":{\"model\":\"whisper-1\"},\"modalities\":[\"audio\",\"text\"],\"output_audio_format\":\"pcm16\",\"temperature\":0.8,\"tool_choice\":\"auto\",\"turn_detection\":{\"create_response\":true,\"interrupt_response\":true,\"prefix_padding_ms\":300,\"silence_duration_ms\":500,\"threshold\":0.5,\"type\":\"server_vad\"},\"voice\":\"alloy\",\"model\":\"m-cap\",\"truncation\":{\"retention_ratio\":1.0,\"token_limits\":{\"post_instructions\":28672},\"type\":\"retention_ratio\"},\"type\":\"realtime\",\"max_output_tokens\":4096,\"max_response_output_tokens\":4096},\"type\":\"session.update\"}"
+      },
+      {
+        "old": "codec_legs::spec(openai/session.update.semantic_vad.json) -> spec_codec + relay_check",
+        "new": "openai_session_update_semantic_vad",
+        "fixture_sha256": "dfa1ccfba25509c6cad9a804df93f5a911bd75a6c6229d9bf7c7812f74a23216",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "{\"event_id\":\"evt_client_0001b\",\"session\":{\"input_audio_format\":\"g711_ulaw\",\"input_audio_transcription\":{\"model\":\"gpt-4o-transcribe\"},\"modalities\":[\"audio\",\"text\"],\"output_audio_format\":\"g711_ulaw\",\"temperature\":0.7,\"tool_choice\":\"none\",\"turn_detection\":{\"create_response\":true,\"eagerness\":\"medium\",\"interrupt_response\":true,\"type\":\"semantic_vad\"},\"voice\":\"verse\",\"model\":\"m-cap\",\"truncation\":{\"retention_ratio\":1.0,\"token_limits\":{\"post_instructions\":28672},\"type\":\"retention_ratio\"},\"type\":\"realtime\",\"max_output_tokens\":4096,\"max_response_output_tokens\":4096},\"type\":\"session.update\"}"
+      },
+      {
+        "old": "codec_legs::spec(gemini/clientContent.json) -> spec_codec + relay_check",
+        "new": "gemini_client_content",
+        "fixture_sha256": "f1f30bb36d4232b41654b8d1a09a94222a730b0b46c11b5c6f237536774580e6",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/goAway.json) -> spec_codec + relay_check",
+        "new": "gemini_go_away",
+        "fixture_sha256": "8736567a7f598ab114d684cf6d43a68bf3fd14af54244d635b77bc05efc4a313",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/realtimeInput.audioStreamEnd.json) -> spec_codec + relay_check",
+        "new": "gemini_realtime_input_audio_stream_end",
+        "fixture_sha256": "31354c541d70c81f158178373366f1d87868afcc19b053cd81c15b3be0238b77",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/realtimeInput.json) -> spec_codec + relay_check",
+        "new": "gemini_realtime_input",
+        "fixture_sha256": "3d74ae9ab20e84925e317bb5364b48c8a77d0de5dd53476c41c4617874e35524",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/realtimeInput.mediaChunks.json) -> spec_codec + relay_check",
+        "new": "gemini_realtime_input_media_chunks",
+        "fixture_sha256": "81db4236b1c930e41dd38ba76e2f261cea1743f4ae2ab14c38479f550c09deca",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/serverContent.inputTranscription.json) -> spec_codec + relay_check",
+        "new": "gemini_server_content_input_transcription",
+        "fixture_sha256": "0373e40ca76bcd9066ed88a6a816a47ac1877ea932d602b1de54a3aecf9b35e8",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/serverContent.interrupted.json) -> spec_codec + relay_check",
+        "new": "gemini_server_content_interrupted",
+        "fixture_sha256": "590ebb3b0d8521900a788f80dad227e0ba5acbe41057c3899ce99f43a983a38a",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/serverContent.modelTurn.json) -> spec_codec + relay_check",
+        "new": "gemini_server_content_model_turn",
+        "fixture_sha256": "12e0d763dd47bd3a9c9882b7bd173ebca981315032eaed1334d01031fc9bc270",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/serverContent.outputTranscription.json) -> spec_codec + relay_check",
+        "new": "gemini_server_content_output_transcription",
+        "fixture_sha256": "ae9d7b7a38011068ed0c00c1380018a6dcd73bf15a2d3cd79a6b6ddebfa5ef72",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/serverContent.turnComplete.json) -> spec_codec + relay_check",
+        "new": "gemini_server_content_turn_complete",
+        "fixture_sha256": "d1a90318e660d73ec27f153a4b481d799dbe7e4bcf2fe2208e182eb098f0268f",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/setup.json) -> spec_codec + relay_check",
+        "new": "gemini_setup",
+        "fixture_sha256": "1749a3ffbc004495a420152dddbb4997734009a2a74066f6c7f149cfe689db78",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "{\"setup\":{\"inputAudioTranscription\":{},\"outputAudioTranscription\":{},\"realtimeInputConfig\":{\"automaticActivityDetection\":{\"disabled\":false,\"endOfSpeechSensitivity\":\"END_SENSITIVITY_HIGH\",\"prefixPaddingMs\":300,\"silenceDurationMs\":500,\"startOfSpeechSensitivity\":\"START_SENSITIVITY_HIGH\"}},\"model\":\"m-cap\",\"generationConfig\":{\"responseModalities\":[\"AUDIO\"],\"speechConfig\":{\"voiceConfig\":{\"prebuiltVoiceConfig\":{\"voiceName\":\"Puck\"}}},\"temperature\":0.8,\"maxOutputTokens\":512}}}"
+      },
+      {
+        "old": "codec_legs::spec(gemini/setupComplete.json) -> spec_codec + relay_check",
+        "new": "gemini_setup_complete",
+        "fixture_sha256": "4f9b14fdcb93a19bb3fe34d43588b8ad6f43cc7299b5e6b738fbf67b27bed75b",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/toolCall.json) -> spec_codec + relay_check",
+        "new": "gemini_tool_call",
+        "fixture_sha256": "dbf887007b36314249e1aa99f57c3d78ebf5f725fe6a9e3e1f360c2dc609fe20",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/toolCallCancellation.json) -> spec_codec + relay_check",
+        "new": "gemini_tool_call_cancellation",
+        "fixture_sha256": "512fb026c615cdf5037cec89a44bec8be3e1dfcbd46bf28d6f6f63f36fad5b7c",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/toolResponse.json) -> spec_codec + relay_check",
+        "new": "gemini_tool_response",
+        "fixture_sha256": "d404ad3fde217c1605f27a621695c3c0890ad357c36b497c7f86a5101886eb7c",
+        "direction": "caller",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      },
+      {
+        "old": "codec_legs::spec(gemini/usageMetadata.json) -> spec_codec + relay_check",
+        "new": "gemini_usage_metadata",
+        "fixture_sha256": "57882bc2baab9ae81a2b492c0d383834ce9766898b9bf5ed1be502972303da36",
+        "direction": "far",
+        "predicates": [
+          "independent fixture semantic shape",
+          "all answers READY/more=0",
+          "session record rows=0",
+          "exact ordered directional bytes",
+          "far GET socket and exact need",
+          "all unit sources reported",
+          "exact nonzero token classes",
+          "session fee iff far answered",
+          "initial OpenAI locked-session fields",
+          "finite drain"
+        ],
+        "expected_governed": "canonical fixture bytes"
+      }
+    ],
+    "transcripts": [
+      {
+        "old": "codec_legs::replay(openai)",
+        "new": "openai_captured_transcript_preserves_order_and_semantics",
+        "fixture_sha256": "b36a46b18b5ed22cb8723ba3bb052ce1e82db7942da94dc5fe978c5544bbba93",
+        "frames": 24,
+        "predicates": [
+          "exact ordered directional bytes per input frame",
+          "actual linked and actual dlopened image each compared with same fixed oracle",
+          "all answers READY/more0/records0",
+          "far GET socket/exact declared need",
+          "at most64 drain calls per input",
+          "all unit sources reported; exact final token classes; session fee1",
+          "input and emitted fixed temporal semantic skeleton including audio payload and tool-call/result identity",
+          "complete original initial-session-lock fields"
+        ]
+      },
+      {
+        "old": "codec_legs::replay(gemini)",
+        "new": "gemini_captured_transcript_preserves_order_and_semantics",
+        "fixture_sha256": "8dc5f0b13846a9d386fe351343cc36ca43cca6773555eea2b8461e618cb18fdb",
+        "frames": 14,
+        "predicates": [
+          "exact ordered directional bytes per input frame",
+          "actual linked and actual dlopened image each compared with same fixed oracle",
+          "all answers READY/more0/records0",
+          "far GET socket/exact declared need",
+          "at most64 drain calls per input",
+          "all unit sources reported; exact final token classes; session fee1",
+          "input and emitted fixed temporal semantic skeleton including audio payload and tool-call/result identity"
+        ]
+      }
+    ],
+    "native": "NOT RUN; requires fresh cdylib, ordinary38 linked/drop target and strict CI Clippy, normal lock candidate from fleet owner.",
+    "status": "SOURCE READY; native not run",
+    "source_files": {
+      "plane-streaming-plugin/tests/voice_codecs.rs": "ef0e17b56f72d2c56659e07f0f437a8fc7521ba9dd5e5b577a994f4866c861cf",
+      "plane-streaming-plugin/tests/support/voice_codec_oracles.rs": "f3c6e586e20032ecdaf7a867fad5979f5341682b0d5c4938df972350cc927856"
+    },
+    "drain_bound": "The first answer is inspected and at most64 FROM_KERNEL collect calls follow, matching door::Session::collect. Exhausting the64th nonquiet call fails.",
+    "governed_oracles": {
+      "count": 8,
+      "method": "Literal expected bytes, no production configure_rule/response_rule/splice calls in test oracle. Source-inspected constraints: locked m-cap,4096 output ceiling,28672 context; caller instructions/tools/prompt removed; surviving caller fields retained. Native byte equality remains pending."
+    },
+    "documented_drops": [
+      {
+        "fixture": "goAway.json",
+        "ordinary_test": "gemini_go_away",
+        "meaning": "No shared old IR event; opaque ABI wire relay still required byte-for-byte, no wire drop."
+      },
+      {
+        "fixture": "toolCallCancellation.json",
+        "ordinary_test": "gemini_tool_call_cancellation",
+        "meaning": "No shared old IR event; opaque ABI wire relay still required byte-for-byte, no wire drop."
+      },
+      {
+        "fixture": "serverContent.inputTranscription.json",
+        "ordinary_test": "gemini_server_content_input_transcription",
+        "meaning": "No shared old IR event; opaque ABI wire relay still required byte-for-byte, no wire drop."
+      },
+      {
+        "fixture": "serverContent.outputTranscription.json",
+        "ordinary_test": "gemini_server_content_output_transcription",
+        "meaning": "No shared old IR event; opaque ABI wire relay still required byte-for-byte, no wire drop."
+      }
+    ],
+    "planted_negative_predicate_transfer": [
+      {
+        "old": "relay_plants::plant_units (phantom class1 amount7)",
+        "ordinary_predicate": "Exact nonzero token vector equality rejects any added phantom token, including duplicates; final transcript vectors checked."
+      },
+      {
+        "old": "relay_plants::plant_rewrite (remove/insert event_id)",
+        "ordinary_predicate": "Exact complete emitted-byte vector equality rejects re-encoding or event_id change."
+      },
+      {
+        "old": "relay_plants::plant_drop (pop emission)",
+        "ordinary_predicate": "Exact one-emission directional vector per input plus full ordered transcript equality rejects a missing frame."
+      }
+    ],
+    "removed_runner_mechanisms": "No Rig/Plant/judge/decoder interpreter copied. Semantic skeleton and documented drops are explicit ordinary field assertions; Rust equality owns byte/unit mismatch failures."
+  },
+  "twilio": {
+    "base": "5aa3edde9d768db666c6b43164ebf89612c56967",
+    "old_file": "testing/voice-conformance/harness/src/twilio_legs.rs",
+    "old_blob": "3dbf10b9756a6a33a21ff46f0e21be068f1f53c9",
+    "target": "plane-streaming-plugin/tests/voice_twilio.rs",
+    "cases": [
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(from-twilio.connected.json) + judge_steps",
+        "ordinary_test": "codec_cases::from_twilio_connected",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(from-twilio.start.json) + judge_steps",
+        "ordinary_test": "codec_cases::from_twilio_start",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(from-twilio.media.json) + judge_steps",
+        "ordinary_test": "codec_cases::from_twilio_media",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(from-twilio.stop.json) + judge_steps",
+        "ordinary_test": "codec_cases::from_twilio_stop",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(from-twilio.dtmf.json) + judge_steps",
+        "ordinary_test": "codec_cases::from_twilio_dtmf",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(from-twilio.mark.json) + judge_steps",
+        "ordinary_test": "codec_cases::from_twilio_mark",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(to-twilio.media.json) + judge_steps",
+        "ordinary_test": "codec_cases::to_twilio_media",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(to-twilio.mark.json) + judge_steps",
+        "ordinary_test": "codec_cases::to_twilio_mark",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "spec \u2192 codec_half + fixture_steps(to-twilio.clear.json) + judge_steps",
+        "ordinary_test": "codec_cases::to_twilio_clear",
+        "preserved": [
+          "verbatim published fixture bytes",
+          "codec decode/identity/roundtrip or exact envelope-shape predicate",
+          "actual linked and freshly built dropped door",
+          "every expected far/caller emission, no extra emissions, Ready/more0",
+          "stop exactly one done; others no done",
+          "far audio.done caller side remains unspecified; far egress none"
+        ]
+      },
+      {
+        "old": "transcript_steps + transcript",
+        "ordinary_test": "media_cases::published_transcript_in_exact_order",
+        "preserved": [
+          "verbatim transcript11JSONLlines; meta preserved",
+          "explicit connected/start/3media/dtmf/far media/audio done/mark/stop order",
+          "all inbound codec reads; exact byte and streamSid media parity",
+          "mulaw lock only; exact one stop"
+        ]
+      },
+      {
+        "old": "route_script + route_check",
+        "ordinary_test": "twilio_route_signature_principal_and_start_binding",
+        "preserved": [
+          "exact snapshot GET /twilio/{call_id} ws refusal dialect2",
+          "WS_TRANSPORT PrefixOneLevel /twilio webhook-signature only",
+          "four exact path dialect selectors",
+          "only Twilio signature route, inbound ws webhook-signature need",
+          "principal required, direct m-cap model and Twilio dialect",
+          "connected/start lock no extra egress",
+          "no media before start; exact media after; other streamSid suppressed",
+          "type-tagged append refused by session once, no egress"
+        ]
+      },
+      {
+        "old": "media_steps + media_script + media_check",
+        "ordinary_test": "media_cases::two_calls_preserve_media_sid_barge_in_and_one_terminal",
+        "preserved": [
+          "two independent actual stream IDs50/51 with distinct sid",
+          "three160byte mulaw samples byte-for-byte",
+          "connected/dtmf/mark silent",
+          "far audio mapped own sid, audio.done no far egress",
+          "speech started emits exact clear",
+          "stop done once",
+          "post-terminal media/secondstop/kernelcollect exact Refused/no emission"
+        ]
+      },
+      {
+        "old": "far_tool_call + tool_steps + tool_call",
+        "ordinary_test": "media_cases::twilio_tool_calls_are_opaque_and_never_answered",
+        "preserved": [
+          "three exact far tool event JSON frames, byte-for-byte to caller",
+          "no upstream answer or swallowed frame",
+          "start lock only and exact one stop"
+        ]
+      },
+      {
+        "old": "meter_script + meter_expected + meter_check",
+        "ordinary_test": "meter_cases::twilio_cumulative_units_short_recall_and_stop_settlement",
+        "preserved": [
+          "all16 exact original meter_expected lines",
+          "100frames2seconds +49frames0.98sec cumulative audio",
+          "exact farusage classes/sources/counts/per-session fee",
+          "units_cap2 SHORT needed6 then same frame recall not doublecounted",
+          "stop midturn settles once; secondstop refuses no units/done",
+          "unanswered1sec no fee; alreadysettled turn not billed again"
+        ]
+      }
+    ],
+    "fixtures_sha256": {
+      "testing/voice-conformance/fixtures/twilio/from-twilio.connected.json": "e1fa438ad758032befb9a028fc700e4ca050a9be98543d69d8b806b25a052ffd",
+      "testing/voice-conformance/fixtures/twilio/from-twilio.dtmf.json": "17826d57d5cb33e015bfd273c4b5a95d0dbd0cb868e177449d044a333ddaa9b8",
+      "testing/voice-conformance/fixtures/twilio/from-twilio.mark.json": "60f65f529a8f4127e8d5e3e2da8bf1aad26cd781944ec34e3a4d19f25da9eb87",
+      "testing/voice-conformance/fixtures/twilio/from-twilio.media.json": "ef624163fca51b266d0a31e5de95994cae4abe0a981ee2390146366f08bddea9",
+      "testing/voice-conformance/fixtures/twilio/from-twilio.start.json": "c175b86db23b6e65792e2b329aa478677da0d02250a381055e12ea79735925cb",
+      "testing/voice-conformance/fixtures/twilio/from-twilio.stop.json": "d41b62b06fe5956d347754bdd73e14934e5edbe91c75f329960d9877ea638ec9",
+      "testing/voice-conformance/fixtures/twilio/to-twilio.clear.json": "4fde2c2477f07f230afcda2a717af9d2113754623c44bea7b38127f4cfe8f454",
+      "testing/voice-conformance/fixtures/twilio/to-twilio.mark.json": "961eba963f01f25730656ebc8d5cbd0aa89081feabbfcef500e0e62986e56cdb",
+      "testing/voice-conformance/fixtures/twilio/to-twilio.media.json": "7374199a8f5d1def71caa410276ee018a27709a91a0df7d8d54e3368529b12d1",
+      "testing/voice-conformance/fixtures/twilio/transcript.jsonl": "16e5ec404d98c32f5f1c0b1f3e66d59cefa03ab83a808ffe719a66f3bd8a5eeb"
+    },
+    "retired_framework_selfchecks": [
+      "Step/Run declarative interpreter and line-diff presentation",
+      "Rig paired execution framework replaced with explicit per-test linked/dropped loops",
+      "judge/judge_planted/plant_swallowed/plant_answered synthetic mutation selfchecks; their real product predicates remain exact assertions"
+    ],
+    "retirement_authority": "lead owns original package retirement; no old source or fixture edits here",
+    "native_status": "NOT RUN; new case source authoring only; build lane required",
+    "ordinary_source": "c09f46456cea9543069f80098f3aaed9602ab7db",
+    "shared_abi_ancestor": "c2c3edd90575c04507f339c974736088276bc5d7",
+    "ordinary_files_sha256": {
+      "plane-streaming-plugin/tests/voice_twilio.rs": "5619e63919ac4522650a0e8099461508a9a30ad926a4b5c58506901612bb4b13",
+      "plane-streaming-plugin/tests/support/voice_twilio_cases_codec.rs": "c2ce1e25be8842c9b2d70cad12c814eb04bac6135202aa93d5946ce40bd3eb5e",
+      "plane-streaming-plugin/tests/support/voice_twilio_cases_media.rs": "f2da7a66f5af285bacc29200857932d4078e29a79fd59e2af7c585abd12167c4",
+      "plane-streaming-plugin/tests/support/voice_twilio_cases_meter.rs": "6f2f64972252c6887fc7c274988d8c2c03348574267beccaf59478ce5ed2ca8c"
+    }
+  },
+  "composition": [
+    {
+      "old_slice": "provider-credential",
+      "ordinary_test": "provider_credentials_stay_on_declared_needs_and_mint_dials_nothing",
+      "preserved_predicates": [
+        "exactly2providerrequests",
+        "mint READY LOCAL nofar/no need/noverb/notarget",
+        "mint403 exactnot_granted body andDONE",
+        "declaredoutboundWS authstyle/address",
+        "no credentialheader/bearervalue",
+        "dialect authstyles"
+      ]
+    },
+    {
+      "old_slice": "metering-lease",
+      "ordinary_test": "declared_units_fee_and_short_recall_settle_each_turn_once",
+      "preserved_predicates": [
+        "exact9billableclassfamilies",
+        "per_sessionfeeunit",
+        "zeroarrivalestimate",
+        "exact9answercumulativeunits/SHORTrecall/nodoublebill/no feeunanswered"
+      ]
+    },
+    {
+      "old_slice": "session-scope",
+      "ordinary_test": "session_and_pool_grants_keep_principals_and_refuse_unpublished_claims",
+      "preserved_predicates": [
+        "scopekinds session/pool",
+        "allclaimprincipal/opclass/404codes",
+        "exactgrantrefusaltype/message/status"
+      ]
+    },
+    {
+      "old_slice": "gemini-live-route",
+      "ordinary_test": "gemini_claim_arrival_and_handshake_keep_their_dialect",
+      "preserved_predicates": [
+        "bothpublishedpath/refusaldialect",
+        "onecanonicalaudience",
+        "GeminiREADYprincipal/directmodel/dialect",
+        "READYhandshake noextra",
+        "exactfarGET/socketneed/setup",
+        "exactsetupCompletecaller"
+      ]
+    },
+    {
+      "old_slice": "provider-dial",
+      "ordinary_test": "provider_frames_use_actual_declared_socket_needs_and_report_usage",
+      "preserved_predicates": [
+        "bothdialectsREADY",
+        "nonemptyfarframesallGETneed/socket",
+        "exactreportedtokenclasses+sessionfee"
+      ]
+    },
+    {
+      "old_slice": "admit-refusal",
+      "ordinary_test": "all_policy_refusal_reasons_render_4xx_without_opening_or_dialing",
+      "preserved_predicates": [
+        "allkernelstatus/error/message/body/contenttype/status0/norecords",
+        "everypolicyreasonclass4xx/noservererror",
+        "far+collectrefused/noemission/emptydrive",
+        "admittedcontroldials"
+      ]
+    },
+    {
+      "old_slice": "route-failover",
+      "ordinary_test": "routes_and_attempts_preserve_fresh_dials_without_early_output",
+      "preserved_predicates": [
+        "allarrivalLOCALorDIRECT",
+        "READYturnowessocket",
+        "attempt1+2READYquiet/notdone",
+        "unnamedmodelPOOLroute"
+      ]
+    },
+    {
+      "old_slice": "audit-record",
+      "ordinary_test": "audit_rows_name_the_pool_once_and_never_create_private_records",
+      "preserved_predicates": [
+        "auditkind/opclass/recordkinds",
+        "allarrivalopclass0",
+        "noauthoredsessionrows",
+        "exactonesinglemintrefusedauditrowpoolidentity"
+      ]
+    },
+    {
+      "old_slice": "exit-terminal",
+      "ordinary_test": "session_exit_settles_once_and_refuses_every_late_side",
+      "preserved_predicates": [
+        "endREADYDONEexactfinalunits",
+        "latecollect+farrefusedempty",
+        "driveempty",
+        "exactly2endsacross2sessions",
+        "preframeinterruptionnounitsnofee"
+      ]
+    },
+    {
+      "old_slice": "tool-reply",
+      "ordinary_test": "tool_calls_and_caller_results_relay_unchanged_without_authored_answers",
+      "preserved_predicates": [
+        "bothdialectsallREADY",
+        "exactcallannouncementscalleronly",
+        "exactoneunchangedusageframecaller",
+        "exactreportedtokens+onecall",
+        "exactonecallerreplyfar/noauthoredanswer"
+      ]
+    }
+  ],
+  "observations": {
+    "file": "plane-streaming-plugin/tests/voice_observations.rs",
+    "cases": [
+      "V1-barge-in-preemption",
+      "V2-turn-budget-enforcement",
+      "V3-metering-lease-settled",
+      "V4-dialect-downscope",
+      "D2-hard-close-on-exhaustion"
+    ],
+    "gating": false,
+    "policy": "No ignores or behavioral assertions: each prints observed match plus actual values. The loader retains its ABI validity checks."
+  },
+  "negative_predicate_transfer": [
+    {
+      "old": "codec relay_plants::plant_units",
+      "ordinary": "voice_codecs exact token-class vector and session fee"
+    },
+    {
+      "old": "codec relay_plants::plant_rewrite/plant_drop",
+      "ordinary": "voice_codecs exact directional frame vectors"
+    },
+    {
+      "old": "provider credential/brokeredmint/openbydefault",
+      "ordinary": "provider_credentials_stay_on_declared_needs_and_mint_dials_nothing exact fields/route/status/body"
+    },
+    {
+      "old": "routefailover secondattempt emission/unnamedroute",
+      "ordinary": "routes_and_attempts_preserve_fresh_dials_without_early_output empty attempt and POOLroute assertions"
+    },
+    {
+      "old": "audit ownrow/doubledrow/keyidentity",
+      "ordinary": "audit_rows_name_the_pool_once_and_never_create_private_records exact one-element Row vector"
+    },
+    {
+      "old": "tool answeredupstream/withheldusage",
+      "ordinary": "tool_calls_and_caller_results_relay_unchanged_without_authored_answers exact one-frame per-phase direction/bytes"
+    },
+    {
+      "old": "Twilio corruptedstep/claimstyle/swallowed/answered/callmeter",
+      "ordinary": "voice_twilio exact transcript lines/authclaims/framevectors/unitvectors and owning voice_twilio_fixtures11"
+    }
+  ],
+  "runner_only_removed": [
+    "Rig/judge/judge_planted/Plant/log interpreter",
+    "duplicate independent decoder used only to check fixture semantic shape/nonempty/drops and transcript ordering; explicit perfixture semantic assertions/transcript fields replace it",
+    "shell discovery/RED log planting/process-execution plumbing",
+    "private-module visibility overlay"
+  ],
+  "native_passes": {
+    "codec": "36 original successes plus2 corrected-governedliteral successes",
+    "twilio": "14 actual ABI +11 owning private codec/claim cases",
+    "composition": 10,
+    "observations": "5 executed; matched values remain NON-GATING",
+    "strict_fmt_source": "12b0a7b8a8601917048c8ce45756d86a8419366b"
+  },
+  "unmapped_genuine_predicates": [],
+  "caveat": "No new mutant-product or RED execution receipt is invented. The exact ordinary assertions retain predicates that rejected the original planted log mutations."
+}

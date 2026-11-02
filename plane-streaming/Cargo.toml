@@ -59,6 +59,5 @@ busbar-contract = { workspace = true, features = ["test-seal"] }
 tracing-subscriber = { workspace = true }
 # THE DOOR, BOTH WAYS lives in the cdylib twin (`plane-streaming-plugin/tests/both_ways.rs`): the
 # loader is that crate's dev-dependency, never this one's, so the logic crate's one busbar edge is
-# the contract (the fleet's twin rule, as mcp, a2a and decisions hold it). The voice conformance
-# harness that drives the door both ways (`testing/voice-conformance/`, ARCHITECT Q6) is busbar's
-# testkit crate.
+# the contract (the fleet's twin rule, as mcp, a2a and decisions hold it). The voice fixtures are exercised by ordinary tests
+# in the cdylib twin; no separate testkit crate is required.

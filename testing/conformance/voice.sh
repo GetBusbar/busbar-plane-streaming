@@ -1,192 +1,48 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-#
-# The voice suites of the conformance check: `voice.sh openai` (voice-openai-realtime),
-# `voice.sh gemini` (voice-gemini-live) and `voice.sh twilio` (voice-twilio). Tier spec-conformant: no vendor kit exists, so the suite is
-# this repo's own spec battery (testing/voice-conformance: every fixture of the dialect, the captured
-# transcripts and the door's seams), driving the plane's door BOTH WAYS,
-# linked and dropped in, through busbar's loader at the pin ($BUSBAR_CHECKOUT).
-#
-# THE THREE LEGS, as the brief states them:
-#   control   every assertion holds the two doors (linked, dropped) to one answer, and the answer to a
-#             check computed from the dialect's own wire (the fixtures), never from the door
-#   negative  the RED arm: VOICE_CONFORM_RED=1 makes each leg's planted wrong answer the subject, and
-#             every conformance leg must then go red; one that stays green is a battery that cannot
-#             tell, and the suite fails
-#   subject   the plane built from this checkout; one that cannot build is `fail`, armed
-#
-# The battery is run ONCE per check (normal, then RED) into a cache beside the verdicts, and each
-# suite id judges its own dialect's rows of it: a leg that judges both realtime dialects counts for
-# both, a Twilio row (the `twilio-*` legs and the `twilio` fixture slice) counts for voice-twilio
-# alone, and each suite reports, never counts, the other dialects' failures.
-#
+# Existing suite IDs, backed by ordinary Rust assertions over the actual linked/dropped doors.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-# judge <dialect> <run dir> <verdict file> <suite id>: the suite's verdict from the battery's rows.
-judge() {
-python3 -I - "$@" <<'PY'
-import json, os, re, sys
-dialect, run, out, suite = sys.argv[1:5]
-standard = {"openai": "OpenAI Realtime API", "gemini": "Google Gemini Live API",
-            "twilio": "Twilio Media Streams"}[dialect]
-
-def verdict(status, reason):
-    v = {"suite": suite, "status": status, "armed": True, "standard": standard,
-         "plan": "spec battery + replay", "reason": reason}
-    with open(out, "w") as f:
-        json.dump(v, f, indent=2, sort_keys=True)
-        f.write("\n")
-    print(status, reason)
-    sys.exit(0 if status == "pass" else 1)
-
-def rows(name):
-    p = os.path.join(run, name)
-    if not os.path.exists(p):
-        return None
-    r = []
-    for line in open(p, encoding="utf-8", errors="replace"):
-        f = line.rstrip("\n").split("\t", 3)
-        f += [""] * (4 - len(f))
-        r.append(f)
-    return r
-
-def who(leg, slice_, detail):
-    """The dialects a row judges: {'openai'}, {'gemini'}, {'twilio'}, both, or none (governance)."""
-    both = {"openai", "gemini"}
-    if leg == "governance":
-        return set()
-    if leg.startswith("twilio-") or slice_ == "twilio":
-        return {"twilio"}
-    if leg in ("spec-per-dialect",):
-        return {slice_} if slice_ in both else both
-    if leg == "gemini-live-route":
-        return {"gemini"}
-    if leg in ("replay", "tool-reply"):
-        for d in ("openai", "gemini"):
-            if detail.startswith(d):
-                return {d}
-    return both
-
-if os.path.exists(os.path.join(run, "subject-failed")):
-    verdict("fail", "the subject could not be built: " + open(os.path.join(run, "subject-failed")).read().strip())
-
-def completed(name):
-    """Use the runner's existing terminal summary and actual exit status, before grading rows."""
-    try:
-        with open(os.path.join(run, name + ".rc"), encoding="utf-8") as f:
-            code = f.read().strip()
-        with open(os.path.join(run, name + ".log"), encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        verdict("fail", f"{name} has no execution status or complete log")
-    terminal = lines[-1] if lines else ""
-    if code == "0" and terminal.startswith("VOICE verdict: "):
-        return
-    if code == "1" and re.fullmatch(
-        r"FAIL: [1-9][0-9]* conformance leg\(s\) failed\. This IS a finding about busbar\.", terminal
-    ):
-        return
-    verdict("fail", f"{name} did not complete (exit {code}); see {name}.log")
-
-completed("battery")
-completed("red")
-normal, red = rows("results.tsv"), rows("red.tsv")
-if not normal:
-    verdict("fail", "the battery wrote no results (see battery.log)")
-if not red:
-    verdict("fail", "the RED arm wrote no results (see red.log)")
-
-def mine(rs):
-    return [r for r in rs if dialect in who(*r[:2], r[3])]
-
-bad = [r for r in mine(normal) if r[2] != "PASS"]
-others = [r for r in normal if r[0] != "governance" and dialect not in who(*r[:2], r[3]) and r[2] != "PASS"]
-legs = sorted({r[0] for r in mine(normal)})
-if bad:
-    ex = "; ".join(f"{r[0]}/{r[1]}: {r[3][:160]}" for r in bad[:6])
-    verdict("fail", f"{len(bad)} of {len(mine(normal))} {dialect} assertion(s) failed: {ex}")
-if not mine(normal):
-    verdict("fail", f"the battery wrote no {dialect} results")
-# the negative control: every conformance leg that judges this dialect must go red under RED
-redrows = mine(red)
-stayed = [l for l in legs if not any(r[0] == l and r[2] != "PASS" for r in redrows)]
-if stayed:
-    verdict("fail", "the RED arm did not bite on: " + ", ".join(stayed))
-verdict("pass", f"{len(mine(normal))} {dialect} assertions over {len(legs)} legs held on both doors (linked and dropped); "
-        f"the RED arm turned all {len(legs)} red; {len(others)} other-dialect failure(s) judged by their own suite, not counted here")
-PY
-}
-
-selftest() {
-  local t; t="$(mktemp -d)"
-  # the judge, on planted battery rows: each suite judges its own dialect's rows, the RED arm must
-  # bite on every leg it judges, an unbuilt subject is red
-  local ok=0 legs=(provider-credential metering-lease session-scope provider-dial admit-refusal
-    route-failover audit-record exit-terminal)
-  plant() { # plant <dir>: one passing row per leg and dialect, and a RED arm that bites on all of them
-    rm -rf "$1"; mkdir -p "$1"; local l
-    { printf 'spec-per-dialect\topenai\tPASS\tx\nspec-per-dialect\tgemini\tPASS\tx\n'
-      printf 'replay\tdefault\tPASS\topenai transcript\nreplay\tdefault\tPASS\tgemini transcript\n'
-      printf 'tool-reply\t1\tPASS\topenai call\ntool-reply\t1\tPASS\tgemini call\n'
-      printf 'gemini-live-route\t1\tPASS\tx\ngovernance\t1\tFAIL\tnot a conformance result\n'
-      for l in "${legs[@]}"; do printf '%s\t1\tPASS\tx\n' "$l"; done
-      printf 'spec-per-dialect\ttwilio\tPASS\tx\ntwilio-route\t1\tPASS\tx\n'
-      printf 'twilio-media\t1\tPASS\tx\ntwilio-media\t2\tPASS\tx\ntwilio-metering\t1\tPASS\tx\n'
-    } >"$1/results.tsv"
-    sed 's/\tPASS\t/\tFAIL\t/' "$1/results.tsv" >"$1/red.tsv"
-    printf '0\n' >"$1/battery.rc"
-    printf '1\n' >"$1/red.rc"
-    printf 'VOICE verdict: completed fixture\n' >"$1/battery.log"
-    printf 'FAIL: 1 conformance leg(s) failed. This IS a finding about busbar.\n' >"$1/red.log"
-  }
-  expect() { # expect <want rc> <name> <dialect> <dir>
-    local got=0
-    judge "$3" "$4" "$t/v.json" "voice-$3" >/dev/null 2>&1 || got=1
-    if [ "$got" != "$1" ]; then echo "selftest FAILED: $2 (exit $got, wanted $1)"; ok=1; else echo "  ok: $2"; fi
-  }
-  local r="$t/run" d
-  plant "$r"
-  for d in openai gemini twilio; do expect 0 "a whole green battery passes $d" "$d" "$r"; done
-  plant "$r"; sed -i.b 's/^twilio-media\t2\tPASS/twilio-media\t2\tFAIL/' "$r/results.tsv"
-  expect 1 "a failing twilio row fails twilio" twilio "$r"
-  expect 0 "a failing twilio row does not count for openai" openai "$r"
-  plant "$r"; sed -i.b 's/^spec-per-dialect\topenai\tPASS/spec-per-dialect\topenai\tFAIL/' "$r/results.tsv"
-  expect 1 "a failing openai row fails openai" openai "$r"
-  expect 0 "a failing openai row does not count for twilio" twilio "$r"
-  plant "$r"; sed -i.b 's/^twilio-route\t1\tFAIL/twilio-route\t1\tPASS/' "$r/red.tsv"
-  expect 1 "a RED arm that does not bite on a twilio leg fails twilio" twilio "$r"
-  plant "$r"; : >"$r/red.tsv"
-  expect 1 "no RED arm rows is red" twilio "$r"
-  plant "$r"; echo "no build" >"$r/subject-failed"
-  expect 1 "a subject that did not build is red" twilio "$r"
-  local execution_rc=0
-  python3 -I "$here/testing/voice-conformance/tests/test_execution.py" || execution_rc=$?
-  rm -rf "$t"; [ "$ok" = 0 ] && [ "$execution_rc" = 0 ]
-}
-[ "${1:-}" = --selftest ] && { selftest; exit $?; }
-
-dialect="${1:?usage: voice.sh openai|gemini|twilio | --selftest}"
+cd "$here" || exit 2
+dialect="${1:?usage: voice.sh openai|gemini|twilio}"
+case "$dialect" in openai|gemini|twilio) ;; *) echo "unknown dialect: $dialect" >&2; exit 2 ;; esac
 : "${CONFORMANCE_SUITE:?}" "${CONFORMANCE_OUT:?}" "${BUSBAR_CHECKOUT:?}"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/target}"
-run="$(dirname "$CONFORMANCE_OUT")/voice-run"
-
-if [ ! -f "$run/done" ]; then
-  rm -rf "$run"; mkdir -p "$run"
-  if bash "$here/testing/conformance/voice-overlay.sh" "$here" "$run/ws" >"$run/overlay.log" 2>&1; then
-    export VC_WORKSPACE_MANIFEST="$run/ws/Cargo.toml"
-    ( export VOICE_RESULT_LOG="$run/results.tsv"; unset VOICE_CONFORM_RED
-      bash "$here/testing/voice-conformance/voice-conformance.sh" --verdict >"$run/battery.log" 2>&1 )
-    echo "$?" >"$run/battery.rc"
-    ( export VOICE_RESULT_LOG="$run/red.tsv" VOICE_CONFORM_RED=1
-      bash "$here/testing/voice-conformance/voice-conformance.sh" --verdict >"$run/red.log" 2>&1 )
-    echo "$?" >"$run/red.rc"
+case "$CARGO_TARGET_DIR" in /*) ;; *) export CARGO_TARGET_DIR="$here/$CARGO_TARGET_DIR" ;; esac
+mkdir -p "$CONFORMANCE_OUT"
+status=0
+# Build the actual image from this source and this normal locked graph before loading it.
+cargo +1.98.0 build --locked -p busbar-plane-streaming-plugin --lib >"$CONFORMANCE_OUT/build.log" 2>&1 || status=$?
+case "$(uname -s)" in
+  Darwin) export BUSBAR_PLUGIN_CDYLIB="$CARGO_TARGET_DIR/debug/libbusbar_plane_streaming_plugin.dylib" ;;
+  *) export BUSBAR_PLUGIN_CDYLIB="$CARGO_TARGET_DIR/debug/libbusbar_plane_streaming_plugin.so" ;;
+esac
+if [ "$status" = 0 ]; then
+  if [ "$dialect" = twilio ]; then
+    cargo +1.98.0 test --locked -p busbar-plane-streaming-plugin --test voice_twilio -- --nocapture >"$CONFORMANCE_OUT/ordinary.log" 2>&1 || status=$?
+    if [ "$status" = 0 ]; then
+      cargo +1.98.0 test --locked -p busbar-plane-streaming --lib voice_twilio_fixtures -- --nocapture >"$CONFORMANCE_OUT/codec.log" 2>&1 || status=$?
+    fi
   else
-    echo "the plane's workspace could not be written: $(tail -n 3 "$run/overlay.log" | tr '\n' ' ')" >"$run/subject-failed"
+    cargo +1.98.0 test --locked -p busbar-plane-streaming-plugin --test voice_codecs "$dialect" -- --nocapture >"$CONFORMANCE_OUT/ordinary.log" 2>&1 || status=$?
+    if [ "$status" = 0 ]; then
+      cargo +1.98.0 test --locked -p busbar-plane-streaming-plugin --test voice_composition -- --nocapture >"$CONFORMANCE_OUT/composition.log" 2>&1 || status=$?
+    fi
+    # These print observations. Their matched values never affect the suite verdict.
+    if [ "$status" = 0 ]; then
+      cargo +1.98.0 test --locked -p busbar-plane-streaming-plugin --test voice_observations -- --nocapture >"$CONFORMANCE_OUT/observations.log" 2>&1 || status=$?
+    fi
   fi
-  touch "$run/done"
 fi
-
-# what the harness build said, for the log of a run that could not build it
-grep -h -E '^error' -A6 "$run/battery.log" 2>/dev/null | head -n 40
-judge "$dialect" "$run" "$CONFORMANCE_OUT/verdict.json" "$CONFORMANCE_SUITE"
+python3 -I - "$dialect" "$CONFORMANCE_SUITE" "$CONFORMANCE_OUT/verdict.json" "$status" <<'PY'
+import json,sys
+name,suite,path,code=sys.argv[1:]
+code=int(code)
+with open(path,'w') as output:
+    json.dump({'suite':suite,'status':'pass' if code==0 else 'fail','armed':True,
+               'standard':{'openai':'OpenAI Realtime API','gemini':'Google Gemini Live API','twilio':'Twilio Media Streams'}[name],
+               'plan':'ordinary fixture, transcript and linked/dropped ABI assertions',
+               'reason':'ordinary Rust assertions passed' if code==0 else f'actual build or ordinary Rust assertions failed (exit {code}); see suite logs'},output,indent=2)
+    output.write('\n')
+PY
+exit "$status"

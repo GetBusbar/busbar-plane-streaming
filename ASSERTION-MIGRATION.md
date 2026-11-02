@@ -133,18 +133,12 @@ requires pinned/final-SDK native compilation and actual both-door execution. No
 passing runtime or full structural ACK is claimed. Cargo.lock is deliberately
 untouched for the coordinated resolver step.
 
-### Explicit separate-runner residual
+### Separate-runner migration closure
 
-The excluded `testing/voice-conformance/harness` is a pre-existing standalone
-0.0.0 voice_conform binary with codec/composition/governance/Twilio legs and its
-own Rig/judgment/RED controls. It imports no deleted kit and drives the actual
-product, but it remains a bespoke conformance runner rather than ordinary Rust
-tests and still has its legacy VOICE_CONFORM_DOOR artifact fallback. It is outside
-the active two-member workspace. The planes coordinator explicitly instructed
-that it be preserved and flagged for root scope discussion rather than silently
-deleted or claimed migrated. Its assertion transfer/removal and artifact contract
-require a separate decision; this candidate covers the active two-member kit and
-macro consumers only.
+The excluded voice runner was subsequently transferred to ordinary Rust cases and
+retired. `VOICE-ORDINARY-MIGRATION.json` records the exact original hashes,
+fixture hashes, case/predicate crosswalk and bounded native evidence scope.
+The fixtures remain unchanged; observations retain their non-gating status.
 
 
 ## Streaming credential envelope restoration
