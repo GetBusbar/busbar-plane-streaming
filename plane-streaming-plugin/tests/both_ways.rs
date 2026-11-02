@@ -2311,7 +2311,7 @@ fn a_mint_for_a_key_outside_the_session_models_grant_is_refused() {
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(512);
-        let answer = b.call(p, &live_push(71, 0, FROM_CALLER, PIECE_LAST, &[]));
+        let answer = b.call(p, &push(71, 0, FROM_CALLER, PIECE_LAST, &[]));
         assert!(answer.contains("status=403"), "{answer}");
         assert!(answer.contains("not_granted"), "{answer}");
         assert!(answer.contains("m-cap"), "{answer}");
