@@ -201,8 +201,25 @@ fn media_of(sid: &str) -> Vec<u8> {
 #[test]
 fn a_refused_carrier_frame_is_said_in_one_log_line_naming_why() {
     use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
-    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
-    let steps = tracing::subscriber::with_default(cap.clone(), || {
+    struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = std::sync::Arc::clone(&output);
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || Log(std::sync::Arc::clone(&writer)))
+        .finish();
+    let steps = tracing::subscriber::with_default(subscriber, || {
         let mut bridge = TwilioBridge::default();
         [
             bridge.from_caller(&start_of("MZ1", "audio/l16", 16_000)),
@@ -210,13 +227,10 @@ fn a_refused_carrier_frame_is_said_in_one_log_line_naming_why() {
         ]
     });
     assert!(steps.iter().all(|s| matches!(s, CallerStep::Refused)));
-    assert_eq!(cap.messages().len(), 2, "{:?}", cap.messages());
-    assert!(
-        cap.contains("16000Hz"),
-        "the format is named: {:?}",
-        cap.messages()
-    );
-    assert!(cap.contains("malformed"), "{:?}", cap.messages());
+    let lines = String::from_utf8(output.lock().unwrap().clone()).expect("UTF-8 diagnostics");
+    assert_eq!(lines.lines().count(), 2, "{lines}");
+    assert!(lines.contains("16000Hz"), "the format is named: {lines}");
+    assert!(lines.contains("malformed"), "{lines}");
 }
 
 /// A second start frame cannot rebind the call's stream.

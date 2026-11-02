@@ -322,8 +322,25 @@ fn a_session_open_rewrite_patches_the_locked_params_or_refuses() {
 #[test]
 fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
     let locked = SessionConfig::default();
-    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
-    let (bad, good) = tracing::subscriber::with_default(cap.clone(), || {
+    struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = std::sync::Arc::clone(&output);
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || Log(std::sync::Arc::clone(&writer)))
+        .finish();
+    let (bad, good) = tracing::subscriber::with_default(subscriber, || {
         let bad = committed_session_config(&locked, br#"{"voice":7}"#);
         if let Err(why) = &bad {
             report_unapplied_rewrite(why);
@@ -335,8 +352,16 @@ fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
     });
     assert!(bad.is_err());
     assert_eq!(good.ok().and_then(|g| g.voice).as_deref(), Some("marin"));
-    assert_eq!(cap.count("session-open hook"), 1, "{:?}", cap.messages());
-    assert!(cap.contains("not a session config"), "{:?}", cap.messages());
+    let lines = String::from_utf8(output.lock().unwrap().clone()).expect("UTF-8 diagnostics");
+    assert_eq!(
+        lines
+            .lines()
+            .filter(|line| line.contains("session-open hook"))
+            .count(),
+        1,
+        "{lines}"
+    );
+    assert!(lines.contains("not a session config"), "{lines}");
 }
 
 /// A session opened after its open's hooks rewrote the params opens under the rewritten params,

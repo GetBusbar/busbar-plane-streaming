@@ -565,8 +565,25 @@ fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
 /// A success answering busbar's call that names no provider call is said in one log line (audit
 #[test]
 fn a_success_naming_no_provider_call_is_said_in_one_log_line() {
-    let cap = busbar_test_kit::warn_capture::WarnCapture::default();
-    let named = tracing::subscriber::with_default(cap.clone(), || {
+    struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = std::sync::Arc::clone(&output);
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || Log(std::sync::Arc::clone(&writer)))
+        .finish();
+    let named = tracing::subscriber::with_default(subscriber, || {
         (
             provider_call(None),
             provider_call(Some("/v1/realtime/calls/x")),
@@ -574,5 +591,13 @@ fn a_success_naming_no_provider_call_is_said_in_one_log_line() {
         )
     });
     assert_eq!(named, (None, None, Some("rtc_ok".to_string())));
-    assert_eq!(cap.count("naming no call"), 2, "{:?}", cap.messages());
+    let lines = String::from_utf8(output.lock().unwrap().clone()).expect("UTF-8 diagnostics");
+    assert_eq!(
+        lines
+            .lines()
+            .filter(|line| line.contains("naming no call"))
+            .count(),
+        2,
+        "{lines}"
+    );
 }
