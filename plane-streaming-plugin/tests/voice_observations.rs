@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Five retained vision observations. Reported matches are observations, not conformance gates.
 #[path = "support/voice_abi.rs"]
-#[allow(dead_code)]
-mod voice_abi;
+pub mod voice_abi;
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{
     FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST,

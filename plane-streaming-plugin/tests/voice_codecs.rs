@@ -11,8 +11,7 @@ use busbar_plugin_loader::dispatch::{DispatchConfig, Dispatcher};
 use serde_json::Value;
 
 #[path = "support/voice_abi.rs"]
-#[allow(dead_code)] // This target exercises only the concrete live-session ABI helpers.
-mod abi;
+pub mod abi;
 #[path = "support/voice_codec_oracles.rs"]
 mod oracles;
 
