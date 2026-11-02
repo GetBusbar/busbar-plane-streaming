@@ -1197,8 +1197,8 @@ impl PlaneLife for Plane {
             .ok()
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
-        let wake = input.open().host().and_then(|h| Wake::of(&h));
-        let services = input.open().host().and_then(|h| Services::of(&h));
+        let wake = input.open().host().and_then(Wake::of);
+        let services = input.open().host().and_then(Services::of);
         let plane = Plane {
             public_url,
             generations: Mutex::new(Vec::new()),
