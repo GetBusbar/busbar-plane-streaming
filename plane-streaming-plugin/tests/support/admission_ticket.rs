@@ -30,10 +30,11 @@ impl busbar_test_kit::services_double::ServicesDouble for AdmissionHost {
         match self.admission {
             Admission::Key if previous == 0 => Stored::ready(TICKET_NONE),
             Admission::Key | Admission::Refused => Stored::refused("admission is not held"),
-            Admission::Failed => Stored {
-                outcome: Outcome::Failed,
-                ..Stored::ready(0)
-            },
+            Admission::Failed => {
+                let mut stored = Stored::ready(0);
+                stored.outcome = Outcome::Failed;
+                stored
+            }
             // A READY scalar outside ticket.take's vocabulary is a broken host response.
             Admission::Broken => Stored::ready(u64::MAX),
         }
@@ -41,10 +42,9 @@ impl busbar_test_kit::services_double::ServicesDouble for AdmissionHost {
 
     fn random_fill(&self, len: u64) -> busbar_contract::services::Stored {
         self.draws.fetch_add(1, Ordering::Relaxed);
-        busbar_contract::services::Stored {
-            bytes: vec![0xa0; usize::try_from(len).expect("a random buffer length")],
-            ..busbar_contract::services::Stored::ready(0)
-        }
+        let mut stored = busbar_contract::services::Stored::ready(0);
+        stored.bytes = vec![0xa0; usize::try_from(len).expect("a random buffer length")];
+        stored
     }
 }
 

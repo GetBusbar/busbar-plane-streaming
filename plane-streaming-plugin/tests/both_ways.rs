@@ -496,7 +496,9 @@ fn the_tail_states_what_the_served_plane_declares() {
             std::slice::from_raw_parts(t.billable_classes_ptr(), t.billable_classes_len()),
         )
     };
-    busbar_contract::abi::plane::check::check_fee_units(fee_units, billable)
+    // SAFETY: the live plane's static tail owns every fee/class string referenced by these
+    // slices, including their initialized nested bytes, throughout this validation call.
+    unsafe { busbar_contract::abi::plane::check::check_fee_units(fee_units, billable) }
         .expect("every fee unit is a billable class");
 }
 
@@ -846,10 +848,9 @@ impl busbar_test_kit::services_double::ServicesDouble for TicketHost {
             .minted
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = record.to_vec();
-        busbar_contract::services::Stored {
-            bytes: TICKET.as_bytes().to_vec(),
-            ..busbar_contract::services::Stored::ready(TICKET_EXPIRES)
-        }
+        let mut stored = busbar_contract::services::Stored::ready(TICKET_EXPIRES);
+        stored.bytes = TICKET.as_bytes().to_vec();
+        stored
     }
 
     fn ticket_take(
@@ -864,10 +865,9 @@ impl busbar_test_kit::services_double::ServicesDouble for TicketHost {
         if again {
             busbar_contract::services::Stored::refused("the unit's ticket was taken already")
         } else if unit == Some(50) {
-            busbar_contract::services::Stored {
-                bytes: TICKET_RECORD.to_vec(),
-                ..busbar_contract::services::Stored::ready(TICKET_TAKEN)
-            }
+            let mut stored = busbar_contract::services::Stored::ready(TICKET_TAKEN);
+            stored.bytes = TICKET_RECORD.to_vec();
+            stored
         } else {
             busbar_contract::services::Stored::ready(TICKET_NONE)
         }
@@ -878,15 +878,14 @@ impl busbar_test_kit::services_double::ServicesDouble for TicketHost {
             .draws
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             .to_le_bytes();
-        busbar_contract::services::Stored {
-            bytes: draw
-                .iter()
-                .copied()
-                .cycle()
-                .take(usize::try_from(len).expect("a length"))
-                .collect(),
-            ..busbar_contract::services::Stored::ready(0)
-        }
+        let mut stored = busbar_contract::services::Stored::ready(0);
+        stored.bytes = draw
+            .iter()
+            .copied()
+            .cycle()
+            .take(usize::try_from(len).expect("a length"))
+            .collect();
+        stored
     }
 }
 
