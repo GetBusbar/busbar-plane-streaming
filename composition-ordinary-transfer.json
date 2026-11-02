@@ -1,0 +1,60 @@
+{
+  "scope": "source migration only; native UNRUN",
+  "original_composition_sha256": "e568e9ee02453d23d86b18a5e2cc7da8bd736a89b84d4f933046040547ee3076",
+  "original_governance_sha256": "8f3161b8e13936dfb67cac91a53b97ed279568acdaf39c63c17692cd86777cae",
+  "composition": [
+    {
+      "old_slice": "provider-credential",
+      "ordinary_test": "provider_credentials_stay_on_declared_needs_and_mint_dials_nothing"
+    },
+    {
+      "old_slice": "metering-lease",
+      "ordinary_test": "declared_units_fee_and_short_recall_settle_each_turn_once"
+    },
+    {
+      "old_slice": "session-scope",
+      "ordinary_test": "session_and_pool_grants_keep_principals_and_refuse_unpublished_claims"
+    },
+    {
+      "old_slice": "gemini-live-route",
+      "ordinary_test": "gemini_claim_arrival_and_handshake_keep_their_dialect"
+    },
+    {
+      "old_slice": "provider-dial",
+      "ordinary_test": "provider_frames_use_actual_declared_socket_needs_and_report_usage"
+    },
+    {
+      "old_slice": "admit-refusal",
+      "ordinary_test": "all_policy_refusal_reasons_render_4xx_without_opening_or_dialing"
+    },
+    {
+      "old_slice": "route-failover",
+      "ordinary_test": "routes_and_attempts_preserve_fresh_dials_without_early_output"
+    },
+    {
+      "old_slice": "audit-record",
+      "ordinary_test": "audit_rows_name_the_pool_once_and_never_create_private_records"
+    },
+    {
+      "old_slice": "exit-terminal",
+      "ordinary_test": "session_exit_settles_once_and_refuses_every_late_side"
+    },
+    {
+      "old_slice": "tool-reply",
+      "ordinary_test": "tool_calls_and_caller_results_relay_unchanged_without_authored_answers"
+    }
+  ],
+  "observations": {
+    "file": "plane-streaming-plugin/tests/voice_observations.rs",
+    "cases": [
+      "V1-barge-in-preemption",
+      "V2-turn-budget-enforcement",
+      "V3-metering-lease-settled",
+      "V4-dialect-downscope",
+      "D2-hard-close-on-exhaustion"
+    ],
+    "gating": false,
+    "policy": "No ignores or behavioral assertions: each prints observed match plus actual values. The loader retains its ABI validity checks."
+  },
+  "preserved": "Original Rig files and fixtures untouched. Explicit per-case ABI calls and bounded64 drains. Exact byte/frame/unit/record predicates replace runner judgments; no interpreter or simulated subject."
+}
