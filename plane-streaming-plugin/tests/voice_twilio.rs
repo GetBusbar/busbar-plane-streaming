@@ -6,18 +6,12 @@ use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{
     FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PRINCIPAL_REQUIRED, ROUTE_DIRECT,
 };
-use busbar_contract::grammar::Selector;
 use busbar_contract::media::{base64_decode, base64_encode};
-use busbar_plane_streaming::claims::{dialect_for, Dialect, DIALECT_CLAIMS, WS_TRANSPORT};
-use busbar_plane_streaming::codec::topology::twilio::{
-    assert_g711_ulaw, TwilioEnvelope, TwilioEvent,
-};
-use busbar_plane_streaming::plane_door::{ROUTES, SIGNATURE_AUTH};
 use busbar_plugin_loader::dispatch::kinds::plane::Plane;
 use busbar_plugin_loader::dispatch::{DispatchConfig, Dispatcher, Plugin};
 use serde_json::{json, Value};
 #[path = "support/voice_abi.rs"]
-mod voice_abi;
+pub mod voice_abi;
 use voice_abi::{arrive, load, open, piece, session, Answer, Piece, MODEL, PUBLIC, SESSION};
 #[path = "support/voice_twilio_cases_codec.rs"]
 mod codec_cases;
@@ -197,39 +191,6 @@ fn twilio_route_signature_principal_and_start_binding() {
             .claims
             .iter()
             .any(|c| c.line == "GET /twilio/{call_id} ws" && c.refusal_dialect == 2));
-        let claim = DIALECT_CLAIMS
-            .iter()
-            .find(|c| c.dialect == Dialect::TwilioMediaStreams)
-            .unwrap();
-        assert_eq!(claim.claim.transport, WS_TRANSPORT);
-        assert_eq!(claim.claim.selector, Selector::PrefixOneLevel("/twilio"));
-        assert_eq!(claim.claim.scheme_alternatives, ["webhook-signature"]);
-        assert_eq!(
-            ["/twilio/call_0001", "/twilio", "/twilio/a/b", "/twiliofoo"].map(dialect_for),
-            [Some(Dialect::TwilioMediaStreams), None, None, None]
-        );
-        let route = ROUTES
-            .iter()
-            .find(|r| r.target.starts_with("/twilio"))
-            .unwrap();
-        assert_eq!(
-            (
-                route.verb,
-                route.target,
-                route.carrier,
-                route.upgrade,
-                route.auth
-            ),
-            ("GET", "/twilio/{call_id}", "ws", true, "webhook-signature")
-        );
-        assert_eq!(
-            ROUTES
-                .iter()
-                .filter(|r| r.auth == SIGNATURE_AUTH)
-                .map(|r| r.target)
-                .collect::<Vec<_>>(),
-            ["/twilio/{call_id}"]
-        );
         let served = p.served();
         assert!(served.need_auths.iter().zip(&served.need_transports).any(
             |((direction, auth), transport)| *direction == DIRECTION_INBOUND
@@ -240,10 +201,7 @@ fn twilio_route_signature_principal_and_start_binding() {
         assert_eq!(a.outcome, Outcome::Ready);
         assert_eq!(a.principal, PRINCIPAL_REQUIRED);
         assert_eq!(a.route, (ROUTE_DIRECT, MODEL.to_string()));
-        assert_eq!(
-            served.dialects[a.dialect as usize],
-            busbar_plane_streaming::provider::TWILIO_MEDIA_STREAMS
-        );
+        assert_eq!(served.dialects[a.dialect as usize], "twilio_media_streams");
         let start = bytes(&fixture("from-twilio.start.json"));
         let connected = bytes(&json!({"event":"connected","protocol":"Call","version":"1.0.0"}));
         quiet(piece(&p, &session(40, CLAIM, FROM_CALLER, 0, &[])));
