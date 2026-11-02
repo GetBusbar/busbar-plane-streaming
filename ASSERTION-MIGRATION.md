@@ -117,9 +117,11 @@ refuses a debug build.
 
 ## Artifact and qualification boundaries
 
-BUSBAR_PLUGIN_CDYLIB remains mandatory and absolute. The exact file must exist and
-must not predate this checkout's actual production source. Missing/stale images
-fail; there is no stale search, linked replacement, or absent-artifact skip.
+BUSBAR_PLUGIN_CDYLIB remains mandatory and absolute. The exact file must exist;
+there is no stale search, linked replacement, or absent-artifact skip. The build
+lane proves freshness by building the immutable source first and recording the
+library hash. The filesystem timestamp comparison is retired as a tooling
+heuristic: archive extraction times do not establish source or artifact identity.
 The actual loader admits/dlopens that file against the actual linked Statement.
 The preceding CI policy still requires coordinated export of this path and removal
 of the retired BUSBAR_CONFORMANCE_RED comparator controls.
