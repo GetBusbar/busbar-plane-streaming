@@ -2,15 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One request unit as the kernel's route pump drives it: the mint door's one request, and what
-//! the plane answers it with.
-//!
-//! The mint door is answered by the plane itself (`ROUTE_LOCAL`): it dials nothing, so the pump
-//! pushes the caller's body alone, as one last piece. The plane answers it with a ticket busbar
-//! mints (`ticket.mint`, row 132), its record the session config the ticket locks. The door makes the
-//! host call; this unit says what to ask for and how the caller is answered.
-//!
-//! Every answer is plain data in the plane's own vocabulary; writing it into the host's buffers is
-//! the door's job.
 
 use std::sync::Arc;
 
@@ -79,8 +70,6 @@ pub struct RequestUnit {
 
 impl RequestUnit {
     /// Open the plane's state for one kernel unit on `door` (the unit's identity is the kernel's;
-    /// the door keys this state by it), minting over the `locked` session params. `None` for a door
-    /// that opens a live session.
     #[must_use]
     pub fn open(door: Door, locked: impl Into<Arc<SessionConfig>>) -> Option<Self> {
         if door.is_session() {
@@ -94,10 +83,7 @@ impl RequestUnit {
         })
     }
 
-    /// AN SDP OFFER THAT ARRIVED AS A PLAIN REQUEST (coordinator ruling 3, R10): the SDP door opens
-    /// a call session over the WebRTC carrier, so a one-request unit on it is refused on its first
-    /// piece, 501 explained and audited against `entry`'s pool (the session's model), whatever piece
-    /// that is. Nothing is dialled and no units are reported.
+    /// An SDP offer arriving as a plain request opens a unit that returns a refusal.
     #[must_use]
     pub fn plain_offer(locked: impl Into<Arc<SessionConfig>>, entry: Option<String>) -> Self {
         Self {
@@ -109,7 +95,6 @@ impl RequestUnit {
     }
 
     /// `true` once the far end has begun its answer: never, for a unit that dials nothing, so a
-    /// cancel of one is ABORTED (owner billing rule R21).
     #[must_use]
     pub const fn far_answered(&self) -> bool {
         false
@@ -128,7 +113,6 @@ impl RequestUnit {
     }
 
     /// The plane's answer to `piece`. The caller's last piece asks for the ticket, once; a far
-    /// end never answers a unit that dials nothing.
     pub fn on_piece(&mut self, piece: Piece) -> Answer {
         if self.answered || self.asked {
             return Answer::Nothing;
@@ -161,9 +145,6 @@ impl RequestUnit {
     }
 
     /// The key's grant does not reach `entry`, the model the ticket's call would be routed to: the
-    /// caller is refused, explained, and no ticket is asked for (R10 grant ruling).
-    /// The refusal is the unit's audit row too, naming the pool the grant does not reach (never
-    /// the key).
     pub fn not_granted(&mut self, entry: &str) -> Answer {
         self.answered = true;
         Answer::Rejected(
@@ -175,8 +156,7 @@ impl RequestUnit {
         )
     }
 
-    /// The host answered the mint: the caller's answer, the ticket (sealed: R7) and its expiry, or
-    /// the served plane's 502 naming why.
+    /// Answer a completed mint with its sealed ticket and expiry, or explain the mint failure.
     pub fn minted(&mut self, result: Result<Minted, String>) -> Answer {
         let reply = match result {
             Ok(m) => minted(&m.ticket, m.expires_at_unix),

@@ -42,8 +42,6 @@ fn telephony() -> SessionUnit<OpenAiRealtimeCodec> {
 
 #[test]
 fn the_callers_audio_on_the_telephony_door_reaches_the_far_end() {
-    // The served telephony leg handed Twilio's `event`-tagged frames to the realtime reader, which
-    // reads only `type`-tagged ones: the caller's audio reached no one.
     let mut s = telephony();
     let started = s.from_caller(&start("audio/x-mulaw"));
     assert!(started.to_caller.is_empty() && !started.end, "{started:?}");
@@ -103,12 +101,7 @@ fn model_audio_and_a_barge_in_reach_the_caller_in_the_carriers_envelope() {
     );
 }
 
-/// RED-BEFORE-GREEN (Law 11: "a tool call on any session, Twilio included, is relayed down that
-/// session as-is"): the model's tool call on a telephony session goes down the session byte for
-/// byte (the item that opens it, its streamed arguments, the item when done), and busbar answers
-/// nothing upstream; a frame the carrier has no event for and that is no tool call still reaches no
-/// one. RED: the envelope kept only audio and barge-ins, so the call was dropped and the session
-/// stalled with no one to answer it.
+/// A tool call on a telephony session is relayed down that session unchanged.
 #[test]
 fn a_tool_call_on_a_telephony_session_is_relayed_down_the_session_as_is() {
     let mut s = telephony();
@@ -140,7 +133,7 @@ fn a_tool_call_on_a_telephony_session_is_relayed_down_the_session_as_is() {
 fn a_stop_settles_the_open_turns_counters_once() {
     let mut s = telephony();
     let _ = s.from_caller(&start("audio/x-mulaw"));
-    // Two seconds of 8 kHz mu-law: 8 bytes a millisecond.
+
     let _ = s.from_caller(&media("MZ1", &[0; 16_000]));
     let seconds = CLASSES
         .iter()
@@ -260,7 +253,6 @@ fn a_media_payload_resuming_after_padding_is_refused_and_never_billed() {
 
 #[test]
 fn every_emitted_frame_is_a_text_message_and_either_opcode_is_read() {
-    // Gemini Live's server frames arrive binary: the bytes are read as they are.
     let mut s = SessionUnit::open(
         crate::codec::ir::codec::gemini::GeminiLiveCodec,
         SessionConfig::default(),
@@ -268,8 +260,7 @@ fn every_emitted_frame_is_a_text_message_and_either_opcode_is_read() {
     );
     let setup = json(serde_json::json!({"setupComplete": {}}));
     let plan = s.from_far_end(&setup);
-    // The setupComplete is relayed to the caller, once, exactly as it came, and is text (audit
-    // S85: the loop below held for a session that emitted nothing).
+
     assert_eq!(plan.to_caller, vec![setup.clone()], "relayed as it came");
     assert!(plan.to_far_end.is_empty());
     for frame in plan.to_caller.iter().chain(plan.to_far_end.iter()) {
@@ -280,11 +271,7 @@ fn every_emitted_frame_is_a_text_message_and_either_opcode_is_read() {
     }
 }
 
-/// RED-BEFORE-GREEN (MONEY, #42 and the owner ruling of 2026-10-27: a present-but-unreadable
-/// billed count is never a zero, and spend is always attributed): a far-end usage report the reader
-/// cannot read bills the plane's floor for the turn (its output tokens) and the session goes on; the
-/// report reaches the caller as sent, and the door is told once so the kernel counts the reader's
-/// fault. RED before the ruling: the session ended unmetered.
+/// An unreadable usage report bills the floor and is reported once.
 #[test]
 fn an_unreadable_usage_report_bills_the_floor_and_is_reported_once() {
     let mut s = SessionUnit::open(OpenAiRealtimeCodec, SessionConfig::default(), false);

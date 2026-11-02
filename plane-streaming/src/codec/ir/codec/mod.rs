@@ -2,18 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The meter's reads: what a live session reads off each frame, in each dialect.
-//!
-//! A session is a relay: a same-dialect relay runs the reader only as a read-only tap and sends
-//! the client's bytes with governed byte-level splices. So the reader answers only what
-//! the session meters: from the far end, a usage report, an error, a tool call's open; from the
-//! caller, the audio it sends. The plane writes no frame of its own beyond the two a session is
-//! told, the locked session and the ceiling's error ([`crate::splice::LockedKeys`]).
-//!
-//! The dialect is OpenAI Realtime GA: every wire event is a JSON object tagged on a `type` field. A
-//! frame whose head names no metered `type` is not read further ([`peek::Head`]); a metered one is
-//! read as a `serde_json::Value` and hand-mapped by `type`. Uplink audio is counted off one borrowed
-//! read of the frame ([`peek::Lite`]), its length taken from the base64 length
-//! ([`peek::base64_len`]). A malformed or unrecognized frame meters nothing.
 
 use crate::codec::ir::media::AudioFormat;
 use crate::codec::ir::usage::IrDuplexUsage;
@@ -49,21 +37,14 @@ pub enum Metered {
     ToolOpen,
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────────────────────────
-
 fn str_at<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or_default()
 }
 
 /// One output token per this many bytes of an unreadable usage report: the llm plane's floor
-/// estimate (`TRUNCATED_TAIL_BYTES_PER_TOKEN`).
 const FLOOR_BYTES_PER_TOKEN: u64 = 4;
 
 /// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity
-/// was reported), a readable count is the count (through the crate's one seam,
-/// [`crate::codec::ir::usage::read_count_u64`]), and a present-but-UNREADABLE count is a refusal: a count the
-/// provider really sent is never metered as zero. The error is the operator-facing message: the field and
-/// a BOUNDED spelling (cut on a character, so a hostile multi-byte spelling cannot panic the cut).
 fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     match o.and_then(|x| x.get(key)) {
         None => Ok(0),
@@ -76,7 +57,6 @@ fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
 }
 
 /// A present usage report `u` that is not an object: unreadable, never an all-zero report. The error
-/// is the operator-facing message, its spelling bounded as [`billed_count`]'s.
 pub(crate) fn usage_object(u: &Value, member: &str) -> Result<(), String> {
     if u.is_object() {
         return Ok(());
@@ -88,9 +68,6 @@ pub(crate) fn usage_object(u: &Value, member: &str) -> Result<(), String> {
 }
 
 /// What an unreadable usage report bills (spend is always attributed and nothing is silent): the
-/// llm plane's floor, one output token per [`FLOOR_BYTES_PER_TOKEN`] bytes
-/// of the report and at least one, marked as the plane's floor. Its one log line names the field and
-/// its spelling; the door's call capture carries it to the plugin's host log.
 pub(crate) fn usage_floor(report_len: usize, message: &str) -> IrDuplexUsage {
     busbar_contract::diag_warn!(
         busbar_contract::diagnostic::USAGE_TAP_DECODE_FAILED,
@@ -104,23 +81,12 @@ pub(crate) fn usage_floor(report_len: usize, message: &str) -> IrDuplexUsage {
     }
 }
 
-// ── the reads ───────────────────────────────────────────────────────────────────────────────────
-
 /// THE METER'S READS of one dialect, both directions. Stateless: nothing a frame says changes how
-/// the next is read.
 pub trait DuplexReader {
     /// What a far-end frame says that a session meters; empty for a frame that says none of it
-    /// (audio, most control), which is not read past its head.
     fn meter_down(&self, frame: &[u8]) -> Vec<Metered>;
 
     /// The uplink audio of a caller frame read whole as `top`: each blob's stated format (`None`:
-    /// it states none, and the session's governs) and the length its audio decodes to. `Err` when
-    /// the frame carries audio the plane cannot meter (a format it does not count, or data that
-    /// does not decode): such a frame goes nowhere, and what was admitted of it is not counted.
-    ///
-    /// # Errors
-    ///
-    /// The frame carries audio the plane cannot meter.
     fn uplink_audio(
         &self,
         top: &Lite<'_>,
@@ -134,7 +100,6 @@ pub struct OpenAiRealtimeCodec;
 
 impl DuplexReader for OpenAiRealtimeCodec {
     /// A `response.done` (its usage), an `error`, and a `response.output_item.added` that adds a
-    /// `function_call`.
     fn meter_down(&self, frame: &[u8]) -> Vec<Metered> {
         let metered = Head::read(frame).is_none_or(|h| {
             matches!(
@@ -154,9 +119,7 @@ impl DuplexReader for OpenAiRealtimeCodec {
             {
                 vec![Metered::ToolOpen]
             }
-            // An absent or `null` `usage` is no report (zero); a usage that is not an object, or a
-            // present-but-unreadable billed count, bills the plane's floor and says so (never
-            // metered at zero).
+
             wire::RESPONSE_DONE => vec![Metered::Usage(
                 match v
                     .get("response")
@@ -175,8 +138,6 @@ impl DuplexReader for OpenAiRealtimeCodec {
     }
 
     /// An `input_audio_buffer.append`'s `audio`, and each `input_audio` content part of a
-    /// `conversation.item.create`'s item (audio the far end consumes all the same); neither states
-    /// a format.
     fn uplink_audio(
         &self,
         top: &Lite<'_>,
@@ -207,22 +168,6 @@ impl DuplexReader for OpenAiRealtimeCodec {
 }
 
 /// Extract the split token classes from a `response.done.usage` object (audio vs text are
-/// separate classes; extraction-only, never client-translated).
-///
-/// The stated `input_tokens`/`output_tokens` totals are what the far end bills ("Usage statistics
-/// for the Response, this will correspond to billing", the Realtime API reference), and the
-/// per-modality breakdown (`input_token_details`/`output_token_details`) only SPLITS them. So each
-/// side bills the larger of its stated total and the sum of every entry its breakdown carries
-/// (`audio_tokens`, `text_tokens`, and on input `image_tokens`), never the audio and text entries
-/// alone: a turn that also carried image input billed its audio and text and dropped the rest.
-/// Audio bills as audio and image tokens as image tokens (each its own declared class); every
-/// other token the side bills is attributed to `text`. It is an integer passthrough of the wire
-/// figures, no rate lookup or multiply.
-///
-/// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` (`gemini/mod.rs`).
-///
-/// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
-/// present-but-unreadable one is an `Err` the caller bills the floor for ([`usage_floor`]).
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     usage_object(u, "usage")?;
     let ind = u.get("input_token_details");

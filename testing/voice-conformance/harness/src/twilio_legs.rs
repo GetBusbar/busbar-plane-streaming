@@ -2,27 +2,27 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE TWILIO LEGS, AT THE DOOR: the Twilio Media Streams dialect, judged to the spec and to
-//! Twilio's published message formats, never to what the reader happens to do today.
-//!
-//! Twilio is a dialect over the `ws` transport (`BUSBAR-1.6.0.md` l.418-419: no transport crate of
-//! its own, claimed on a one-level `/twilio` path prefix). Its inbound auth is
-//! `busbar-auth-webhook-signature`, variant twilio (l.847-852). Every Twilio frame is `event`-tagged
-//! JSON (<https://www.twilio.com/docs/voice/media-streams/websocket-messages>): Twilio sends
-//! `connected`, `start`, `media`, `mark`, `dtmf` and `stop`; a sender may write `media`, `mark` and
-//! `clear`. The legs hold busbar to `media` and `clear`; no spec line asks it to write a `mark`,
-//! so what the caller is told when the far end's audio ends is not fixed here (only that the far
-//! end is sent nothing for it). Every far-bound frame is described, and a far end's tool call must
-//! reach the caller as-is (Law 11, `BUSBAR-1.6.0.md` l.2133-2135).
-//!
-//! The session behind the Twilio door is the telephony session: the caller speaks Twilio, the far
-//! end is the realtime dialect locked to `g711_ulaw` both ways. Caller frames are pushed as caller
-//! pieces on the Twilio door's claim, the far end's as far-end pieces, on the linked AND the dropped
-//! door, and the answer is read back off the wire: what reached the far end as caller audio, what
-//! reached Twilio as a frame. The expectation is computed from the fixtures (Twilio's own formats),
-//! never from the door.
-//!
-//! Slices: `twilio` (the spec-per-dialect slice: every fixture and the transcript), `twilio-route`,
-//! `twilio-media`, `twilio-metering`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::fs;
 use std::path::Path;
@@ -50,14 +50,12 @@ use crate::door::{
 };
 
 /// The door claim that opens a Twilio session: the fifth line of the snapshot (the telephony
-/// socket), after the mint, the SDP offer, the sideband and the Gemini socket.
 const CLAIM: u32 = 4;
 
 /// The `streamSid` of the second call the media leg opens, to show the outbound frames carry
-/// their own call's identity and not the first call's.
 const OTHER_SID: &str = "MZYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY";
 
-// ── the frames the legs push ────────────────────────────────────────────────────────────────────
+
 
 /// One frame pushed to a session, and the lines the door must answer it with.
 #[derive(Clone, Debug)]
@@ -92,11 +90,6 @@ fn bytes_of(v: &Value) -> Vec<u8> {
 }
 
 /// What one emitted frame is, in the words the legs compare. EVERY far-bound frame is described:
-/// the caller's audio as the bytes it hands the far end, any other frame (a session lock, a
-/// `response.cancel`, a `conversation.item.truncate`, a `response.create`) as its whole JSON, so a
-/// frame busbar authors toward the far end is never invisible to a leg (Law 11, `BUSBAR-1.6.0.md`
-/// l.2133-2135: busbar "answers nothing on the caller's behalf"). A caller-bound frame is described
-/// as the Twilio frame it is, or, when it is not one, as its exact bytes.
 fn describe(e: &Emission) -> String {
     let v: Value = serde_json::from_slice(&e.frame).unwrap_or(Value::Null);
     if e.to_far {
@@ -133,9 +126,6 @@ fn describe(e: &Emission) -> String {
 }
 
 /// A far-bound `session.update`, in the words the legs compare: its two audio formats, read in
-/// either OpenAI Realtime session shape (`input_audio_format`, or `audio.input.format.type`), and
-/// every other member it sets beyond the model and the shape's own `type`. Which shape the far end
-/// is told in is the plane's to choose; what it locks is judged.
 fn lock_of(session: &Value) -> String {
     let format_of = |flat: &str, side: &str| {
         let named = session[flat]
@@ -171,12 +161,6 @@ fn lock_of(session: &Value) -> String {
 }
 
 /// What the telephony session locks the far end with when Twilio's `start` binds the call: the
-/// operator's `streams.session` (the leg's [`SESSION`] sets only the model) with µ-law on both
-/// audio formats, as one `session.update`, and nothing else. Twilio configures nothing itself
-/// (THE DESIGN §2 l.418-419 and Part 2 #45: Twilio Media Streams with a µ-law codec; #45: the
-/// caller "cannot override the session's locked instructions"), and the section's two token
-/// ceilings the door states in OpenAI Realtime's own keys when it locks a session
-/// (`session_door::with_ceilings`: `max_output_tokens`, and `truncation` for the context window).
 fn lock_line() -> String {
     "far-lock:in=mulaw,out=mulaw,more=[\"max_output_tokens\", \"truncation\"]".to_string()
 }
@@ -219,7 +203,6 @@ fn want_line(s: &Step) -> String {
 }
 
 /// Where `run` departs from `steps`: every step's frames exactly as it expects, except a step whose
-/// caller side no spec line fixes, of which the far-bound frames alone are judged.
 fn departs(run: &Run, steps: &[Step]) -> Option<String> {
     if run.lines.len() != steps.len() {
         return Some(format!(
@@ -290,10 +273,6 @@ fn far(label: &str, v: &Value, expect: &[String]) -> Step {
 }
 
 /// The far end's `response.output_audio.done`. Twilio Media Streams has no event for it, and no
-/// spec line or ruling asks busbar to write Twilio a `mark` for it (THE DESIGN §2 l.418-419, Part 2
-/// #45: Twilio Media Streams with a µ-law codec, nothing more; streaming is new in 1.6.0, so 1.5.5
-/// has no bytes here, Part 2 #45 "1.5.5 parity N/A — it had no streaming", 1.6.0-QUESTIONS.md
-/// Q102). What reaches the caller for it is the plane's own; the far end must be sent nothing.
 fn far_audio_done(label: &str) -> Step {
     Step {
         caller_open: true,
@@ -380,12 +359,11 @@ pub fn run(rig: &Rig, slice: &str, dir: &Path) -> i32 {
     i32::from(!pass)
 }
 
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-// spec-per-dialect, the twilio slice
-// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
 
 /// The CODEC half of one fixture: the plane's Twilio envelope reads it as Twilio's format says,
-/// and what it writes back reads the same.
 fn codec_half(name: &str, v: &Value) -> Result<String, String> {
     let frame = bytes_of(v);
     let event = name
@@ -532,7 +510,6 @@ fn fixture_steps(fx: &Fixtures, name: &str, v: &Value) -> Result<Vec<Step>, Stri
 }
 
 /// One finished assertion over `steps`: both doors, the codec half folded in, the planted door
-/// (one that hands the far end audio nobody sent) refused by the same check.
 fn judge_steps(
     rig: &Rig,
     slice: &str,
@@ -573,7 +550,6 @@ fn judge_steps(
 }
 
 /// `spec twilio <dir>`: every fixture (codec round trip, and the door's relay of it by the session
-/// rules), then the transcript.
 pub fn spec(rig: &Rig, dir: &Path) -> i32 {
     let slice = "twilio";
     let fx = Fixtures {
@@ -625,7 +601,6 @@ pub fn spec(rig: &Rig, dir: &Path) -> i32 {
 }
 
 /// The transcript: one call, Twilio's frames (`client`) pushed as caller pieces in order, and for
-/// each frame busbar sent Twilio (`server`) the far-end event that makes the door write it.
 fn transcript_steps(fx: &Fixtures) -> Result<(Vec<Step>, u32, String), String> {
     let path = fx.dir.join("transcript.jsonl");
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -695,9 +670,9 @@ fn transcript(rig: &Rig, slice: &str, fx: &Fixtures) -> bool {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-// twilio-route
-// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RouteObs {
@@ -917,8 +892,8 @@ fn route_check(o: &RouteObs) -> Result<String, String> {
             o.after_start.lines
         ));
     }
-    // A frame that is not Twilio's shape (no `event`) is REFUSED by the bridge and ends the session
-    // (`CallerStep::Refused`): it is never taken for Twilio audio and sends the far end nothing.
+
+
     if !o.typed.anomalies.is_empty() || o.typed.done != 1 || o.typed.lines.len() != 2 {
         return Err(format!(
             "a type-tagged frame was not refused as not Twilio's shape: {:?}",
@@ -958,9 +933,9 @@ fn route(rig: &Rig, slice: &str, fx: &Fixtures) -> bool {
     )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-// twilio-media
-// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MediaObs {
@@ -1095,7 +1070,6 @@ fn media_check(o: &MediaObs, first: &[Step], second: &[Step]) -> Result<String, 
 }
 
 /// The far end's tool call, as OpenAI Realtime frames it: the call opens, its arguments stream,
-/// the call closes.
 fn far_tool_call() -> Vec<(&'static str, Value)> {
     vec![
         (
@@ -1121,8 +1095,6 @@ fn far_tool_call() -> Vec<(&'static str, Value)> {
 }
 
 /// A call whose far end makes a tool call: Twilio's `start` (the session lock goes to the far end),
-/// the call's frames from the far end, each of which must reach the caller AS-IS (its exact bytes)
-/// with nothing sent to the far end for it, then Twilio's `stop`.
 fn tool_steps(fx: &Fixtures) -> Result<Vec<Step>, String> {
     let start = fx.get("from-twilio.start.json")?;
     let stop = fx.get("from-twilio.stop.json")?;
@@ -1136,7 +1108,6 @@ fn tool_steps(fx: &Fixtures) -> Result<Vec<Step>, String> {
 }
 
 /// THE PLANTED WRONG DOOR that swallows the tool call on the telephony leg: a far-end frame Twilio
-/// has no event for reaches the caller as nothing.
 fn plant_swallowed(run: &Run) -> Run {
     let mut planted = run.clone();
     for line in &mut planted.lines {
@@ -1162,9 +1133,7 @@ fn plant_answered(run: &Run) -> Run {
     planted
 }
 
-/// The Twilio tool-call assertion (Law 11, `BUSBAR-1.6.0.md` l.2127-2135: "a tool call on any
-/// session, Twilio included, is relayed down that session as-is"; THE DESIGN §2 l.419: "Tools
-/// mid-session are relayed to the client").
+/// Check that a Twilio session relays tool calls and replies unchanged.
 fn tool_call(rig: &Rig, slice: &str, fx: &Fixtures) -> bool {
     const SWALLOWED: &dyn Fn(&Run) -> Run = &plant_swallowed;
     const ANSWERED: &dyn Fn(&Run) -> Run = &plant_answered;
@@ -1236,9 +1205,9 @@ fn media_frames(rig: &Rig, slice: &str, fx: &Fixtures) -> bool {
     )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-// twilio-metering
-// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
 
 /// 20 ms of µ-law: 160 bytes.
 fn chunk(n: usize) -> Vec<u8> {
@@ -1246,7 +1215,6 @@ fn chunk(n: usize) -> Vec<u8> {
 }
 
 /// `frames` frames of Twilio media on stream `stream`, as caller pieces; the last answer, and how
-/// many were not answered READY.
 fn caller_media(p: &Plugin<Plane>, stream: u64, sid: &str, frames: usize) -> (Answer, usize) {
     let mut last = None;
     let mut bad = 0;
@@ -1273,8 +1241,8 @@ fn meter_script(p: &Plugin<Plane>, fx: &Fixtures) -> TwilioMeterObs {
     let start = bytes_of(&fx.get("from-twilio.start.json").unwrap_or(Value::Null));
     let stop = bytes_of(&fx.get("from-twilio.stop.json").unwrap_or(Value::Null));
     let mut lines = Vec::new();
-    // Call A: two seconds of caller audio, the far end answers the turn, a second turn is open
-    // (a short answer's re-call does not count its audio twice) when Twilio sends stop.
+
+
     lines.push(units_of(
         "start",
         &piece(p, &session(60, CLAIM, FROM_CALLER, 0, &start)),
@@ -1320,7 +1288,7 @@ fn meter_script(p: &Plugin<Plane>, fx: &Fixtures) -> TwilioMeterObs {
         units_of("second stop", &again),
         again.done
     ));
-    // Call B: the far end never answered; one second of audio, then stop.
+
     lines.push(units_of(
         "unanswered start",
         &piece(p, &session(61, CLAIM, FROM_CALLER, 0, &start)),
@@ -1333,7 +1301,7 @@ fn meter_script(p: &Plugin<Plane>, fx: &Fixtures) -> TwilioMeterObs {
         units_of("unanswered stop", &end),
         end.done
     ));
-    // Call C: the turn is closed when stop arrives: nothing is counted twice.
+
     lines.push(units_of(
         "settled start",
         &piece(p, &session(62, CLAIM, FROM_CALLER, 0, &start)),
@@ -1361,7 +1329,7 @@ fn meter_script(p: &Plugin<Plane>, fx: &Fixtures) -> TwilioMeterObs {
 fn meter_expected() -> Vec<String> {
     vec![
         "start Ready units=[]".to_string(),
-        // Every answer reports the open turn's running seconds (Q128 u64: a cancel or a cut
+        // Every answer reports the open turn's running seconds (a cancel or a cut
         // reports nothing of its own, so the last answer before it is what bills).
         "caller audio 2s Ready units=[4:1=2]".to_string(),
         "frames not READY 0".to_string(),

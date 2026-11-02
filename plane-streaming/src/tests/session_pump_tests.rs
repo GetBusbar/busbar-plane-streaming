@@ -93,10 +93,7 @@ fn a_sink_that_refuses_closes_the_session_and_authors_nothing_upstream() {
     assert!(out.upstream.is_empty(), "{}", texts(&out.upstream));
 }
 
-/// LAW 11 (QUESTIONS Q98): a tool call is part of the model's response. Every frame of it is
-/// relayed to the caller as the model streamed it, its arguments verbatim, and nothing the gateway
-/// writes upstream answers it: no `function_call_output`, no `response.create`. RED: the pump
-/// handed a closed call to a server-side executor and wrote the executor's output upstream itself.
+/// A tool call is relayed to the caller as part of the model response; the gateway authors no reply.
 #[test]
 fn a_tool_call_is_relayed_to_the_caller_as_is_and_the_gateway_answers_nothing() {
     let mut p = pump();
@@ -128,18 +125,6 @@ fn a_tool_call_is_relayed_to_the_caller_as_is_and_the_gateway_answers_nothing() 
     );
 }
 
-/// P-ITEM: VOICE TOOL-ARGS (spec DONE item 2, "All P-item behaviours match 1.5.5"; the drive log's
-/// P5, commit 470351a480: "streamed tool-call arguments are discarded"). The model streams a call's
-/// arguments as several partial-JSON fragments; none of them is lost, and they reach the caller
-/// whole, in order, as one call, counted once.
-///
-/// Voice is new in 1.6.0; the 1.5.5 behaviour it matches is the llm surface's own streamed tool
-/// call (owner correction 2026-09-28): 1.5.5 accumulated every `InputJsonDelta` fragment of an open
-/// tool block and emitted the call ONCE on its block stop with the fully reassembled arguments,
-/// because parsing each fragment alone lost the arguments and split one call into many (v1.5.5
-/// `crates/busbar/src/proto/gemini/writer.rs:734-780`). The streaming plane holds no tool executor
-/// (LAW 11, QUESTIONS Q98): the caller runs the call, so the pin is on what the caller receives,
-/// and the gateway answers nothing upstream on any fragment or on the close.
 #[test]
 fn p_item_voice_tool_args_streamed_fragments_reach_the_caller_whole_and_once() {
     let mut p = pump();
@@ -212,11 +197,7 @@ fn a_callers_session_update_is_replaced_by_the_locked_config() {
     assert!(up.contains("locked") && !up.contains("override"), "{up}");
 }
 
-/// RED-BEFORE-GREEN (the GA `/v1/realtime` socket; OpenAI's beta-to-GA migration moves the audio
-/// configuration under `session.audio`): a caller's GA `session.update` takes the section's locked
-/// turn detection under `audio.input`, merged with the caller's own `audio.input` members, and no
-/// pre-GA top-level `turn_detection` is added beside them. RED: the locked keys were spliced in
-/// the pre-GA shape, a top-level `turn_detection` the GA socket does not read.
+/// A caller's GA session update receives the locked keys in the GA shape.
 #[test]
 fn a_callers_ga_session_update_takes_the_locked_keys_in_the_ga_shape() {
     let mut p = SessionPump::new(
@@ -274,8 +255,6 @@ fn an_error_closes_the_open_turn_before_it_is_relayed() {
 
 #[test]
 fn an_ungoverned_session_relays_a_call_and_never_answers_it() {
-    // No open-call table bound (an ungoverned node): the call reaches the caller, and nothing the
-    // gateway writes answers it.
     let mut p = pump();
     let mut sink = Turns::default();
     let (mut down, mut up) = (Vec::new(), Vec::new());
@@ -345,7 +324,6 @@ fn a_barge_in_bills_what_the_interrupted_turn_served_on_the_turn_that_takes_over
 }
 
 /// A caller frame that is not JSON goes nowhere and counts nothing: the lock is judged on what the
-/// reader reads, and bytes it cannot read never reach a far end that might read them otherwise.
 #[test]
 fn a_caller_frame_that_is_not_json_goes_nowhere_and_counts_nothing() {
     let mut p = pump();
@@ -373,14 +351,12 @@ fn billed_audio_seconds(sink: &Turns) -> u64 {
         .sum()
 }
 
-/// RED-BEFORE-GREEN (MONEY-AUDIT STR-2): a session is one unit, so its uplink audio converts to
-/// seconds ONCE. Rounding each turn's milliseconds up on its own billed 20 turns of 1050 ms as 40
-/// s; the session spoke 21 000 ms, which is 21 s.
+/// Audio duration is accumulated across turns before conversion to billable seconds.
 #[test]
 fn twenty_turns_of_1050_ms_bill_21_audio_seconds_not_40() {
     let mut p = pump();
     let mut sink = Turns::default();
-    // 1050 ms of pcm16 (48 bytes per ms).
+
     let b64 = busbar_contract::media::base64_encode(&[0u8; 1050 * 48]);
     for _ in 0..20 {
         let _ = p.on_client_frame(wire(serde_json::json!({
@@ -392,9 +368,7 @@ fn twenty_turns_of_1050_ms_bill_21_audio_seconds_not_40() {
     assert_eq!(billed_audio_seconds(&sink), 21);
 }
 
-/// RED-BEFORE-GREEN (MONEY-AUDIT STR-2): a frame's bytes need not divide into whole milliseconds,
-/// and the part left over is audio too. 960 frames of 50 bytes of pcm16 are 48 000 bytes, one
-/// second; flooring each frame to 1 ms counted 960 ms.
+/// Fractional milliseconds are carried between frames rather than discarded.
 #[test]
 fn the_part_of_a_millisecond_a_frame_leaves_over_is_carried_not_floored() {
     let mut p = pump();
@@ -419,9 +393,7 @@ fn gemini_uplink(rate: u32, bytes: usize) -> WireEvent {
     }}}))
 }
 
-/// RED-BEFORE-GREEN (plane-streaming audit HIGH 9; THE DESIGN section 7, "a plane that
-/// under-reports is that plugin's bug"): Gemini Live's uplink is 16 kHz PCM, 32 bytes a
-/// millisecond. Counted at the 24 kHz rate (48 bytes a millisecond), one second of it was 666 ms.
+/// One second of Gemini 16 kHz uplink counts as one audio second.
 #[test]
 fn a_second_of_gemini_16k_uplink_counts_one_second_not_two_thirds() {
     let mut p = SessionPump::new(crate::codec::ir::GeminiLiveCodec, None);
@@ -432,10 +404,7 @@ fn a_second_of_gemini_16k_uplink_counts_one_second_not_two_thirds() {
     assert_eq!(sink.closed[0].1.audio_ms_in, 1000);
 }
 
-/// RED-BEFORE-GREEN (audit HIGH 9): each frame is counted at the rate its own wire states, and the
-/// part of a millisecond one frame leaves over carries exactly onto a frame at another rate. Half a
-/// millisecond at 16 kHz (16 bytes) and half at 24 kHz (24 bytes), a thousand times each, is one
-/// second.
+/// Each Gemini uplink frame is counted at its stated rate.
 #[test]
 fn gemini_uplink_frames_at_two_rates_each_count_at_their_own() {
     let mut p = SessionPump::new(crate::codec::ir::GeminiLiveCodec, None);
@@ -448,8 +417,6 @@ fn gemini_uplink_frames_at_two_rates_each_count_at_their_own() {
     assert_eq!(sink.closed.len(), 1);
     assert_eq!(sink.closed[0].1.audio_ms_in, 1000);
 }
-
-// ── THE SAME-DIALECT RELAY (Law 5; Law 11; Part 2 #45) ─────────────────────────────────────────
 
 /// The bytes of `v`, exactly as a peer sent them.
 fn raw(v: &str) -> WireEvent {
@@ -466,10 +433,7 @@ fn locked_pump() -> SessionPump<OpenAiRealtimeCodec> {
     )
 }
 
-/// RED-BEFORE-GREEN (Law 11, "content never triggers an action ... answers nothing on the
-/// caller's behalf"): the far end's speech-start is the caller's to act on. Nothing goes upstream,
-/// and the event reaches the caller as the far end sent it. RED: the pump wrote `response.cancel`
-/// and `conversation.item.truncate` upstream itself and rewrote `audio_start_ms` to 0.
+/// Barge-in is relayed unchanged without generating an upstream action.
 #[test]
 fn a_barge_in_is_relayed_unchanged_and_nothing_goes_upstream() {
     let mut p = locked_pump();
@@ -493,11 +457,7 @@ fn a_barge_in_is_relayed_unchanged_and_nothing_goes_upstream() {
     );
 }
 
-/// RED-BEFORE-GREEN (Law 5, "A RELAY (same dialect) runs the reader only as that read-only tap
-/// and sends the client's bytes"): every far-end frame reaches the caller byte for byte, the
-/// events the IR does not model and the usage report included, while the usage still meters.
-/// RED: `response.done` was consumed, `rate_limits.updated` dropped, a transcript delta dropped and
-/// an audio delta re-serialised without its `event_id`.
+/// A same-dialect far-end frame reaches the caller byte for byte.
 #[test]
 fn a_same_dialect_far_end_frame_reaches_the_caller_byte_for_byte() {
     let mut p = locked_pump();
@@ -531,10 +491,7 @@ fn a_same_dialect_far_end_frame_reaches_the_caller_byte_for_byte() {
     );
 }
 
-/// RED-BEFORE-GREEN (Law 5 governed splice; Part 2 #45 "cannot override the session's locked
-/// instructions"): a caller's `session.update` keeps every field it set, unmodelled ones included,
-/// and only the locked keys are spliced in. RED: the whole update was replaced by the locked
-/// config, so the caller's voice and noise-reduction setting never reached the far end.
+/// A session update retains caller fields while applying the locked keys.
 #[test]
 fn a_callers_session_update_keeps_its_fields_and_takes_the_locked_keys() {
     let mut p = locked_pump();
@@ -558,10 +515,7 @@ fn a_callers_session_update_keeps_its_fields_and_takes_the_locked_keys() {
     );
 }
 
-/// RED-BEFORE-GREEN (Part 2 #45, "the browser ... never authors tools or instructions, and cannot
-/// override the session's locked instructions"): a per-response override of the instructions or
-/// the tool set is spliced out of a caller's `response.create`; every other field passes. RED: the
-/// response object went upstream verbatim.
+/// A caller's `response.create` cannot override locked instructions or tools.
 #[test]
 fn a_callers_response_create_cannot_override_the_locked_instructions_or_tools() {
     let mut p = locked_pump();
@@ -577,8 +531,7 @@ fn a_callers_response_create_cannot_override_the_locked_instructions_or_tools() 
     assert_eq!(v["response"]["metadata"]["k"], "v");
 }
 
-/// RED-BEFORE-GREEN (Law 5): a caller frame the IR does not model is the caller's to send; the
-/// far end answers it. RED: it went nowhere.
+/// An unmodeled caller frame reaches the far end unchanged.
 #[test]
 fn an_unmodelled_caller_frame_reaches_the_far_end_unchanged() {
     let mut p = locked_pump();
@@ -597,11 +550,7 @@ fn gemini_locked_pump() -> SessionPump<crate::codec::ir::GeminiLiveCodec> {
     )
 }
 
-/// RED-BEFORE-GREEN (Law 5; Law 11 "a tool call ... goes back to the caller unchanged"): a
-/// Gemini Live caller receives the far end's tool call as one frame, both calls in it, arguments
-/// and all, and a text part and a `goAway` reach it too. RED: the call was re-framed as one frame
-/// per call announcing it WITHOUT arguments and a second one with them, and the text part and the
-/// `goAway` were dropped.
+/// A Gemini far-end frame reaches the caller byte for byte.
 #[test]
 fn a_gemini_far_end_frame_reaches_the_caller_byte_for_byte() {
     let mut p = gemini_locked_pump();
@@ -621,9 +570,7 @@ fn a_gemini_far_end_frame_reaches_the_caller_byte_for_byte() {
     assert_eq!(sink.closed[0].1.tool_calls, 2, "both calls are counted");
 }
 
-/// RED-BEFORE-GREEN (Law 5 governed splice; Part 2 #45): a Gemini caller's `setup` keeps what it
-/// set, and the locked system instruction is spliced in over the caller's. RED: the whole setup was
-/// replaced, so the caller's model and generation settings never reached the far end.
+/// A Gemini setup retains caller fields while applying the locked instruction.
 #[test]
 fn a_gemini_callers_setup_keeps_its_fields_and_takes_the_locked_instruction() {
     let mut p = gemini_locked_pump();
@@ -645,12 +592,7 @@ fn a_gemini_callers_setup_keeps_its_fields_and_takes_the_locked_instruction() {
     assert!(v["setup"].get("tools").is_none(), "{v}");
 }
 
-/// RED-BEFORE-GREEN (Part 2 #45, "the browser ... never authors tools or instructions"; Gemini Live
-/// reads `setup` as protobuf JSON, which takes the field's original name `system_instruction`
-/// beside `systemInstruction`): a caller's snake_case system instruction and tools are cut as the
-/// camelCase ones are, with or without a locked instruction, and the far end is sent one spelling
-/// of the field. RED: the cut compared keys as written, so `system_instruction` reached the far
-/// end and governed a session with no locked instructions.
+/// A snake-case Gemini instruction is governed like its camel-case equivalent.
 #[test]
 fn a_gemini_callers_snake_case_instruction_is_governed_as_the_camel_case_one() {
     let frame = r#"{"setup":{"model":"models/gemini-live","system_instruction":{"parts":[{"text":"override"}]},"function_tools":1,"tools":[{"function_declarations":[{"name":"evil"}]}]}}"#;
@@ -673,12 +615,7 @@ fn a_gemini_callers_snake_case_instruction_is_governed_as_the_camel_case_one() {
     }
 }
 
-// ── THE TRUST BOUNDARY, GOVERNED ON THE FRAME'S BYTES (Part 2 #45) ──────────────────────────────
-
-/// RED-BEFORE-GREEN (Part 2 #45, "the browser ... never authors tools or instructions"): a
-/// conversation item in a role that instructs the model goes nowhere, whichever such role it
-/// names; a user's item passes byte for byte. RED: `conversation.item.create` of a `system` (or
-/// `developer`) message was relayed unchanged.
+/// A caller's instructing item is refused.
 #[test]
 fn a_callers_instructing_item_goes_nowhere() {
     let mut p = locked_pump();
@@ -693,9 +630,7 @@ fn a_callers_instructing_item_goes_nowhere() {
     assert_eq!(texts(&p.on_client_frame(raw(user)).upstream), user);
 }
 
-/// RED-BEFORE-GREEN (Part 2 #45): `response.create`'s per-response `input` is a conversation of
-/// its own; an instructing item in it goes nowhere. RED: the `response` splice cut only
-/// `instructions` and `tools`, and the `developer` item in `input` reached the far end.
+/// A caller's response input cannot carry an instructing item.
 #[test]
 fn a_callers_response_input_cannot_carry_an_instructing_item() {
     let mut p = locked_pump();
@@ -704,11 +639,7 @@ fn a_callers_response_input_cannot_carry_an_instructing_item() {
     assert!(out.upstream.is_empty(), "{}", texts(&out.upstream));
 }
 
-/// RED-BEFORE-GREEN (Part 2 #45): the lock is judged on the bytes, not on the reader's view of
-/// `type`. A frame that writes `type` twice is read by this reader at its last and may be read by
-/// the far end at its first; its `session` and `response` objects are governed either way, and a
-/// stored `prompt` (instructions by reference) is cut with the instructions. RED: the reader saw
-/// `"type":"x"`, chose no rule, and `instructions:"evil"` went upstream verbatim.
+/// Governed object members remain governed regardless of the frame's stated type.
 #[test]
 fn a_governed_object_is_governed_whatever_the_frame_says_its_type_is() {
     let mut p = locked_pump();
@@ -734,20 +665,13 @@ fn a_governed_object_is_governed_whatever_the_frame_says_its_type_is() {
     );
 }
 
-// ── THE UPLINK FORMAT THE PLANE METERS IS THE ONE THE FAR END READS (THE DESIGN section 7) ───────
-
 /// `bytes` of uplink audio, as one append.
 fn uplink_bytes(bytes: usize) -> WireEvent {
     wire(serde_json::json!({"type":"input_audio_buffer.append",
         "audio": busbar_contract::media::base64_encode(&vec![0u8; bytes])}))
 }
 
-/// RED-BEFORE-GREEN (MONEY, THE DESIGN section 7 "the plane reports the units it did"): a caller's
-/// GA `session.update` sets the uplink to µ-law through `session.audio.input.format`; the far end
-/// then reads 8 bytes a millisecond, and so must the meter. Six seconds of µ-law (48 000 bytes)
-/// bill 6 `audio_seconds_in`. RED: the meter read only the legacy `input_audio_format`, counted the
-/// 48 000 bytes at PCM16's 48 a millisecond (1 000 ms) and billed 1 second of the 6 served (6x
-/// under).
+/// A GA update to mu-law changes uplink metering to mu-law.
 #[test]
 fn a_ga_session_update_to_mulaw_meters_the_uplink_at_mulaw() {
     let mut p = locked_pump();
@@ -759,8 +683,7 @@ fn a_ga_session_update_to_mulaw_meters_the_uplink_at_mulaw() {
     assert_eq!(billed_audio_seconds(&sink), 6);
 }
 
-/// RED-BEFORE-GREEN (MONEY): a GA update back to 24 kHz PCM meters at PCM16 again: a µ-law
-/// session switched to PCM16 does not bill each PCM16 second six times over.
+/// A GA update back to 24 kHz PCM restores PCM16 metering.
 #[test]
 fn a_ga_session_update_back_to_pcm_meters_at_pcm() {
     let mut p = locked_pump();
@@ -780,11 +703,7 @@ fn a_ga_session_update_back_to_pcm_meters_at_pcm() {
     );
 }
 
-/// RED-BEFORE-GREEN (MONEY): a format the plane cannot meter (A-law, a PCM rate other than 24 kHz,
-/// a type it does not know), or two keys that disagree, configure nothing: the frame goes nowhere,
-/// and the uplink stays metered at the format the far end still reads. RED: the lenient reader
-/// dropped the unknown token and the frame went upstream, so the far end read 8 bytes a ms while
-/// the meter read 48.
+/// An update naming an unmeterable or split format is refused.
 #[test]
 fn an_update_naming_an_unmeterable_or_split_format_goes_nowhere() {
     let mut p = locked_pump();
@@ -805,10 +724,7 @@ fn an_update_naming_an_unmeterable_or_split_format_goes_nowhere() {
     assert_eq!(billed_audio_seconds(&sink), 1, "still metered at PCM16");
 }
 
-/// RED-BEFORE-GREEN (MONEY): under a locked uplink format, a caller update naming another one
-/// goes nowhere: the splice locks the legacy key, and a GA key naming PCM16 would have the far end
-/// read the caller's audio at 48 bytes a millisecond while the meter counted it at the locked
-/// µ-law's 8 (6x over-billed). One naming the locked format itself passes.
+/// An update naming a different format is refused when the uplink format is locked.
 #[test]
 fn under_a_locked_format_an_update_naming_another_goes_nowhere() {
     let mut p = SessionPump::new(
@@ -832,11 +748,7 @@ fn under_a_locked_format_an_update_naming_another_goes_nowhere() {
     );
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S20, MONEY): a frame that names an uplink format
-/// and then goes nowhere (it authors an instructing item under the lock) configures nothing: the far
-/// end still reads the format it was last told, and so does the meter. Six seconds of µ-law
-/// (48 000 bytes) after the dropped update bill 6 `audio_seconds_in`. RED: the meter switched to
-/// PCM16 before the frame was dropped and billed 1.
+/// A dropped format update leaves metering on the format the far end receives.
 #[test]
 fn a_dropped_frame_naming_a_format_leaves_the_meter_on_the_format_the_far_end_reads() {
     let mut p = locked_pump();
@@ -861,11 +773,7 @@ fn a_dropped_frame_naming_a_format_leaves_the_meter_on_the_format_the_far_end_re
     );
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S23, MONEY): a caller may send its audio as a user
-/// item's `input_audio` content part (`conversation.item.create`) rather than an append; the far end
-/// consumes it all the same, so it is counted at the session's uplink format. One second of PCM16
-/// in one part bills 1 `audio_seconds_in`. RED: only `input_audio_buffer.append` was counted, and
-/// the item's audio billed 0.
+/// Input audio in a user item counts as uplink audio.
 #[test]
 fn a_user_items_input_audio_part_is_counted_as_uplink_audio() {
     for mut p in [pump(), locked_pump()] {
@@ -891,13 +799,7 @@ fn a_user_items_input_audio_part_is_counted_as_uplink_audio() {
     }
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S3, MONEY): Gemini Live audio the plane cannot meter
-/// (a stated rate other than 16 or 24 kHz, an `audio/*` mime other than PCM, data that does not
-/// decode, or a GA `audio` blob beside legacy audio chunks the meter would not read) is REFUSED, as
-/// `audio_format_from_mime` promises: the frame goes nowhere and nothing of it is counted, never
-/// relayed unmetered. Audio it can meter is relayed and counted, in either base64 alphabet, and a
-/// non-audio chunk (video) is relayed as before. RED: every such frame was relayed and billed 0
-/// `audio_seconds_in`.
+/// Unmeterable Gemini audio is refused and counts no usage.
 #[test]
 fn gemini_audio_the_plane_cannot_meter_goes_nowhere_and_counts_nothing() {
     let pcm16k = |data: String| serde_json::json!({"mimeType":"audio/pcm;rate=16000","data":data});

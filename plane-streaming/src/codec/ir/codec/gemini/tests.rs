@@ -2,13 +2,9 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! GEMINI LIVE CODEC TESTS — what the meter reads off the second dialect (the usage a
-//! `usageMetadata` reports wherever it rides, the tool calls a `toolCall` opens, the uplink audio a
-//! `realtimeInput` carries at the rate its mime states) and the `setup` a locked session is told.
 
 use super::*;
 use crate::splice::LockedKeys;
-
-// ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
 fn b64(bytes: &[u8]) -> String {
     busbar_contract::media::base64_encode(bytes)
@@ -19,7 +15,6 @@ fn down(src: &Value) -> Vec<Metered> {
 }
 
 /// The audio the meter counts in a caller frame: each blob's stated format and decoded length;
-/// nothing for a frame whose audio the meter refuses ([`refused`]).
 fn up(src: &Value) -> Vec<(Option<AudioFormat>, usize)> {
     let bytes = src.to_string().into_bytes();
     let top = Lite::read(&bytes).expect("the frame is JSON");
@@ -36,8 +31,6 @@ fn refused(src: &Value) -> bool {
     let top = Lite::read(&bytes).expect("the frame is JSON");
     GeminiLiveCodec.uplink_audio(&top, &mut |_, _| {}).is_err()
 }
-
-// ── the locked `setup` ───────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn the_locked_setup_is_told_in_gemini_shape() {
@@ -84,10 +77,7 @@ fn the_locked_setup_is_told_in_gemini_shape() {
     assert_eq!(s["tools"][0]["functionDeclarations"][0]["name"], "lookup");
 }
 
-/// RED-BEFORE-GREEN (THE DESIGN section 7, "Where the protocol carries a place to say so"; the
-/// cross-dialect map's `openai_structured_error`: "Gemini reports errors via WebSocket close codes,
-/// not a structured in-band error message"): a Gemini session is told no error frame. RED: it was
-/// told a `serverContent.error` member no Gemini client reads.
+/// Gemini Live has no in-band session ceiling error frame.
 #[test]
 fn a_gemini_session_is_told_no_in_band_error() {
     let framed =
@@ -95,12 +85,10 @@ fn a_gemini_session_is_told_no_in_band_error() {
     assert!(framed.is_none(), "{framed:?}");
 }
 
-// ── realtimeInput (uplink audio counted) ─────────────────────────────────────────────────────────
-
 #[test]
 fn realtime_input_audio_counts_each_blob_at_its_stated_rate() {
     let payload = b"pretend-uplink-audio-bytes";
-    // The LEGACY `mediaChunks[]` spelling is still read (a peer may speak it): one count per chunk.
+
     assert_eq!(
         up(&json!({ "realtimeInput": { "mediaChunks": [
             { "mimeType": "audio/pcm;rate=16000", "data": b64(payload) },
@@ -113,7 +101,7 @@ fn realtime_input_audio_counts_each_blob_at_its_stated_rate() {
         ],
         "each audio chunk at its own rate; a non-audio chunk is not audio"
     );
-    // GA (`v1beta`) shape: realtimeInput.audio is a SINGLE inline blob.
+
     assert_eq!(
         up(
             &json!({ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": b64(payload) } } })
@@ -124,9 +112,6 @@ fn realtime_input_audio_counts_each_blob_at_its_stated_rate() {
 
 #[test]
 fn realtime_input_with_both_audio_spellings_is_refused() {
-    // When BOTH spellings carry audio the meter would read the GA blob alone while the far end may
-    // read both, so the frame's audio is audio the plane cannot meter (audit S3): refused, never
-    // counted once and relayed twice. A non-audio chunk beside the GA blob is not audio.
     let src = json!({
         "realtimeInput": {
             "audio": { "mimeType": "audio/pcm;rate=16000", "data": b64(b"ga") },
@@ -144,7 +129,6 @@ fn realtime_input_with_both_audio_spellings_is_refused() {
 }
 
 /// An uplink blob whose payload is not base64 counts nothing, never an empty frame; and a frame
-/// that is a `setup` or a `clientContent` carries no audio the meter counts.
 #[test]
 fn an_undecodable_or_misplaced_gemini_audio_payload_counts_nothing() {
     let blob = json!({ "mimeType": "audio/pcm;rate=16000", "data": b64(b"x") });
@@ -152,8 +136,6 @@ fn an_undecodable_or_misplaced_gemini_audio_payload_counts_nothing() {
     assert!(up(&json!({ "realtimeInput": { "audio": blob }, "setup": {} })).is_empty());
     assert!(up(&json!({ "realtimeInput": { "audioStreamEnd": true } })).is_empty());
 }
-
-// ── tool calls and what is not metered ───────────────────────────────────────────────────────────
 
 #[test]
 fn each_call_a_tool_call_delivers_is_one_opened_call() {
@@ -184,8 +166,6 @@ fn transcription_audio_and_unknown_frames_meter_nothing() {
     assert!(GeminiLiveCodec.meter_down(b"not json").is_empty());
 }
 
-// ── usageMetadata extraction (`BUSBAR-1.6.0.md` #18/#45) ──────────────────────────────────────────────────────────────
-
 #[test]
 fn usage_metadata_extracts_split_token_classes() {
     let src = json!({
@@ -212,10 +192,7 @@ fn usage_metadata_extracts_split_token_classes() {
     assert_eq!(u.cached, 5);
 }
 
-/// RED-BEFORE-GREEN (MONEY-AUDIT STR-4): `usageMetadata` is a TOP-LEVEL field Gemini Live may send on
-/// the same message as `serverContent` (typically the `turnComplete` frame) or `toolCall`. The reader
-/// dispatched on the message type and returned before it looked at `usageMetadata`, so usage riding on
-/// a content frame produced no `Usage` event and the turn billed zero tokens.
+/// Top-level `usageMetadata` riding on a content frame is billed.
 #[test]
 fn usage_metadata_riding_on_a_content_frame_is_billed() {
     let usage = json!({
@@ -253,19 +230,13 @@ fn usage_metadata_riding_on_a_content_frame_is_billed() {
             (u.audio_in, u.text_in, u.audio_out, u.text_out),
             (80, 15, 40, 10)
         );
-        // The tool call the frame opens is counted ahead of the usage that closes the turn.
+
         assert_eq!(ir.len(), opened + 1, "{ir:?}");
         assert!(matches!(ir.last(), Some(Metered::Usage(_))), "{ir:?}");
     }
 }
 
-/// RED-BEFORE-GREEN: a MISSING modality breakdown must not meter the turn at zero.
-///
-/// Gemini can omit `promptTokensDetails`/`responseTokensDetails` while still stating the turn's
-/// TOTAL token counts (`promptTokenCount`/`responseTokenCount`). The breakdown is a REFINEMENT of the
-/// stated total, never its sole source, so reading a missing breakdown as zero tokens silently bills
-/// a real turn at zero — the one outcome #42 forbids outside billing being off. Billing must fall
-/// back to the stated total when the per-modality breakdown yields nothing.
+/// Missing modality breakdowns fall back to the stated usage totals.
 #[test]
 fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
     let src = json!({
@@ -286,7 +257,7 @@ fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
         50,
         "the turn's stated response total must not be dropped to zero"
     );
-    // The served meter bills the stated totals across its input and output classes, never zero.
+
     let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
     let sum_of = |names: &[&str]| -> u64 {
         billed
@@ -315,10 +286,7 @@ fn usage_of(meta: Value) -> IrDuplexUsage {
     }
 }
 
-/// RED-BEFORE-GREEN (MONEY; the `Modality` enum names TEXT, IMAGE, VIDEO, AUDIO and DOCUMENT): a
-/// turn whose prompt carried camera frames bills its IMAGE and VIDEO tokens, each under its own
-/// class, and the input classes sum to the prompt. RED: only the AUDIO and TEXT entries were read,
-/// so the image and video tokens billed zero.
+/// Image and video prompt tokens are billed.
 #[test]
 fn image_and_video_prompt_tokens_are_billed() {
     let u = usage_of(json!({
@@ -351,10 +319,7 @@ fn image_and_video_prompt_tokens_are_billed() {
     }
 }
 
-/// RED-BEFORE-GREEN (MONEY; the owner's gemini-tool-use-billing ruling: "a grounded Gemini turn
-/// bills Google's total, tool-use prompt tokens included"; `toolUsePromptTokenCount` is the "Number
-/// of tokens present in tool-use prompt(s)"): the tool-use prompt bills as input. RED: the field was
-/// never read and billed zero.
+/// Tool-use prompt tokens are billed.
 #[test]
 fn tool_use_prompt_tokens_are_billed() {
     let u = usage_of(json!({
@@ -372,9 +337,7 @@ fn tool_use_prompt_tokens_are_billed() {
     assert_eq!(u.audio_out + u.text_out, 50, "{u:?}");
 }
 
-/// RED-BEFORE-GREEN (MONEY; `thoughtsTokenCount` is the "Number of tokens of thoughts for thinking
-/// models", and Google's price list states "Output price (including thinking tokens)"): a thinking
-/// model's thought tokens bill as output. RED: the field was never read and billed zero.
+/// Thought tokens are billed as output.
 #[test]
 fn thought_tokens_are_billed_as_output() {
     let u = usage_of(json!({
@@ -391,10 +354,7 @@ fn thought_tokens_are_billed_as_output() {
     assert_eq!((u.audio_out, u.text_out), (40, 130), "{u:?}");
 }
 
-/// RED-BEFORE-GREEN (MONEY; the owner's ruling bills "Google's total"): where `totalTokenCount`
-/// states more than the prompt, tool-use prompt, response and thoughts it breaks into, the
-/// remainder bills as input, so the turn's classes sum to Google's total. RED: the total was never
-/// read and the remainder billed zero.
+/// Google's total is billed when it exceeds the sum of its parts.
 #[test]
 fn googles_total_is_billed_when_it_exceeds_its_parts() {
     let u = usage_of(json!({
@@ -408,10 +368,6 @@ fn googles_total_is_billed_when_it_exceeds_its_parts() {
 
 #[test]
 fn cached_content_tokens_are_not_billed_twice() {
-    // Gemini reports `cachedContentTokenCount` as a SUBSET of `promptTokenCount` (cached content IS
-    // part of the prompt), and `promptTokensDetails` is that same prompt broken out by modality. So
-    // the billing fold must bill the UNCACHED remainder as `input` and the cached portion as
-    // `cache_read` — the same netting the OpenAI dialect needs, not a per-dialect divergence.
     let src = json!({
         "usageMetadata": {
             "promptTokenCount": 1000,
@@ -426,11 +382,10 @@ fn cached_content_tokens_are_not_billed_twice() {
         }
     });
     let u = &usage_of(src["usageMetadata"].clone());
-    // Extraction stays wire-faithful.
+
     assert_eq!(u.audio_in, 1000);
     assert_eq!(u.cached, 800);
-    // The served meter bills the input as reported: the cached subset is part of it, billed once
-    // there, and no class bills it again (cached tokens are attribution only).
+
     let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
     assert!(
         billed
@@ -445,11 +400,8 @@ fn cached_content_tokens_are_not_billed_twice() {
     );
 }
 
-// ── audio-format mime probe ──────────────────────────────────────────────────────────────────────
-
 #[test]
 fn audio_format_from_mime_probe() {
-    // Each PCM rate is its own format, because the uplink meter divides by its rate.
     assert_eq!(
         audio_format_from_mime("audio/pcm;rate=24000"),
         Some(AudioFormat::Pcm16)
@@ -467,12 +419,7 @@ fn audio_format_from_mime_probe() {
     assert_eq!(audio_format_from_mime("video/mp4"), None);
 }
 
-/// RED-BEFORE-GREEN: the rate parameter must be matched EXACTLY, never by substring.
-///
-/// `"rate=160000"` (10x the true 16 kHz rate) CONTAINS `"rate=16000"` as a literal substring, so a
-/// `.contains("rate=16000")` probe mismeasures it as the 16 kHz rate it is not — a silent 10x error
-/// in billed audio duration. A rate that IS stated but recognized as neither 16 kHz nor 24 kHz must
-/// be REFUSED (`None`), never guessed at as the nearest-looking known value.
+/// An unrecognized rate is refused rather than matched by substring.
 #[test]
 fn a_stated_but_unrecognized_rate_is_refused_not_substring_matched() {
     assert_eq!(
@@ -487,11 +434,7 @@ fn a_stated_but_unrecognized_rate_is_refused_not_substring_matched() {
     );
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S17): an operator lock that turns barge-in off
-/// (`server_vad` with `interrupt_response: false`) is told to Gemini Live in its own field,
-/// `realtimeInputConfig.activityHandling: NO_INTERRUPTION`, as OpenAI Realtime is told it; barge-in
-/// on is Gemini's default and names nothing. RED: the knob was dropped, so the lock held on one
-/// dialect and silently not on the other.
+/// The Gemini session receives the operator lock that disables barge-in.
 #[test]
 fn a_lock_that_turns_barge_in_off_is_told_to_gemini() {
     let vad = |interrupt_response| SessionConfig {

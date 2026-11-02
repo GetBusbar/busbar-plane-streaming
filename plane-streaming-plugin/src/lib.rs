@@ -2,13 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The `streaming` plane as a droppable busbar plugin: the `cdylib` a signed tarball carries
-//! (`kind: plane`, section `streams`). It holds one line: the logic crate's door
-//! (`busbar_plane_streaming::door`, the one a busbar build links) exported as this image's
-//! ONE symbol, `busbar_plugin_door`, with `busbar_contract::export_door!`, so the library carries
-//! exactly the door a busbar build links and is no second path to the plane's Rust items
-//!
-//! This crate is `deny`, not `forbid`: the export macro's `#[unsafe(no_mangle)]` is the one
-//! reviewed exemption (a `forbid` cannot be lifted for it). No other `unsafe` exists here.
 
 #![deny(unsafe_code)]
 

@@ -33,9 +33,6 @@ fn every_published_claim_arrives_at_its_door_in_its_dialect() {
     );
 }
 
-/// Busbar terminates the browser's media (row 132): the mint door dials nothing, and the SDP door
-/// is a session whose far end is busbar's own call, one form, naming the caller for the provider's
-/// attribution of the session. RED: the mint dialled the provider's client-secret endpoint.
 #[test]
 fn the_mint_dials_nothing_and_busbars_call_names_the_caller() {
     assert_eq!(Door::Mint.route(Some("vk-1")), None);
@@ -77,7 +74,6 @@ fn the_mint_dials_nothing_and_busbars_call_names_the_caller() {
 }
 
 /// The mint door's answer is the ticket and its expiry in the OpenAI-compatible shape; a failed
-/// mint keeps the served plane's text.
 #[test]
 fn a_minted_ticket_is_answered_and_a_failure_keeps_the_served_text() {
     let ok = minted(&crate::tests::sealed_minted("ek_1", 9).ticket, 9);
@@ -98,7 +94,6 @@ fn a_minted_ticket_is_answered_and_a_failure_keeps_the_served_text() {
 }
 
 /// The sideband door's `{call_id}` is read off the arrival's target, and only an id made of the
-/// call ids' characters is taken: nothing that could carry another parameter into a dialled query.
 #[test]
 fn a_sideband_arrival_names_its_call() {
     assert_eq!(
@@ -144,12 +139,6 @@ fn each_door_routes_and_meters_as_the_plane_answers() {
     assert_eq!(SESSION_OPEN_ACTION, crate::meta::OP_SESSION_OPEN.as_str());
 }
 
-/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on `BUSBAR-1.6.0.md` Part 2 #45,
-/// "OpenAI Realtime over WS and WebRTC"): plain server-to-server OpenAI Realtime over WS is its own
-/// door, mirroring the provider's surface, a WS upgrade on `GET /v1/realtime` (the caller's
-/// `?model=` rides its query); the sideband is call-attached only. The plain door is a keyed
-/// session door in the OpenAI Realtime dialect that dials the provider's realtime socket bare,
-/// attached to no call. RED: no `GET /v1/realtime` line was published.
 #[test]
 fn plain_openai_realtime_over_ws_is_its_own_session_door() {
     let i = crate::plane_door::ROUTES
@@ -173,7 +162,6 @@ fn plain_openai_realtime_over_ws_is_its_own_session_door() {
 }
 
 /// `Debug` of the reply that carries a minted ticket to the caller prints no byte of the live `ek_`
-/// ticket, as text or as the body's byte list: a `{:?}` in a log line holds no credential.
 #[test]
 fn debug_of_a_minted_tickets_reply_prints_no_ticket() {
     const CANARY: &str = "ek_CANARY7c1f9e";

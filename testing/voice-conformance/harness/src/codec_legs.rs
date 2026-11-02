@@ -2,22 +2,22 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE FIXTURE LEGS — `spec-per-dialect`, `replay` — read by the harness's own decoder
-//! ([`crate::decode`]) AND driven through the door's session pieces.
-//!
-//! Each fixture is judged twice. The DECODE half: a fixture must decode to IR or be a documented
-//! drop (spec), a captured transcript must re-derive its concept skeleton (replay). The DOOR half
-//! pushes the same wire bytes through a live session on the door that
-//! speaks the dialect — the caller's frames as caller pieces, the far end's as far-end pieces — on
-//! the linked and the dropped door, and holds what the door relays to the SESSION RULES the plane
-//! states (`session_pump`, Law 5's relay): a caller frame reaches the far end as it arrived,
-//! except that a frame configuring the session or asking for a response takes the session's
-//! locked keys (the plane's governed splice, `busbar_plane_streaming::splice`); a far-end frame
-//! reaches the caller as it arrived, every one of them (a usage report also becomes reported
-//! units), and nothing goes to the far end on the caller's behalf (Law 11). Compared BYTE FOR BYTE,
-//! frame by frame, per side and in order (Law 5, `BUSBAR-1.6.0.md` l.1903: a relay "sends the
-//! client's bytes with governed byte-level splices"): a frame the reader decodes to nothing, or a
-//! member it does not model, is held to the same rule as a modelled one. The reader serves only the
-//! units. The expectation is computed from the wire by the splice, never by the door.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 use std::fs;
 use std::path::Path;
@@ -44,7 +44,7 @@ use crate::door::{
     dials_socket, judge_planted, open, result, Emission, Log, Plant, Rig, Session, PUBLIC, SESSION,
 };
 
-// ── the two dialects ────────────────────────────────────────────────────────────────────────────
+
 
 /// A duplex dialect the plane dials, and the session door that speaks it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,7 +118,7 @@ fn bytes_of(v: &Value) -> Vec<u8> {
     serde_json::to_vec(v).expect("serialize wire value")
 }
 
-// ── the shared normal form (the old harness's, verbatim in meaning) ─────────────────────────────
+
 
 /// Both direction-split IR enums collapsed onto one list, so concepts compare uniformly.
 #[derive(Clone, Debug, PartialEq)]
@@ -296,7 +296,7 @@ fn ordered_subsequence(tags: &[&str], expected: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-// ── wires, and what a session does with them ────────────────────────────────────────────────────
+
 
 /// Which side of the session a frame comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -334,7 +334,6 @@ pub fn relay(p: &Plugin<Plane>, dialect: Dialect, wires: &[Wire]) -> Log {
 }
 
 /// What the session rules say the door must relay for a sequence of wires: the exact frames each
-/// side is owed, in order, and the token units the far end's reports add up to.
 pub struct Expected {
     far: Vec<Vec<u8>>,
     caller: Vec<Vec<u8>>,
@@ -343,8 +342,6 @@ pub struct Expected {
 }
 
 /// The caller frame `bytes` as the session's lock leaves it: a frame configuring the session, or
-/// asking for a response, takes the locked keys; any other frame is as it arrived. `None` for a
-/// frame that is not JSON, or a governed frame that cannot be read as one object (it goes nowhere).
 fn governed(dialect: Dialect, locked: &SessionConfig, bytes: &[u8]) -> Option<Vec<u8>> {
     serde_json::from_slice::<Value>(bytes).ok()?;
     let mut st = DecodeState::default();
@@ -377,8 +374,8 @@ fn governed(dialect: Dialect, locked: &SessionConfig, bytes: &[u8]) -> Option<Ve
 /// The session rules over `wires`, computed from the wire (never by the door).
 pub fn expect(dialect: Dialect, wires: &[Wire]) -> Expected {
     let cfg = read_settings(SESSION).expect("the leg's section reads");
-    // The session as the door tells the provider it is locked: the model by its wire name, under
-    // the section's two token ceilings.
+
+
     let locked = with_ceilings(cfg.wire_session(cfg.session.clone()), &cfg);
     let mut st = DecodeState::default();
     let mut x = Expected {
@@ -417,7 +414,6 @@ pub fn expect(dialect: Dialect, wires: &[Wire]) -> Expected {
 }
 
 /// What the door relayed, read back by the codec: the far end's frames, the caller's, and every
-/// concept's tag in the order the door emitted it.
 pub struct Relayed {
     far: Vec<Norm>,
     caller: Vec<Norm>,
@@ -449,9 +445,6 @@ pub fn decode_relay(dialect: Dialect, log: &Log) -> Relayed {
 }
 
 /// The door's relay of a session against the session rules: every answer READY, no record row,
-/// every far frame on the dialect's socket need, both sides' frames byte for byte the frames the
-/// session rules owe them, the far end's token reports as reported units (and the session fee once
-/// the far end answered).
 pub fn relay_check(dialect: Dialect, log: &Log, x: &Expected) -> Result<String, String> {
     if !log.anomalies.is_empty() {
         return Err(format!(
@@ -525,7 +518,6 @@ pub fn relay_check(dialect: Dialect, log: &Log, x: &Expected) -> Result<String, 
 }
 
 /// How the frames a side was `sent` differ from the frames it is owed, if they do: the first frame
-/// that differs, both ways, as text.
 fn frames_differ(sent: &[&[u8]], want: &[Vec<u8>]) -> Option<String> {
     fn text(b: Option<&[u8]>) -> String {
         b.map_or_else(
@@ -551,11 +543,7 @@ pub fn plant_units(log: &Log) -> Log {
     planted
 }
 
-/// THE PLANTED WRONG DOOR that RE-ENCODES instead of relaying bytes (Law 5, `BUSBAR-1.6.0.md`
-/// l.1903: a relay "sends the client's bytes"): the first frame it emits loses a member no reader
-/// models (`event_id`), or gains one, and is re-serialized. Every concept the reader reads is
-/// unchanged, so only a byte-level comparison refuses it. A log with no frame gains one the session
-/// never owed.
+/// Plant a wrong answer by re-encoding a frame that must be relayed byte for byte.
 pub fn plant_rewrite(log: &Log) -> Log {
     let mut planted = log.clone();
     let first = planted.emissions.iter().enumerate().find_map(|(i, e)| {
@@ -581,8 +569,6 @@ pub fn plant_rewrite(log: &Log) -> Log {
 }
 
 /// THE PLANTED WRONG DOOR that DROPS a frame: the last frame it owed is never emitted (a far-end
-/// transcript, `goAway` or `response.output_item.done` the reader decodes to nothing is dropped as
-/// silently as a modelled one). A log with no frame gains one the session never owed.
 pub fn plant_drop(log: &Log) -> Log {
     let mut planted = log.clone();
     if planted.emissions.pop().is_none() {
@@ -633,9 +619,9 @@ fn judge_relay(
     )
 }
 
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-// spec-per-dialect
-// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
 
 /// Fixtures that legitimately decode to NOTHING, with the reason (the codec's documented drops).
 fn drop_reason(dialect: Dialect, fixture: &str) -> Option<&'static str> {
@@ -683,9 +669,9 @@ fn spec_codec(dialect: Dialect, fixture: &str, frame: &[u8]) -> (Result<String, 
             Ok(format!("decodes to {} IR event(s)", ir.len())),
             Dir::Down,
         ),
-        // A documented drop is a far-end concept with no shared IR home: the reader decodes it to
-        // nothing, and pushed from the far end the door relays its bytes to the caller unchanged
-        // (a relay is byte-level, Law 5), which the door half holds it to.
+
+
+
         Decoded::Empty => match drop_reason(dialect, fixture) {
             Some(reason) => (Ok(format!("documented drop — {reason}")), Dir::Down),
             None => (
@@ -756,9 +742,9 @@ pub fn spec(rig: &Rig, dialect_name: &str, dir: &Path) -> i32 {
     i32::from(fails > 0)
 }
 
-// ══════════════════════════════════════════════════════════════════════════════════════════════
-// replay
-// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+
 
 fn read_jsonl(path: &Path) -> Result<Vec<Value>, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -788,7 +774,6 @@ fn transcript_wires(lines: &[Value]) -> Vec<Wire> {
 }
 
 /// The decode half of a replay: one session state, every frame decoded in order, and the skeleton
-/// in order.
 fn replay_codec(dialect: Dialect, wires: &[Wire], skeleton: &[&str]) -> Result<String, String> {
     let mut st = DecodeState::default();
     let (mut tags, mut decoded) = (Vec::new(), 0_usize);
@@ -815,8 +800,8 @@ fn replay_codec(dialect: Dialect, wires: &[Wire], skeleton: &[&str]) -> Result<S
 
 /// `replay <root>`: each dialect's captured transcript, codec half and door half.
 pub fn replay(rig: &Rig, root: &Path) -> i32 {
-    // The skeletons the codec re-derives; the door's relay must show the same concepts in the
-    // order it emitted them: it relays every frame, the far end's usage reports included.
+
+
     let cases: [(Dialect, &[&str]); 2] = [
         (
             Dialect::OpenAi,

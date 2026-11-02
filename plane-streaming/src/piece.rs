@@ -2,16 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THIS PLANE'S PIECE ANSWER: what an `on_piece` answer owes the host's reply
-//! buffer, and the one settle of the answer's field, unit and arena buffers.
-//!
-//! The route pump: a full reply buffer answers `more = 1`;
-//! the kernel flushes it, waits for the caller's side and calls again with the same `from` and zero
-//! bytes ([`is_recall`]). An answer that does not fit its field, unit or arena buffer is short as a
-//! whole ([`settle`]): the slot answers FAILED, and the kernel re-calls with the same piece and room.
-//!
-//! The door keeps an [`Owed`] per unit and pays it across the re-calls, so the backpressure rule
-//! (`EMIT_DONE` only with the last byte) is written once in this plane. Each plane door carries
-//! this logic today; one SDK home for all of them is 1.6.0-QUESTIONS.md PIECE-HOME.
 
 use busbar_contract::abi::plane::{
     OnPieceIn, OnPieceOut, OutField, RecordWrite, UnitCount, EMIT_DONE, EMIT_TO_FAR_END,
@@ -23,7 +13,6 @@ use busbar_contract::abi::sdk::{HostBuf, Lent, Out};
 use crate::driven::Body;
 
 /// Whether `input` is the kernel's re-call after a `more = 1` answer: no bytes, no flags and no
-/// attempt.
 #[must_use]
 pub fn is_recall(input: Lent<'_, OnPieceIn>) -> bool {
     let given = input;
@@ -60,7 +49,6 @@ impl Owed {
     }
 
     /// Owe a caller's answer `body` under the `EMIT_*` `flags`, and pay what fits now: public bytes
-    /// as [`Owed::owe`] owes them, a sealed answer through the SDK. Answers whether the unit is done.
     pub fn owe_body(
         &mut self,
         body: Body,
@@ -82,7 +70,6 @@ impl Owed {
     }
 
     /// Owe `bytes` under the `EMIT_*` `flags`, and pay what fits now. Answers whether the unit is
-    /// done: every byte written, with `EMIT_DONE` among `flags`.
     pub fn owe(
         &mut self,
         bytes: &[u8],
@@ -98,13 +85,8 @@ impl Owed {
     }
 
     /// Write what is owed into the reply buffer, as much as fits: `more = 1` while any is left, and
-    /// the owed flags on every write, `EMIT_DONE` held back until the last byte, and so is a
-    /// far-bound message's `PIECE_OUT_TEXT` (the kernel gathers a far-bound message whole, so its
-    /// last piece names it text). Answers whether the unit is done.
     pub fn pay(&mut self, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPieceOut>) -> bool {
         let n = match &mut self.sealed {
-            // A sealed answer the SDK refuses to put in a host buffer (one carrying a credential
-            // that must go out secured: never a captured `ek_`) is dropped unwritten.
             Some(write) => write
                 .stream_into(&mut input.reply_buf())
                 .unwrap_or_else(|_| {
@@ -140,7 +122,6 @@ impl Owed {
 }
 
 /// Settle an answer's field, unit and arena buffers: `(written, needed)` of each, short as a whole
-/// when any one is short. Answers whether the answer is short.
 pub fn settle(
     out: &mut Out<'_, OnPieceOut>,
     fields: &HostBuf<'_, OutField>,

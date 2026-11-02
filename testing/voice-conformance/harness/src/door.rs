@@ -2,15 +2,15 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE DOOR, BOTH WAYS: the plumbing every leg drives the streaming plane through.
-//!
-//! The same door is loaded twice through the ONE loader: compiled in
-//! (`busbar_plane_streaming::plane_door::door`, [`load_linked`]) and dropped in (the plane's cdylib twin,
-//! `busbar-plane-streaming-plugin`, beside this harness, [`load_dropped`] against the linked row's
-//! own Statement).
-//! Every leg builds a fresh instance of each, drives both with one script, and [`judge`]s the pair:
-//! the two observations must be equal, the observation must pass the leg's check, and the leg's
-//! PLANTED WRONG ANSWER must be refused by the same check (the RED arm, run in the same process on
-//! every assertion). A dropped door that is not built or does not load is a FAIL, never a skip.
+
+
+
+
+
+
+
+
+
 
 use std::cell::Cell;
 use std::fmt::Debug;
@@ -33,11 +33,9 @@ use busbar_plugin_loader::dispatch::{
 };
 
 /// The environment variable naming the dropped-in door's library, when it is not beside the
-/// harness.
 pub const DOOR_ENV: &str = "VOICE_CONFORM_DOOR";
 
 /// The environment variable that turns every planted wrong answer ON as the subject: each leg must
-/// then go RED (the RED arm, observable from the runner).
 pub const RED_ENV: &str = "VOICE_CONFORM_RED";
 
 /// The deployment's public base URL every leg opens the door under.
@@ -122,8 +120,6 @@ pub fn clip(s: &str) -> String {
 }
 
 /// Whether a far request's `target` is the dialect's socket: the path is the socket's exactly, and
-/// the model the session is dialled for rides the query as the provider's own docs spell it
-/// (`/v1/realtime?model=<m>`), the query nothing but that one member.
 pub fn dials_socket(target: &str, socket: &str) -> bool {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     path == socket
@@ -138,7 +134,7 @@ pub fn red_mode() -> bool {
     std::env::var_os(RED_ENV).is_some()
 }
 
-// ── the two doors ───────────────────────────────────────────────────────────────────────────────
+
 
 /// The harness's one dispatcher and the two ways it reaches the door.
 pub struct Rig {
@@ -149,9 +145,6 @@ pub struct Rig {
 }
 
 /// Where the dropped-in door is: `VOICE_CONFORM_DOOR`, else the plane's cdylib twin beside this
-/// harness's binary in the profile directory (`cargo build --manifest-path <the pinned plane's
-/// workspace> -p busbar-plane-streaming-plugin --target-dir <this target>` puts it there; the plane
-/// lives in its own repo, row 106).
 fn dropped_path() -> Result<PathBuf, String> {
     if let Some(p) = std::env::var_os(DOOR_ENV) {
         let p = PathBuf::from(p);
@@ -203,8 +196,8 @@ impl Rig {
             max_inflight_cap: 8,
             sink: Arc::new(NoSink),
             dispatcher: self.dispatcher.adopter(),
-            // These rows drive the door's slots and never dial: its needs are not declared, bound
-            // as a probe.
+
+
             conns: busbar_plugin_loader::dispatch::ConnTable::Probe,
         }
     }
@@ -237,7 +230,7 @@ impl Rig {
     }
 }
 
-// ── the verdict ─────────────────────────────────────────────────────────────────────────────────
+
 
 /// One `RESULT` line.
 pub fn result(slice: &str, pass: bool, what: &str, detail: &str) {
@@ -249,10 +242,6 @@ pub fn result(slice: &str, pass: bool, what: &str, detail: &str) {
 pub type Check<'a, T> = &'a dyn Fn(&T) -> Result<String, String>;
 
 /// JUDGE ONE ASSERTION over both doors. PASS only when (1) the dropped door loaded and answered
-/// exactly as the linked door did, (2) the linked door's observation passes `check`, and (3) the
-/// RED ARM bit: `plant` (the leg's wrong door, restated as the wrong answer it would give) changes
-/// the observation and `check` refuses it. Under [`RED_ENV`] the planted answer IS the subject, so
-/// the line must come out FAIL. Prints the line; answers whether it passed.
 pub fn judge<T: Clone + PartialEq + Debug>(
     slice: &str,
     what: &str,
@@ -267,8 +256,6 @@ pub fn judge<T: Clone + PartialEq + Debug>(
 pub type Plant<'a, T> = (&'a str, &'a dyn Fn(&T) -> T);
 
 /// [`judge`] with SEVERAL planted wrong doors: every one of them must change the observation and be
-/// refused by `check` (each names the defect the check exists to catch). Under [`RED_ENV`] the
-/// first plant is the subject.
 pub fn judge_planted<T: Clone + PartialEq + Debug>(
     slice: &str,
     what: &str,
@@ -296,9 +283,6 @@ pub fn judge_planted<T: Clone + PartialEq + Debug>(
 }
 
 /// What [`judge_planted`] finds: what `check` proved, and every way the assertion is wrong. Under
-/// `red` the first plant is the subject on BOTH doors (each door's own answer, planted), so the two
-/// still agree and the line's verdict is the check's alone: a check that accepts its plant stays
-/// PASS, and the battery's RED leg reports it as one that cannot tell.
 fn verdict<T: Clone + PartialEq + Debug>(
     linked: &T,
     dropped: &Result<T, String>,
@@ -357,10 +341,7 @@ mod verdict_tests {
         n + 1
     }
 
-    /// Audit S98: under RED the plant is the subject on both doors, so a check that accepts its
-    /// plant passes (and the RED leg reports a battery that cannot tell); a check with teeth fails.
-    /// RED: the linked door was planted and the dropped door was not, so every line failed on the
-    /// mismatch alone, whatever its check did.
+    /// With planted answers on both doors, the check alone determines the verdict.
     #[test]
     fn under_red_the_verdict_is_the_checks_alone() {
         let toothless: Check<'_, u32> = &|_| Ok("anything".to_string());
@@ -377,7 +358,7 @@ mod verdict_tests {
     }
 }
 
-// ── the lifecycle ───────────────────────────────────────────────────────────────────────────────
+
 
 /// One claim a snapshot publishes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -555,7 +536,6 @@ pub fn refusal(
 }
 
 /// The kernel refuses unit `unit` on `dialect` for `reason` (its code on the plane ABI) with
-/// `status` and `words`: the door renders it.
 pub fn refusal_for(
     p: &Plugin<Plane>,
     unit: u64,
@@ -622,7 +602,7 @@ pub fn tick(p: &Plugin<Plane>, now_ns: u64) -> (Outcome, u64) {
     (c.outcome, k.out.next_tick_ns)
 }
 
-// ── a piece and its answer ──────────────────────────────────────────────────────────────────────
+
 
 /// One piece pushed to a unit.
 #[derive(Clone, Copy, Debug)]
@@ -766,7 +746,7 @@ pub fn piece(p: &Plugin<Plane>, x: &Piece<'_>) -> Answer {
     }
 }
 
-// ── one live session ────────────────────────────────────────────────────────────────────────────
+
 
 /// One frame the door emitted on a session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -810,7 +790,6 @@ pub struct Session<'p> {
     stream: u64,
     claim: u32,
     /// Whether the far end's first piece was pushed: the kernel states the far end's status (its
-    /// upgrade's switch) on that piece alone.
     far_seen: bool,
     /// What it showed so far.
     pub log: Log,
@@ -877,10 +856,9 @@ impl<'p> Session<'p> {
     }
 
     /// Push `bytes` from `from` (with `flags`), then collect every frame the session still owes.
-    /// Answers the piece's own answer.
     pub fn push(&mut self, from: u32, flags: u32, bytes: &[u8]) -> Answer {
-        // The far end's first piece carries its status, as the kernel sends it: the upgrade's
-        // switch (101), which is the far end accepting the session (its fee unit).
+
+
         let first_far = from == FROM_FAR_END && !std::mem::replace(&mut self.far_seen, true);
         let a = piece(
             self.p,

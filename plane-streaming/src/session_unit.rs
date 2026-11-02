@@ -2,15 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One live session as the driver serves it, sans I/O: the session pump, the telephony carrier's
-//! envelope where the session came in over the telephony door, the session's cumulative units and
-//! its wall-clock ceiling.
-//!
-//! The driver pushes the caller's pieces ([`SessionUnit::from_caller`]) and the far end's
-//! ([`SessionUnit::from_far_end`]); each answers a [`Plan`] of bytes for each side and whether the
-//! session ends. The session's cumulative units ([`SessionUnit::units`]) are every closed turn's
-//! and the open turn's running counts, which each answer reports; the kernel checkpoints them,
-//! decides a cut, and bills the last checkpoint however the session ends. The plane never cuts a
-//! session on money: a cut is the kernel's, and it reaches the caller through the refusal render.
 
 use bytes::Bytes;
 
@@ -24,7 +15,6 @@ use crate::session_pump::{SessionPump, TurnSink};
 use crate::splice::LockedKeys;
 
 /// The billable classes a session reports, in the tail's order (their index is the class a unit
-/// count names).
 pub const CLASSES: [busbar_contract::ids::MeterClassId; 8] = [
     meta::CLASS_AUDIO_TOKENS_IN,
     meta::CLASS_AUDIO_TOKENS_OUT,
@@ -37,7 +27,6 @@ pub const CLASSES: [busbar_contract::ids::MeterClassId; 8] = [
 ];
 
 /// The index of the output text tokens in [`CLASSES`]: the class an unreadable usage report's floor
-/// bills.
 pub const TEXT_TOKENS_OUT: u32 = 3;
 
 /// The session's units so far, per class: every closed turn adds to them, and the session always
@@ -47,7 +36,6 @@ pub struct CumulativeUnits(pub [u64; CLASSES.len()]);
 
 impl CumulativeUnits {
     /// The units as the door reports them: (class index, amount), the zero classes left out.
-    /// Counts only; the kernel prices them.
     #[must_use]
     pub fn reported(&self) -> Vec<(u32, u64)> {
         self.0
@@ -105,7 +93,6 @@ where
     C: DuplexReader + LockedKeys,
 {
     /// A session over `codec`, locked to `locked`. `telephony` puts the telephony carrier's
-    /// envelope on the caller's side.
     pub fn open(codec: C, locked: SessionConfig, telephony: bool) -> Self {
         SessionUnit {
             pump: SessionPump::new(codec, Some(locked)),
@@ -119,10 +106,6 @@ where
     }
 
     /// The session's cumulative units, per class in [`CLASSES`] order: every closed turn's, and the
-    /// open turn's running counts (its uplink audio and the tool calls it opened so far). Each
-    /// answer reports these, so the last one before any end the kernel imposes (a `cut-stream` cut,
-    /// a cancel, a drain) carries what streamed; a turn's close only moves its counts into the
-    /// closed total, and the figure never falls.
     #[must_use]
     pub fn units(&self) -> CumulativeUnits {
         let mut units = self.units;
@@ -134,7 +117,6 @@ where
     }
 
     /// The locked session, once, for a native socket's initial upstream request. A carrier that
-    /// supplies its own setup (Gemini) or start (Twilio) does not ask for this initialization.
     pub fn initial_lock(&mut self) -> Option<Vec<u8>> {
         if std::mem::replace(&mut self.locked_told, true) {
             return None;
@@ -160,8 +142,6 @@ where
     }
 
     /// A piece from the caller. Behind the telephony carrier's envelope, the carrier's start is
-    /// translated into the locked session the far end is told before any audio (the carrier
-    /// configures nothing itself: µ-law both ways over the operator's session).
     #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8]) -> Plan {
         if self.ended {
@@ -197,11 +177,6 @@ where
     }
 
     /// A piece from the far end. A tool call in it is relayed to the caller as-is: the
-    /// caller runs the tool (Law 11).
-    ///
-    /// A usage report the reader cannot read (a billed count present but not a count) bills the
-    /// plane's floor for the turn and the session goes on (spend is always
-    /// attributed); [`Self::take_unreadable`] reports it to the kernel once.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8]) -> Plan {
         if self.ended {
@@ -223,7 +198,6 @@ where
     }
 
     /// Whether the far end sent a usage report the reader could not read and the kernel has not been
-    /// told; telling clears it, so it is reported once.
     pub fn take_unreadable(&mut self) -> bool {
         std::mem::take(&mut self.unreadable)
     }
@@ -235,7 +209,6 @@ where
     }
 
     /// The session reached the wall-clock ceiling of `ceiling_secs` its host measured: it is told
-    /// why, in its dialect, and ends.
     pub fn close_at_ceiling(&mut self, ceiling_secs: u64) -> Plan {
         if self.ended {
             return Plan::default();

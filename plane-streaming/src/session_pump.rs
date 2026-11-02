@@ -2,26 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The session pump: what one live session does with each frame, in both directions, sans I/O.
-//!
-//! A session's caller and far end speak the same dialect, so the pump is a relay: it
-//! runs the reader only as a read-only tap and sends the client's bytes with governed byte-level
-//! splices (a writer runs only when translating). A frame from the far end
-//! ([`SessionPump::on_server_frame`]) reaches the caller as the far end sent it; a frame from the
-//! caller ([`SessionPump::on_client_frame`]) reaches the far end as the caller sent it, except
-//! that a frame configuring the session, or asking for one response under its own settings, takes
-//! the session's locked keys ([`crate::splice`]). The reader reads each frame only to meter it.
-//!
-//! Nothing here answers for the caller (Law 11): a tool call, a barge-in, an error reach the caller
-//! as they came, and the caller acts on them. Nothing here sends, sleeps, reads a clock or holds a
-//! key; the caller carries the plan and is told when a turn closes.
-//!
-//! What the pump holds for the session: the open turn's own counters (the
-//! uplink audio admitted and the tool calls opened since the last turn closed, the two quantities no
-//! usage report carries), and the locked session config.
-//!
-//! What it asks of its caller, through [`TurnSink`]: when a turn closes (a usage report, an error,
-//! or the session ending with a turn open), the turn's usage and counters, and whether the session
-//! stays open.
 
 use std::borrow::Cow;
 
@@ -50,7 +30,6 @@ pub struct Outbound {
 }
 
 /// Where a closed turn goes: its usage and its counters. The answer is whether the session may
-/// continue; `false` closes it.
 pub trait TurnSink {
     /// One turn closed.
     fn turn_closed(&mut self, usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> bool;
@@ -99,7 +78,6 @@ where
     }
 
     /// The error frame a session past its `ceiling_secs` ceiling is told before it closes, in its
-    /// dialect; `None` when the dialect has no place to say so.
     pub fn ceiling_error(&mut self, ceiling_secs: u64) -> Option<WireEvent> {
         self.codec
             .ceiling_frame(
@@ -112,17 +90,12 @@ where
     }
 
     /// The locked session as a frame that configures the far end, in the shape its socket reads
-    /// ([`LockedKeys::locked_frame`]): what a caller-side envelope that configures nothing itself
-    /// (the telephony carrier) is translated into. `None` with no lock.
     pub fn locked_update(&mut self) -> Option<WireEvent> {
         let frame = self.codec.locked_frame(self.locked_config.as_ref()?)?;
         Some(WireEvent(frame.into()))
     }
 
     /// A frame from the far end. It reaches the caller as the far end sent it: a tool call is part
-    /// of the model's response and the caller runs it, a barge-in is the caller's to act on. The reader reads it only to meter: a usage report or an error closes the open
-    /// turn, and a tool call the far end opens is counted ([`DuplexReader::meter_down`]: a frame
-    /// whose head shows it carries none of these, the audio, is not read past its head).
     pub fn on_server_frame(&mut self, frame: WireEvent, sink: &mut dyn TurnSink) -> Outbound {
         let mut out = Outbound::default();
         if frame.0.is_empty() {
@@ -143,22 +116,11 @@ where
     }
 
     /// A FRAME FROM THE CALLER. It reaches the far end as the caller sent it; uplink audio is
-    /// counted. Under a lock it is governed by its BYTES, whatever its `type` says: every
-    /// configuring object and per-response object in it takes the locked keys, and a frame that
-    /// authors an instructing item goes nowhere. A frame that configures an uplink
-    /// format the plane cannot meter, or one other than the session's locked format, goes nowhere:
-    /// the far end would read the caller's audio at a rate the plane does not count it at. A frame
-    /// that is not JSON goes nowhere: bytes the reader cannot read are never handed to a far end
-    /// whose own reader might read them differently.
     pub fn on_client_frame(&mut self, frame: WireEvent) -> Outbound {
         let mut out = Outbound::default();
-        // The uplink format the frame switches the session to, committed only once the frame is
-        // relayed: a frame that goes nowhere configures nothing at the far end, so nothing here.
+
         let mut switch = None;
-        // The frame is read once, as strictly as a whole-frame read, its audio left where it lies.
-        // An object naming none of the dialect's governed members passes every check and every
-        // splice as it came (`LockedKeys::GOVERNED`); any other frame takes the checks and the
-        // splices. A frame that read refuses carries no audio the meter counts.
+
         let read = Lite::read(&frame.0);
         let plain = read
             .as_ref()
@@ -185,7 +147,7 @@ where
                 return out;
             }
         }
-        // The governed splices; `None` = the frame goes as it came.
+
         let mut spliced = None;
         if !plain && !self.rules.is_empty() {
             let mut bytes = Cow::Borrowed(&frame.0[..]);
@@ -195,14 +157,13 @@ where
                     None => return out,
                 }
             }
-            // At least one rule ran, so the bytes are already the splice's own.
+
             let bytes = bytes.into_owned();
             if bytes[..] != frame.0[..] {
                 spliced = Some(bytes);
             }
         }
-        // Audio the plane cannot meter is refused, never relayed unmetered: the frame goes
-        // nowhere, nothing of it is counted, and the session says so once.
+
         if let Some(top) = &read {
             if self.codec.uplink_audio(top, &mut |_, _| {}).is_err() {
                 if !std::mem::replace(&mut self.told_unmeterable, true) {
@@ -215,14 +176,13 @@ where
                 return out;
             }
         }
-        // The frame goes to the far end: the format it names is the one the far end now reads,
-        // and its audio is counted at it.
+
         if let Some(named) = switch {
             self.audio_in = named;
         }
         if let Some(top) = &read {
             let (turn, audio_in) = (&mut self.turn, self.audio_in);
-            // Read meterable above: the second read admits what the first one checked.
+
             let _ = self.codec.uplink_audio(top, &mut |format, len| {
                 turn.admit_audio(format.unwrap_or(audio_in), len);
             });
@@ -235,7 +195,6 @@ where
     }
 
     /// Close the open turn: its usage and counters go to `sink`; a sink that refuses to continue
-    /// closes the session.
     fn settle_turn(
         &mut self,
         sink: &mut dyn TurnSink,
@@ -255,7 +214,6 @@ where
     }
 
     /// The session ends with a turn open: the turn's counters settle, once. A turn with nothing
-    /// counted settles nothing.
     pub fn settle_open_turn(&mut self, sink: &mut dyn TurnSink) {
         if self.turn.is_empty() {
             return;

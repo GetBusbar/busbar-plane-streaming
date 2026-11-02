@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The meter's frame reads answer as the whole-frame reads they stand in for: the base64 length is
-//! the decoded length with the decode's refusals, and the borrowed read accepts exactly the frames a
-//! `serde_json::Value` read accepts.
 
 use super::peek::{base64_len, Head, Lite};
 use super::*;

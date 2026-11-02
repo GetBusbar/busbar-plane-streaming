@@ -2,10 +2,10 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE COMPOSITION LEGS, AT THE DOOR. Each leg judged one seam of a served session; the plane is
-//! now served only through its door, so each leg judges the DOOR'S HALF of that seam — what the
-//! door states, answers and refuses to do — and names the half that is the kernel's (the plane
-//! driver's walk, the identity crate, the money steps, the transport), which the plane cannot see
-//! and this harness therefore cannot judge.
+
+
+
+
 
 use busbar_contract::abi::host::conn::connector::DIRECTION_OUTBOUND;
 use busbar_contract::abi::mechanism::call::Outcome;
@@ -38,7 +38,7 @@ use crate::door::{
     MODEL, PUBLIC, SESSION,
 };
 
-// ── the frames the legs push ────────────────────────────────────────────────────────────────────
+
 
 /// A far end's OpenAI Realtime usage report.
 pub const USAGE_DONE: &[u8] = br#"{"type":"response.done","response":{"usage":{"input_token_details":{"audio_tokens":10,"text_tokens":3},"output_token_details":{"audio_tokens":20,"text_tokens":4}}}}"#;
@@ -47,7 +47,6 @@ pub const USAGE_DONE: &[u8] = br#"{"type":"response.done","response":{"usage":{"
 pub const GEMINI_USAGE: &[u8] = br#"{"usageMetadata":{"promptTokenCount":140,"responseTokenCount":80,"totalTokenCount":220,"promptTokensDetails":[{"modality":"TEXT","tokenCount":40},{"modality":"AUDIO","tokenCount":100}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":80}]}}"#;
 
 /// The cumulative units a session reports once `USAGE_DONE` closed a turn holding `secs` seconds
-/// of the caller's audio: the four token classes, the audio seconds and the session fee.
 pub fn usage_units(secs: u64) -> String {
     format!("0:1=10 1:1=20 2:1=3 3:1=4 4:1={secs} {PER_SESSION_CLASS}:1=1")
 }
@@ -98,7 +97,7 @@ pub fn run(rig: &Rig, slice: &str) -> i32 {
     i32::from(!pass)
 }
 
-// ── provider-credential ─────────────────────────────────────────────────────────────────────────
+
 
 /// One need the Statement declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +123,7 @@ struct CredObs {
     needs: Vec<NeedLine>,
     dialect_auth: Vec<String>,
     rides: Vec<Ride>,
-    /// The mint door's arrival and its whole answer (row 132: busbar mints the ticket itself).
+    /// The local ticket mint's arrival and complete answer.
     mint: (Arrived, Answer),
 }
 
@@ -193,8 +192,8 @@ fn cred_check(o: &CredObs) -> Result<String, String> {
     if o.rides.len() != 2 {
         return Err(format!("expected two far requests, saw {:?}", o.rides));
     }
-    // THE MINT DIALS NOTHING (row 132, `BUSBAR-1.6.0.md` l.766: "Tickets are busbar-minted"): it
-    // names the LOCAL route, and its answer goes to the caller alone.
+
+
     let (arrived, minted) = &o.mint;
     if arrived.outcome != Outcome::Ready
         || arrived.route != (ROUTE_LOCAL, String::new())
@@ -207,11 +206,11 @@ fn cred_check(o: &CredObs) -> Result<String, String> {
             "the mint reached for the provider instead of minting: {arrived:?} {minted:?}"
         ));
     }
-    // THE GRANT FIRST (R10 grant ruling, lead 2026-10-30, plane-streaming #64): before it mints,
-    // the door asks `entitlement.check` over `pool:<the session's model>`, and anything but the
-    // host's "entitled" is a refusal, never a default open. This host serves no entitlement
-    // check, so the key is outside the grant: the caller is answered 403 `not_granted`, naming
-    // the model and never the key, with nothing minted and nothing dialled.
+
+
+
+
+
     let refused = mint_not_granted(MODEL);
     if minted.outcome != Outcome::Ready
         || !minted.done
@@ -296,7 +295,7 @@ fn provider_credential(rig: &Rig, slice: &str) -> bool {
             .push(("authorization".to_string(), "Bearer sk-caller".to_string()));
         planted
     };
-    // The predev broker's mint: it asked the provider for the secret.
+
     let brokered = |o: &CredObs| {
         let mut planted = o.clone();
         planted.mint.0.route = (ROUTE_DIRECT, MODEL.to_string());
@@ -304,7 +303,7 @@ fn provider_credential(rig: &Rig, slice: &str) -> bool {
         planted.mint.1.need = RIDES_REALTIME_CALL;
         planted
     };
-    // A mint that opens by default: the key outside the grant is minted a ticket.
+
     let open_by_default = |o: &CredObs| {
         let mut planted = o.clone();
         planted.mint.1.status = 200;
@@ -324,7 +323,7 @@ fn provider_credential(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── metering-lease ──────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MeterObs {
@@ -394,7 +393,7 @@ fn meter_script(p: &Plugin<Plane>) -> MeterObs {
 
 fn meter_expected() -> Vec<String> {
     vec![
-        // Every answer reports the open turn's running seconds (Q128 u64: a cancel or a cut
+        // Every answer reports the open turn's running seconds (a cancel or a cut
         // reports nothing of its own, so the last answer before it is what bills).
         "caller audio Ready units=[4:1=2]".to_string(),
         "turn attempt Ready units=[4:1=2]".to_string(),
@@ -463,7 +462,7 @@ fn metering_lease(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── session-scope ───────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ScopeObs {
@@ -502,9 +501,6 @@ fn error_of(r: &Rendered) -> (String, String) {
 }
 
 /// THE GRANT KINDS THE TAIL STATES, `scope`'s first: `session`, the plane's own, and `pool`, the
-/// kind the kernel's pool guard judges a routed entry by, which the mint door asks
-/// `entitlement.check` over (`pool:<the session's model>`) before it mints (R10 grant ruling, lead
-/// 2026-10-30, plane-streaming #64): a mint dials nothing, so no kernel route check reaches it.
 const SCOPE_KINDS: [&str; 2] = ["session", "pool"];
 
 fn scope_check(o: &ScopeObs) -> Result<String, String> {
@@ -513,8 +509,8 @@ fn scope_check(o: &ScopeObs) -> Result<String, String> {
     }
     for (claim, a) in SCOPE_CLAIMS.iter().zip(&o.arrivals) {
         let door = *claim <= 5;
-        // The sideband door controls a call busbar placed (row 132): asked for a call busbar did
-        // not place (none here), it still asks for a principal and is refused 404.
+
+
         let ok = if *claim == 2 {
             a.outcome == Outcome::Refused
                 && a.principal == PRINCIPAL_REQUIRED
@@ -562,7 +558,7 @@ fn session_scope(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── gemini-live-route ───────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RouteObs {
@@ -685,7 +681,7 @@ fn gemini_live_route(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── provider-dial ───────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DialObs {
@@ -796,7 +792,7 @@ fn provider_dial(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── admit-refusal ───────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AdmitObs {
@@ -819,8 +815,6 @@ struct PolicyRefusal {
 }
 
 /// The refusal classes that refuse the caller's request rather than name a state or fault of the
-/// node (ARCHITECT ruling: a policy refusal is a refusal, not a server fault; the class docs in
-/// `busbar_contract::abi::plane::RefusalClass`).
 const POLICY_CLASSES: [RefusalClass; 9] = [
     RefusalClass::Unreadable,
     RefusalClass::Rejected,
@@ -851,9 +845,9 @@ fn admit_script(p: &Plugin<Plane>) -> AdmitObs {
         .iter()
         .map(|(status, words, _)| (*status, refusal(p, 60, 0, u32::from(*status), words)))
         .collect();
-    // Every reason a plane can be handed, in every policy class: the status the kernel's plane
-    // driver chooses for it where the plane states no row (the streaming plane states none), and
-    // the door's rendering of that refusal.
+
+
+
     let policy = ReasonCode::ALL
         .iter()
         .filter(|r| POLICY_CLASSES.contains(&class_of(**r)))
@@ -974,7 +968,7 @@ fn admit_refusal(rig: &Rig, slice: &str) -> bool {
             let mut planted = o.clone();
             planted.rendered[0].1.body =
                 String::from_utf8_lossy(&refusal_body(500, "x")).into_owned();
-            // A policy refusal collapsed into the node's 503 `server_error`.
+
             if let Some(r) = planted.policy.first_mut() {
                 r.status = 503;
                 r.rendered.body =
@@ -985,7 +979,7 @@ fn admit_refusal(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── route-failover ──────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FailObs {
@@ -998,8 +992,7 @@ struct FailObs {
     second: Answer,
 }
 
-/// The doors a route is named for: the mint (LOCAL: busbar mints, row 132), the SDP door, Gemini
-/// Live, telephony and the plain realtime socket (each DIRECT to the session model).
+/// Route claims for the local mint, SDP, Gemini, sideband, and plain Realtime doors.
 const ROUTED_CLAIMS: [u32; 5] = [0, 1, 3, 4, 5];
 
 fn fail_script(p: &Plugin<Plane>) -> FailObs {
@@ -1110,7 +1103,7 @@ fn route_failover(rig: &Rig, slice: &str) -> bool {
     failover && unrouted
 }
 
-// ── audit-record ────────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AuditObs {
@@ -1123,11 +1116,6 @@ struct AuditObs {
 }
 
 /// THE ONE AUDIT ROW the battery's units carry (contract `RECORD_AUDIT`: "THE UNIT'S AUDIT RECORD,
-/// a row on the kernel's own audit chain (the one fixed record), not a record of the plane's"):
-/// the mint's refusal of a key outside the session model's grant, `rejected`, as
-/// `realtime_ticket.mint` on `pool:<the session's model>`, naming the pool and never the key (R10
-/// grant rulings 1 and 2, lead 2026-10-30, plane-streaming #64). This host serves no
-/// entitlement check, so the mint is that refusal.
 fn mint_refused_row() -> Row {
     Row {
         op: RECORD_AUDIT,
@@ -1146,8 +1134,8 @@ fn audit_script(p: &Plugin<Plane>) -> AuditObs {
         .map(|k| (*k).to_string())
         .collect();
     let _ = open(p, SESSION, Some(PUBLIC));
-    // Every door but the sideband, which is asked about a call busbar placed (none here: the
-    // session-scope leg judges its 404).
+
+
     let op_of = [0, 1, 3, 4]
         .into_iter()
         .map(|c| {
@@ -1163,8 +1151,8 @@ fn audit_script(p: &Plugin<Plane>) -> AuditObs {
         s.push(FROM_CALLER, PIECE_LAST, &[]);
         rows.extend(s.log.rows.into_iter().map(|r| (unit, r)));
     }
-    // The mint's whole unit: busbar mints the ticket (row 132), dialling nothing; the key here is
-    // outside the session model's grant, so it is refused and audited (R10).
+
+
     let mint = piece(p, &request(82, 0, FROM_CALLER, PIECE_LAST, &[]));
     rows.extend(mint.rows.into_iter().map(|r| ("mint", r)));
     let refused = refusal(p, 83, 0, 403, "refused");
@@ -1212,7 +1200,7 @@ fn audit_check(o: &AuditObs) -> Result<String, String> {
             own.len()
         ));
     }
-    // Every audit row is the unit's one fixed record: exactly the mint refusal's, once.
+
     let want = [("mint", mint_refused_row())];
     if o.rows != want {
         return Err(format!(
@@ -1267,7 +1255,7 @@ fn audit_record(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── exit-terminal ───────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExitObs {
@@ -1352,7 +1340,7 @@ fn exit_terminal(rig: &Rig, slice: &str) -> bool {
     )
 }
 
-// ── tool-reply ──────────────────────────────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ToolObs {
@@ -1435,11 +1423,7 @@ fn frames(log: &Log, to_far: bool) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// The tool-reply leg, judged to Law 11 (`BUSBAR-1.6.0.md` l.2127-2136: a model's tool call "goes
-/// back to the caller unchanged except for dialect translation"; busbar "answers nothing on the
-/// caller's behalf") and Law 5 (l.1903: a relay "sends the client's bytes"). The far end's
-/// response, its usage report included, reaches the caller frame for frame and byte for byte, and
-/// its units are reported; the caller's own result reaches the far end unchanged and alone.
+/// Check that tool calls and replies are relayed unchanged between caller and model.
 fn tool_check(dialect: Dialect, o: &ToolObs, w: &ToolWire) -> Result<String, String> {
     let name = dialect.name();
     if !o.log.anomalies.is_empty() {
@@ -1509,7 +1493,6 @@ fn tool_check(dialect: Dialect, o: &ToolObs, w: &ToolWire) -> Result<String, Str
 }
 
 /// THE PLANTED WRONG DOOR that answers the call upstream: the caller's result reaches the far end
-/// before the caller sent it (busbar authored it).
 fn plant_answered(o: &ToolObs, w: &ToolWire) -> ToolObs {
     let mut planted = o.clone();
     planted.log.emissions.insert(
@@ -1528,7 +1511,6 @@ fn plant_answered(o: &ToolObs, w: &ToolWire) -> ToolObs {
 }
 
 /// THE PLANTED WRONG DOOR that withholds the far end's usage report from the caller (the model's
-/// response is the caller's, every frame of it: Law 5, `BUSBAR-1.6.0.md` l.1903; Law 11, l.2129).
 fn plant_withheld(o: &ToolObs) -> ToolObs {
     let mut planted = o.clone();
     if planted.usage_at > planted.announced {

@@ -2,24 +2,11 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The GA `session` config object: the typed shape carried by `session.update` (client→server) and
-//! echoed by `session.created` (server→client).
-//!
-//! This is the one place in the plane where a serde-derived struct models the wire directly, rather
-//! than the hand-mapped `serde_json::Value` dispatch the event codec uses: serde-derive is reserved
-//! for config shapes (stable, named, closed field sets), while streaming events are hand-mapped.
-//!
-//! This typed config is the plane's neutral session-config IR, the cross-dialect superset both
-//! dialects (OpenAI Realtime + Gemini Live) read and write. The GA field set is modeled faithfully so a
-//! decode→encode round-trip is JSON-stable (opaque `tools` / `tool_choice` ride as `serde_json::Value`;
-//! the plane locks and reconciles them but never reshapes them).
 
 use crate::codec::ir::media::AudioFormat;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Deserialize a PRESENT key into `Some(_)`, so an `Option<Option<T>>` field can tell an absent key
-/// (`None`, supplied by `#[serde(default)]` because this function is never called) from an explicit
-/// `null` (`Some(None)`). Without it serde consumes a wire `null` at the outer `Option` and both
-/// states arrive as `None`.
 fn deserialize_some<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
     d: D,
 ) -> Result<Option<T>, D::Error> {
@@ -64,7 +51,6 @@ impl<'de> Deserialize<'de> for MaxOutputTokens {
 }
 
 /// serde glue for the optional negotiated audio formats — the enum carries its own dialect tokens
-/// (`pcm16` / `g711_ulaw`), so a small module bridges `Option<AudioFormat>` to the wire string.
 mod opt_audio_fmt {
     use super::AudioFormat;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -172,11 +158,6 @@ pub struct SessionConfig {
 
 impl SessionConfig {
     /// The locked session in the GA `session` shape, the shape the GA `/v1/realtime` socket reads
-    /// (no `OpenAI-Beta` header): `type` is `realtime`; the requested modalities are
-    /// `output_modalities`; the uplink format and turn detection sit under `audio.input`, the
-    /// downlink format and the voice under `audio.output`, each format the GA format object
-    /// (`{"type":"audio/pcm","rate":24000}`, `{"type":"audio/pcmu"}`). Only what the lock names is
-    /// stated, so a member the operator left unset keeps whatever the caller or the far end has.
     #[must_use]
     pub fn ga_session(&self) -> serde_json::Map<String, serde_json::Value> {
         use serde_json::{json, Map, Value};
@@ -231,8 +212,6 @@ impl SessionConfig {
             );
         }
         if let Some(limit) = self.context_window_tokens {
-            // The GA retention-ratio truncation with a custom limit: the conversation after the
-            // instructions is held under the ceiling, less the output the response may still write.
             let out = match self.max_output_tokens {
                 Some(MaxOutputTokens::Limit(n)) => n,
                 _ => 0,
@@ -272,7 +251,6 @@ fn default_prefix_padding_ms() -> u32 {
     300
 }
 /// OpenAI's published default (the openai-openapi spec, `turn_detection.silence_duration_ms`:
-/// "Defaults to 500ms"), which the far end's own `session.created` reports.
 fn default_silence_duration_ms() -> u32 {
     500
 }

@@ -6,7 +6,6 @@
 use super::*;
 
 /// An empty `streams: {}` decodes to exactly [`StreamsCfg::default`]: the hand-written `Default`
-/// and the serde field defaults agree, so an omitted section and an empty one are the same posture.
 #[test]
 fn an_empty_section_decodes_to_the_default() {
     let empty: StreamsCfg = serde_json::from_str("{}").expect("an empty section parses");
@@ -22,10 +21,7 @@ fn an_unknown_key_is_refused() {
     assert!(err.to_string().contains("nonsense_key"), "{err}");
 }
 
-/// RED-BEFORE-GREEN (THE DESIGN section 2, "Validation refusals, every kind"): a key the plane does
-/// not model INSIDE `streams.session` is refused with its path. RED: `instruction:` (a typo of
-/// `instructions:`) was dropped, every session opened with no locked instructions, and the governed
-/// splice still cut the caller's own.
+/// An unknown key inside the locked session is refused with its settings path.
 #[test]
 fn an_unknown_key_inside_the_locked_session_is_refused_with_its_path() {
     for (blob, path) in [
@@ -48,8 +44,6 @@ fn an_unknown_key_inside_the_locked_session_is_refused_with_its_path() {
 }
 
 /// The strict key lists name exactly the members the session object serializes: a field added to
-/// [`SessionConfig`] or [`IrVad`] must be added to them (each literal below names every field, so
-/// a new one fails to compile here first).
 #[test]
 fn the_strict_key_lists_are_the_session_objects_own_members() {
     use crate::codec::ir::config::Eagerness;
@@ -101,13 +95,7 @@ fn the_strict_key_lists_are_the_session_objects_own_members() {
     }
 }
 
-/// RED-BEFORE-GREEN (the section's two token ceilings): a per-response output cap at or above the
-/// context window leaves the locked session no room for the conversation, so the section is refused
-/// at load, the refusal naming both settings and their values; the defaults (4096 below 32768)
-/// load and leave the conversation 28672 tokens. RED: such a section loaded and the locked
-/// session's context limit after its output saturated to 0. Driven through `read_dealt` with the
-/// KEYED blob (`{streams: …}`), the form the host deals validate, open and refresh: RED (B1) the
-/// keyed path never judged the ceilings, so the conflicting section validated, opened and served.
+/// An output cap at or above the context window is refused, naming both settings.
 #[test]
 fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings() {
     for (blob, words) in [
@@ -143,10 +131,7 @@ fn an_output_cap_at_or_above_the_context_window_is_refused_naming_both_settings(
     }
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S6): an operator `server_vad` that names no
-/// `silence_duration_ms` takes OpenAI's published default, 500 ms (the openai-openapi spec's
-/// `turn_detection.silence_duration_ms`: "Defaults to 500ms"), and the locked session states it on
-/// the wire. RED: the IR's own default was 200, written explicitly, so every turn was cut at 200 ms.
+/// `server_vad` without a silence window locks the published 500 ms default.
 #[test]
 fn a_server_vad_naming_no_silence_window_locks_the_published_500ms() {
     let cfg: StreamsCfg = serde_json::from_str(
@@ -162,10 +147,7 @@ fn a_server_vad_naming_no_silence_window_locks_the_published_500ms() {
     );
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S15): the locked session's `modalities` names ONE
-/// output modality, `audio` or `text` (OpenAI Realtime GA's `output_modalities`: "not possible to
-/// request both"; Gemini Live's `responseModalities` takes one): any other list is refused at load
-/// with its path, never booted into a session every far end refuses. RED: `[audio, text]` loaded.
+/// Locked session modalities name exactly one of audio or text.
 #[test]
 fn the_locked_sessions_modalities_name_one_of_audio_or_text() {
     for blob in [

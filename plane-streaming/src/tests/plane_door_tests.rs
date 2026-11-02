@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Tests for `plane-streaming/src/plane_door.rs`: the P-item pins the door holds (spec
-//! DONE item 2, "All P-item behaviours match 1.5.5"), each written against the door as it serves.
 
 use super::*;
 
@@ -12,28 +11,13 @@ fn the_statement_names_the_crates_version() {
     assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
 }
 
-/// P-ITEM: WRONG-PROVIDER ATTRIBUTION (spec DONE item 2, "All P-item behaviours match 1.5.5";
-/// first fixed red-before-green in busbar e15713578a). A live session is served by the provider
-/// its door DIALED: a Gemini Live session's far frames ride the Gemini Live socket's need, at the
-/// Gemini Live socket path, its caller arrives in the Gemini Live dialect, and the usage it is
-/// metered on is read off the Gemini far end's own report. None of it falls back to the
-/// first-declared provider, OpenAI Realtime (its dialect index 0, its socket the first outbound
-/// need). Before the fix the paired branch hard-coded the first configured upstream and its lane,
-/// so a Gemini session's every turn was billed on the OpenAI lane: the wrong provider's money. An
-/// OpenAI Realtime session (the sideband, and the telephony carrier it bridges) still rides OpenAI
-/// Realtime's, so the pin does not simply invert the bug.
-///
-/// The 1.5.5 behaviour this matches is its one surface's (the llm surface; owner correction
-/// 2026-09-28): usage is ledgered and metered against the SERVING lane and its provider, never
-/// another configured one (v1.5.5 `crates/busbar/src/proxy/usage.rs:57-103`, "`lane` is the
-/// SERVING lane (post-failover)"). A bug fixed to match, never a signed diff.
 #[test]
 fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the_first() {
     use crate::driven::{arrive, GEMINI_SOCKET_PATH, REALTIME_SOCKET_PATH};
     use crate::session_door::PER_SESSION_CLASS;
 
     let cfg = StreamsCfg::default();
-    // (door, the far end's need, its socket path, the dialect the caller arrives in)
+
     let served = [
         (
             Door::Gemini,
@@ -81,16 +65,13 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
         RIDES_REALTIME_SOCKET,
         "a Gemini Live session never rides the first-declared provider's socket"
     );
-    // Row 132: the SDP door's far request is busbar's own call to OpenAI Realtime (the browser's
-    // media ends at busbar), on the outbound call need, never a socket's.
+
     assert_eq!(Door::Sdp.rides(), RIDES_REALTIME_CALL);
     assert_eq!(
         NEEDS[RIDES_REALTIME_CALL as usize - 1].direction,
         DIRECTION_OUTBOUND
     );
 
-    // Metered on the serving provider's own report: a Gemini Live usage frame counts on the
-    // Gemini session, and counts nothing on an OpenAI Realtime one (whose provider never said it).
     let report = br#"{"usageMetadata":{"promptTokenCount":10,"responseTokenCount":20}}"#;
     let text_in = crate::session_unit::CLASSES
         .iter()
@@ -118,21 +99,6 @@ fn p_item_wrong_provider_attribution_a_session_rides_the_dialed_provider_not_the
     );
 }
 
-/// P-ITEM: REFUSAL-REASON COLLAPSE (spec DONE item 2, "All P-item behaviours match 1.5.5"; TODO
-/// L-ENG9). The streaming plane's refusal table once ended in `_ => "internal"`, so a spent
-/// budget, a frozen group, a replayed key, a superseded unit or a deadline told the caller the
-/// node had broken. 1.5.5's one surface answered none of its limit reasons as an internal error
-/// (v1.5.5 `crates/busbar/src/ingress/mod.rs:237-305`: rate 429 `rate_limit_error`, budget 429,
-/// frozen group 403 `permission_error`; none a 500).
-///
-/// Pinned through the door's own renderer, [`refusal_render`], over every reason a plane can be
-/// handed (`reason_of`) at every status the kernel can hand it (its class defaults and a plane's
-/// own rows): the reason picks no answer of its own. Every reason of one class renders the same
-/// bytes; a refusal reads as the dialect's internal error (`server_error`) exactly when the
-/// status the kernel chose for its class is a server status, never because the plane fell through
-/// on a reason it did not name; and the message is the kernel's words, except an authentication
-/// refusal, which reads in the vendor's own terms. The family is the one classification's
-/// (`busbar_contract::abi::plane::RefusalCode::class`), never this plane's own.
 #[test]
 fn p_item_refusal_reason_collapse_only_the_kernels_class_picks_the_answer_and_none_reads_internal()
 {
@@ -140,7 +106,6 @@ fn p_item_refusal_reason_collapse_only_the_kernels_class_picks_the_answer_and_no
     for status in [400u16, 401, 403, 404, 413, 429, 500, 502, 503, 504] {
         let mut answers: Vec<(RefusalClass, Vec<u8>)> = Vec::new();
         for code in RefusalCode::ALL {
-            // Two codes are the kernel's own money verdicts and never reach a plane.
             if reason_of(code.code()).is_none() {
                 continue;
             }
@@ -178,8 +143,6 @@ fn p_item_refusal_reason_collapse_only_the_kernels_class_picks_the_answer_and_no
 }
 
 /// (Moved from `plane-streaming-plugin/tests/both_ways.rs`, which reaches only the door.)
-/// A refused open (a hook's veto, an admission's refusal) is answered in the dialects' error shape:
-/// the kernel's status read as the error's type, its words as the message.
 #[test]
 fn a_refusal_is_rendered_in_the_dialects_error_shape() {
     for (status, kind) in [
@@ -198,8 +161,6 @@ fn a_refusal_is_rendered_in_the_dialects_error_shape() {
 }
 
 /// The vendor's own words for a bad or missing credential (moved from the cdylib crate's
-/// `both_ways.rs`, whose `an_authentication_refusal_reads_in_the_dialects_vendor_terms` drives the
-/// door against these same words).
 #[test]
 fn the_bad_key_answer_is_the_vendors_own_copy() {
     assert_eq!(AUTH_FAILURE_MESSAGE, "Incorrect API key provided.");
@@ -219,11 +180,7 @@ fn held_mint() -> Held {
     }
 }
 
-/// RED-BEFORE-GREEN (THE DESIGN: admission bounds live work and nothing evicts it): a request unit
-/// whose op the kernel cancels is forgotten at once, and a table at its bound refuses a new unit
-/// rather than drop one in flight. RED: the cancel slot ended only sessions, so a cancelled mint
-/// or SDP unit held its state until 4096 newer units pushed it out, and past the bound the oldest
-/// unit was evicted live, its gathered far-end body lost.
+/// Cancelled request units are forgotten; a full table refuses without evicting live units.
 #[test]
 fn a_cancelled_request_unit_is_forgotten_and_a_full_table_refuses_rather_than_evicts() {
     let mut units = Units::default();
@@ -266,19 +223,13 @@ fn plane() -> Plane {
     }
 }
 
-/// RED-BEFORE-GREEN (the contract's `TAIL_REFUSED_PIECE`, `busbar_contract::abi::plane`): a request
-/// unit's hop holds state from its first piece, so the tail asks for a unit's refusal as a piece
-/// first. RED: the tail stated no flags, so a unit the walk refused after its first piece (its
-/// member's credential gone, or no member left) was never told to the door, and its state stayed.
+/// The plane tail takes a unit's refusal as a refused piece first.
 #[test]
 fn the_tail_takes_a_units_refusal_as_a_piece_first() {
     assert_eq!(TAIL.flags & TAIL_REFUSED_PIECE, TAIL_REFUSED_PIECE);
 }
 
-/// RED-BEFORE-GREEN (units leak): a refused unit, whether told by the refused piece or by
-/// `refusal`, is forgotten with its pending sideband call, and its room is free. RED: nothing on
-/// the refusal path forgot a held unit, so each refused mint or SDP unit kept a slot for the
-/// instance's life, and the 4096th refused every caller of every tenant.
+/// Refusing a unit releases its table entry.
 #[test]
 fn a_refused_unit_is_forgotten_and_its_room_is_free() {
     let p = plane();
@@ -309,9 +260,7 @@ fn a_refused_unit_is_forgotten_and_its_room_is_free() {
     );
 }
 
-/// RED-BEFORE-GREEN (units leak): the kernel's own cancel of a unit names it by its key
-/// (`PlaneCancelIn::unit`), for a unit whose ticket no piece may ever have carried; that unit is
-/// forgotten. RED: the cancel found units only by ticket, so a unit cancelled by key kept its slot.
+/// Cancelling a unit by its key releases its table entry.
 #[test]
 fn a_unit_the_kernel_cancels_by_its_key_is_forgotten() {
     let mut units = Units::default();
@@ -333,8 +282,7 @@ fn a_unit_the_kernel_cancels_by_its_key_is_forgotten() {
     assert!(units.held.contains_key(&8));
 }
 
-/// GREEN (THE DESIGN: admission bounds live work, nothing evicts it): 4096 live units still refuse
-/// the next unit, and none of them is dropped.
+/// A full table of live units refuses another unit.
 #[test]
 fn a_full_table_of_live_units_still_refuses() {
     let mut units = Units::default();
@@ -346,10 +294,7 @@ fn a_full_table_of_live_units_still_refuses() {
     assert!(!units.held.contains_key(&u64::MAX));
 }
 
-/// RED-BEFORE-GREEN (`BUSBAR-1.6.0.md`, "Admission bounds live work; nothing evicts it"): at
-/// [`MAX_PENDING_CALLS`] the next sideband arrival is refused, and every pending call survives.
-/// RED: the oldest pending call was evicted to make room, so a flood of arrivals (none of which
-/// need open a session) dropped real callers' calls, and their sessions were refused.
+/// A full pending-call table refuses the next arrival and retains every existing call.
 #[test]
 fn a_full_pending_call_table_refuses_the_next_arrival_and_keeps_every_call() {
     let mut calls = PendingCalls::default();
@@ -373,8 +318,7 @@ fn a_full_pending_call_table_refuses_the_next_arrival_and_keeps_every_call() {
     );
 }
 
-/// RED-BEFORE-GREEN: a pending call is freed when its unit is refused or cancelled. RED: entries
-/// were freed only when a session opened, so refused and cancelled arrivals held the table.
+/// Refused and cancelled pending calls release their entries.
 #[test]
 fn refused_and_cancelled_pending_calls_are_freed() {
     let p = plane();
@@ -389,10 +333,7 @@ fn refused_and_cancelled_pending_calls_are_freed() {
     assert!(lock(&p.calls).pending.is_empty());
 }
 
-/// RED-BEFORE-GREEN (`BUSBAR-1.6.0.md` l.199: "An active work handle is never evicted ... Retention
-/// bounds only settled handles"): 4096 SDP offers from tenant B never drop tenant A's live call; B
-/// keeps at most its own allowance, its newest calls. RED: the brokered list dropped its oldest
-/// entry past 4096, so B's offers pushed A's live call out, and A's sideband to it was refused.
+/// Another caller's offers cannot drop a live call.
 #[test]
 fn another_callers_offers_never_drop_a_live_call() {
     let mut brokered = Brokered::default();
@@ -419,11 +360,7 @@ fn another_callers_offers_never_drop_a_live_call() {
     assert!(brokered.admits(0), "the instance still admits");
 }
 
-/// RED-BEFORE-GREEN (lead ruling: no permanent refusal): a caller holding
-/// [`MAX_CALLS_PER_CALLER`] live calls is not refused; its next offer proceeds and displaces that
-/// caller's own oldest row, and no other row. RED: a caller had no bound of its own, so its
-/// newest call was kept beside all the others and its oldest row stayed (and past 4096 rows the
-/// oldest row of the whole list went, whichever caller's it was).
+/// A caller at its cap displaces only its own oldest settled row.
 #[test]
 fn a_caller_at_its_cap_displaces_only_its_own_oldest_row() {
     let mut brokered = Brokered::default();
@@ -457,7 +394,6 @@ fn a_caller_at_its_cap_displaces_only_its_own_oldest_row() {
 }
 
 /// An instance holding [`MAX_BROKERED_CALLS`] rows recorded at the tick clock's reading 0, across
-/// as many callers as hold them at their cap.
 fn full_instance() -> Brokered {
     let mut brokered = Brokered::default();
     for i in 0..MAX_BROKERED_CALLS {
@@ -470,12 +406,7 @@ fn full_instance() -> Brokered {
     brokered
 }
 
-/// RED-BEFORE-GREEN (lead ruling: only settled handles are bounded): an instance full of unexpired
-/// rows answers a new SDP offer [`STATUS_CALLS_FULL`] in the dialects' error shape, and the 429
-/// clears once the rows are older than [`REALTIME_CALL_MAX_MS`]: their calls have certainly
-/// ended. A row's age counts from the first tick after it was recorded, so a clock that had not
-/// moved since never ages it early. RED: a row never expired, so the 429 stood for as long as the
-/// instance lived.
+/// The instance refusal clears once its retained rows expire.
 #[test]
 fn the_instance_429_clears_once_rows_expire() {
     let mut brokered = full_instance();
@@ -486,7 +417,7 @@ fn the_instance_429_clears_once_rows_expire() {
             .expect("json");
     assert_eq!(body["error"]["type"], "rate_limit_error");
     assert_eq!(body["error"]["message"], CALLS_FULL_TEXT);
-    // The clock moves past the reading the rows were recorded at: their age counts from here.
+
     assert!(!brokered.admits(1), "inside the lifetime the rows are live");
     assert!(
         !brokered.admits(REALTIME_CALL_MAX_MS),
@@ -499,9 +430,7 @@ fn the_instance_429_clears_once_rows_expire() {
     assert!(brokered.owners.is_empty() && brokered.per_caller.is_empty());
 }
 
-/// RED-BEFORE-GREEN (lead ruling): an expired row frees room for another caller, and only the
-/// expired rows go: a call recorded once the clock had moved is still live. RED: a row never
-/// expired, so the instance's room never came back.
+/// An expired row frees room for another caller.
 #[test]
 fn an_expired_row_frees_room_for_another_caller() {
     let mut brokered = full_instance();
@@ -523,11 +452,7 @@ fn an_expired_row_frees_room_for_another_caller() {
     assert_eq!(brokered.owners.len(), 2);
 }
 
-/// RED-BEFORE-GREEN: a call busbar placed that the far end ends, as its sideband sees it on the
-/// provider's call it resolved to (an accepted upgrade whose answer ends whole: its last piece, not
-/// cut), has ended, and busbar's call's row is freed. A
-/// far end whose connection was cut, or a piece that is not its last, frees nothing. RED: the row
-/// was freed only when the sideband itself closed, never on the far end's end.
+/// An ended call releases its retained row.
 #[test]
 fn an_ended_call_frees_its_row() {
     let p = plane();
@@ -558,10 +483,7 @@ fn an_ended_call_frees_its_row() {
     assert_eq!(lock(&p.brokered).per_caller["tenant-a"].len(), 1);
 }
 
-/// RED-BEFORE-GREEN (review round 4): a sideband whose upgrade the far end refused (a status that
-/// is no switch and no success, on its last piece, not cut) never reached the call, so it says
-/// nothing of the call's end: the live call's row stays. RED: any whole last far-end piece freed
-/// the row, so one refused upgrade dropped a live call, and its caller's next sideband was refused.
+/// Refusing a sideband upgrade leaves the live call intact.
 #[test]
 fn a_refused_sideband_upgrade_frees_no_live_call() {
     let p = plane();
@@ -574,10 +496,6 @@ fn a_refused_sideband_upgrade_frees_no_live_call() {
     );
 }
 
-/// RED-BEFORE-GREEN (row 132, a sideband attaches only to its own caller's call): busbar's call
-/// resolves to the provider's only once the provider named it, and only for the caller whose offer
-/// placed it; another caller, or a call no offer placed, resolves to nothing. RED: the sideband
-/// resolved any caller's call by busbar's id alone.
 #[test]
 fn busbars_call_resolves_for_its_own_caller_once_named() {
     let mut brokered = Brokered::default();
@@ -604,9 +522,6 @@ fn busbars_call_resolves_for_its_own_caller_once_named() {
     assert!(!brokered.holds("rtc_ours"), "the provider's end frees it");
 }
 
-/// RED-BEFORE-GREEN (row 132): a session that placed busbar's call frees the call's row when it
-/// ends, so a call that is over neither holds the instance's room nor takes a sideband. RED: rows
-/// were freed only on the provider's end or past the call's lifetime.
 #[test]
 fn an_ended_sdp_session_frees_its_call() {
     let p = plane();
@@ -625,8 +540,6 @@ fn an_ended_sdp_session_frees_its_call() {
 }
 
 /// A far end accepts a session's upgrade with a switch or a success, or, from a transport that
-/// states a class and no number, the success class; any other status (a refusal), or a piece with
-/// no status, is no acceptance (audit S1: only an acceptance incurs the session's fee).
 #[test]
 fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
     use busbar_contract::abi::transport::{STATUS_CALLER_FAULT, STATUS_SUCCESS};
@@ -650,7 +563,6 @@ fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
 }
 
 /// A success answering busbar's call that names no provider call is said in one log line (audit
-/// S45): the call is billed, but no sideband can attach to it and nothing frees its row.
 #[test]
 fn a_success_naming_no_provider_call_is_said_in_one_log_line() {
     let cap = busbar_test_kit::warn_capture::WarnCapture::default();

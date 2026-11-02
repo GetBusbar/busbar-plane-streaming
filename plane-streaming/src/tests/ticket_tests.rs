@@ -11,7 +11,6 @@ fn a_mint_asks_for_a_ten_minute_ticket() {
 }
 
 /// The mint door's answer is the OpenAI-compatible shape SDKs read, and nothing else: the ticket
-/// sealed through the SDK (R7), members in name order.
 #[test]
 fn the_caller_is_answered_the_ticket_and_its_expiry_only() {
     let m = crate::tests::sealed_minted("ek_abc", 1_700_000_600);
@@ -32,7 +31,7 @@ fn a_tickets_record_locks_its_session_and_reads_back() {
     };
     let record = ticket_record(&locked).expect("serializes");
     assert_eq!(locked_by(&record).expect("reads"), locked);
-    // RED: a record that is not a session config.
+
     assert!(locked_by(b"not json").is_err());
     assert!(locked_by(b"[1,2]").is_err());
 }
@@ -62,10 +61,7 @@ fn the_upstream_form_carries_the_session_and_opens_the_description_part() {
     );
 }
 
-/// RED-BEFORE-GREEN (the GA calls endpoint reads the GA `session` object; OpenAI's beta-to-GA
-/// migration: "set `session.type`"): busbar's call binds the browser's session in the GA shape,
-/// `type: realtime`, its formats under `audio`, and under the section's token ceilings once the door
-/// applies them. RED: the session went in the pre-GA shape with no `session.type`.
+/// The upstream form binds the session in the GA shape.
 #[test]
 fn the_upstream_form_binds_the_session_in_the_ga_shape() {
     let locked = SessionConfig {
@@ -115,15 +111,12 @@ fn the_providers_call_id_is_the_call_segment_of_its_location() {
         call_id_of("https://p.example/v1/realtime/calls/rtc_z#f"),
         Some("rtc_z".into())
     );
-    // RED: no call segment.
+
     assert_eq!(call_id_of("/v1/realtime/calls/abc"), None);
     assert_eq!(call_id_of("/v1/realtime/calls/rtc_"), None);
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S76): the provider's call id a far end's `Location`
-/// names is taken only when it is the same well-formed id a sideband arrival's is (ASCII letters,
-/// digits, `_`, `-`): an untrusted answer naming `rtc_x&model=y` would otherwise add parameters to
-/// the sideband's dial (`?call_id=`, spliced unescaped). RED: any `rtc_` segment was taken.
+/// A provider call id containing characters outside the allowed id alphabet is refused.
 #[test]
 fn a_provider_call_id_carrying_anything_but_id_characters_is_not_taken() {
     for location in [

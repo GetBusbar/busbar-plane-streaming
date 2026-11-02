@@ -2,20 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The governed splice: the one edit a same-dialect relay makes to a caller's bytes.
-//!
-//! A same-dialect relay runs the reader only as a read-only tap and sends the client's bytes with
-//! governed byte-level splices. The governance a live session splices is the browser trust
-//! boundary: the caller never authors tools or instructions, and cannot override the session's
-//! locked instructions. So a caller frame that
-//! configures the session, or asks for one response under its own settings, has its instructions
-//! and tool set cut out and the session's locked keys put in their place; every other member it
-//! wrote passes as the caller wrote it, byte for byte, and so does every frame that configures
-//! nothing.
-//!
-//! The edit is made on the frame's own bytes: one object member is rebuilt from the members the
-//! caller wrote (their bytes unchanged, in their order) and the locked members after them, and the
-//! bytes around that object are copied as they arrived. Keys are compared as the far end reads
-//! them, escapes decoded, and a key the caller wrote twice is cut every time it appears.
 
 use busbar_contract::spans::{self, value_end};
 use serde_json::{Map, Value};
@@ -62,34 +48,20 @@ pub struct Cap {
 }
 
 /// The dialect's governed keys: which caller frames a session's lock splices, and how. Every rule
-/// is applied to EVERY caller frame, by the frame's bytes: a governed object is governed wherever
-/// it sits at the top level, whatever the frame's `type` says (a far end may read a `type` the
-/// caller wrote twice differently from this reader).
 pub trait LockedKeys {
     /// Every top-level member a rule governs or a check below reads: a JSON object naming none of
-    /// them passes every rule and every check as it came.
     const GOVERNED: &'static [&'static str];
     /// The rule for the object that configures the session (`session.update`'s `session`, `setup`),
-    /// locked to `locked`.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule;
     /// The rule for the object that asks for one response under its own settings, capped at the
-    /// output ceiling `locked` states; `None` for a dialect with no such object.
     fn response_rule(&self, locked: &SessionConfig) -> Option<Rule>;
     /// The frame that tells the far end the session is locked to `locked`, in the shape its
-    /// socket reads, for a caller-side envelope that configures nothing itself (the telephony
-    /// carrier).
     fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>>;
     /// The error frame that tells the caller why the plane ends the session (`code`, `message`);
-    /// `None` for a dialect with no in-band error.
     fn ceiling_frame(&self, code: &str, message: &str) -> Option<Vec<u8>>;
     /// Whether `frame` carries an item the caller may never author: a conversation item, or a
-    /// per-response input item, in a role that instructs the model (`system`, `developer`). Such a
-    /// frame goes nowhere. A frame whose bytes cannot be read here is answered `true`.
     fn authors_instructions(&self, frame: &[u8]) -> bool;
     /// The uplink audio format `frame` configures the session to (`Ok(None)`: it names none), read
-    /// from every key the dialect's far end reads one from. `Err` when it names one the plane
-    /// cannot meter, or names two that disagree: such a frame goes nowhere, because the far end
-    /// would read audio at a rate the plane does not count it at.
     fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable>;
 }
 
@@ -114,7 +86,6 @@ fn output_ceiling(locked: &SessionConfig) -> Option<u64> {
 }
 
 /// OpenAI Realtime: `session.update`'s `session`, and `response.create`'s `response`. A stored
-/// `prompt` is instructions by reference, so it is the caller's to author no more than they are.
 const REALTIME_CUT: &[&str] = &["instructions", "tools", "prompt"];
 /// Gemini Live: `setup`'s system instruction and tools.
 const LIVE_CUT: &[&str] = &["systemInstruction", "tools"];
@@ -125,13 +96,6 @@ impl LockedKeys for OpenAiRealtimeCodec {
     const GOVERNED: &'static [&'static str] = &["session", "response", "item"];
 
     /// The locked keys in the GA `session` shape the GA socket reads
-    /// ([`SessionConfig::ga_session`]): a caller's GA members are merged with them member by
-    /// member (`audio.input`, `audio.output`).
-    ///
-    /// The output ceiling is not set over the caller's: the caller's GA `max_output_tokens` is
-    /// held to the lower of its value and the ceiling, and is the ceiling where it names none; a
-    /// pre-GA `max_response_output_tokens` the caller writes is held the same way, and is never
-    /// added (the GA session object reads the GA key, which carries the ceiling).
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
         let mut set = locked.ga_session();
         set.remove(MAX_OUTPUT_TOKENS);
@@ -163,8 +127,6 @@ impl LockedKeys for OpenAiRealtimeCodec {
     }
 
     /// `response.create`'s `response`: a caller's own `max_output_tokens` never lifts the
-    /// session's output ceiling ([`crate::session_door::with_ceilings`]); the response asks for
-    /// the lower of the two, and for the ceiling where the caller names none.
     fn response_rule(&self, locked: &SessionConfig) -> Option<Rule> {
         Some(Rule {
             at: "response",
@@ -185,7 +147,6 @@ impl LockedKeys for OpenAiRealtimeCodec {
 
     /// A GA `session.update` carrying the locked session ([`SessionConfig::ga_session`]).
     fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>> {
-        // The model is selected by the socket query; session.update cannot change it.
         let mut session = locked.ga_session();
         session.remove("model");
         serde_json::to_vec(&serde_json::json!({
@@ -205,7 +166,6 @@ impl LockedKeys for OpenAiRealtimeCodec {
     }
 
     /// `conversation.item.create`'s `item`, and `response.create`'s `response.input` items, read
-    /// wherever they sit at the top level.
     fn authors_instructions(&self, frame: &[u8]) -> bool {
         let Some((top, _)) = members(frame, ws(frame, 0)) else {
             return true;
@@ -224,7 +184,6 @@ impl LockedKeys for OpenAiRealtimeCodec {
     }
 
     /// The legacy `session.input_audio_format` and the GA `session.audio.input.format`, every
-    /// spelling of each the frame carries.
     fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
         let (top, _) = members(frame, ws(frame, 0)).ok_or(Unmeterable)?;
         let mut named = Named::default();
@@ -276,7 +235,6 @@ impl Named {
 }
 
 /// The objects at every `key` member of the object at `b[open]` (none when `b[open]` is not an
-/// object: the far end refuses that shape itself).
 fn nested(b: &[u8], open: usize, key: &str) -> Result<Vec<usize>, Unmeterable> {
     if b.get(open) != Some(&b'{') {
         return Ok(Vec::new());
@@ -298,7 +256,6 @@ fn legacy_format(value: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
 }
 
 /// A GA format object (`{"type":"audio/pcm","rate":24000}`, `{"type":"audio/pcmu"}`), or a legacy
-/// token where one is written in its place; `null` names none.
 fn ga_format(b: &[u8], at: usize) -> Result<Option<AudioFormat>, Unmeterable> {
     let end = value_end(b, at).ok_or(Unmeterable)?;
     if b.get(at) != Some(&b'{') {
@@ -317,7 +274,6 @@ fn ga_format(b: &[u8], at: usize) -> Result<Option<AudioFormat>, Unmeterable> {
         }
     }
     if pcm {
-        // The GA PCM format is 24 kHz; a rate it states must be that one.
         for m in keys.iter().filter(|m| m.key == "rate") {
             let rate: u64 =
                 serde_json::from_slice(&b[m.value.0..m.value.1]).map_err(|_| Unmeterable)?;
@@ -329,13 +285,12 @@ fn ga_format(b: &[u8], at: usize) -> Result<Option<AudioFormat>, Unmeterable> {
     }
     match named.0 {
         Some(f) => Ok(Some(f)),
-        // A format object that names no type is one the plane cannot meter.
+
         None => Err(Unmeterable),
     }
 }
 
 /// Whether the item at `b[at]` is in an instructing role: `Some(true)` when any `role` it carries
-/// is one, `Some(false)` when none is (or it is not an object), `None` when it cannot be read.
 fn instructs(b: &[u8], at: usize) -> Option<bool> {
     if b.get(at) != Some(&b'{') {
         return Some(false);
@@ -355,7 +310,6 @@ fn instructs(b: &[u8], at: usize) -> Option<bool> {
 }
 
 /// Whether the response object at `b[at]` carries, in any `input` array, an item in an
-/// instructing role.
 fn input_instructs(b: &[u8], at: usize) -> Option<bool> {
     if b.get(at) != Some(&b'{') {
         return Some(false);
@@ -397,8 +351,6 @@ impl LockedKeys for GeminiLiveCodec {
     const GOVERNED: &'static [&'static str] = &["setup"];
 
     /// `setup`, locked to `locked`. The output ceiling is not set over the caller's: the
-    /// caller's `generationConfig.maxOutputTokens` is held to the lower of its value and the
-    /// ceiling, and is the ceiling where it names none.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
         let mut set = setup_locked(locked);
         let emptied = match set.get_mut(GENERATION_CONFIG) {
@@ -448,16 +400,12 @@ impl LockedKeys for GeminiLiveCodec {
     }
 
     /// Gemini Live states each uplink blob's format on the blob itself (its `mimeType`), and each
-    /// blob is metered at the format it states: `setup` configures none.
     fn uplink_format(&self, _frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
         Ok(None)
     }
 }
 
 /// `frame` with `rule` applied to every top-level `rule.at` object; the frame unchanged when it
-/// holds none. `None` when the frame is not one JSON object, or names `rule.at` more than once at
-/// its top level: no conformant peer repeats the member, and rebuilding the locked object for each
-/// copy would let one cheap frame cost the plane and the far end a locked object per copy.
 #[must_use]
 pub fn splice(frame: &[u8], rule: &Rule) -> Option<Vec<u8>> {
     let open = ws(frame, 0);
@@ -498,7 +446,6 @@ struct JsonMember {
 }
 
 /// `key` as a protobuf JSON reader resolves it when `proto` (its lowerCamelCase JSON name: an
-/// underscore is dropped and the letter after it raised), else as written.
 fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
     if !proto || !key.contains('_') {
         return std::borrow::Cow::Borrowed(key);
@@ -519,11 +466,6 @@ fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
 }
 
 /// The object at `b[open]`, rebuilt: the caller's members not cut, not set and not capped, in order
-/// and byte for byte; then each `set` member (merged into the caller's when both are objects); then
-/// each object a cap reaches into that no `set` member names (the caller's object, rebuilt under
-/// its caps, or a new one in place of whatever else the caller wrote there, `null` included, or
-/// where a cap is written in the caller's absence); then each cap on this object's own
-/// members ([`Cap`]). Keys are compared under [`field_name`].
 fn object(
     b: &[u8],
     open: usize,
@@ -570,7 +512,7 @@ fn object(
         sep(&mut out);
         out.extend_from_slice(&b[m.start..m.value.1]);
     }
-    // The caller's last object under `key`, as the far end reads the last of a repeated key.
+
     let theirs = |key: &str| {
         members
             .iter()
@@ -596,8 +538,7 @@ fn object(
         let sub = below(parent);
         let rebuilt = match theirs(parent) {
             Some(m) => object(b, m.value.0, &[], &Map::new(), proto, &sub)?,
-            // The caller wrote no object here: none at all, or a value that is not one (`null`, which
-            // a protobuf JSON reader takes as the field unset). Either way the caps are written.
+
             None if sub.iter().any(|c| c.when_absent)
                 || members.iter().any(|m| field_name(&m.key, proto) == parent) =>
             {
@@ -617,8 +558,6 @@ fn object(
         ..
     } in here
     {
-        // Every value the caller wrote under the key is read; one that is not a whole number
-        // (`"inf"`, a fraction, a string) asks for no ceiling of its own, so the cap stands.
         let written: Vec<&JsonMember> = members
             .iter()
             .filter(|m| field_name(&m.key, proto) == key)
@@ -639,7 +578,6 @@ fn object(
 }
 
 /// `locked` as a new object where the caller wrote none, with each cap that is written in the
-/// caller's absence ([`Cap::when_absent`]) at its ceiling.
 fn fresh(locked: &Map<String, Value>, caps: &[Cap]) -> Value {
     let mut m = locked.clone();
     'caps: for c in caps.iter().filter(|c| c.when_absent) {
@@ -667,7 +605,6 @@ fn ws(b: &[u8], mut i: usize) -> usize {
 }
 
 /// The members of the object at `b[open]` (the contract's scanner, each key read as JSON), and the
-/// index past its closing brace.
 fn members(b: &[u8], open: usize) -> Option<(Vec<JsonMember>, usize)> {
     if b.get(open) != Some(&b'{') {
         return None;

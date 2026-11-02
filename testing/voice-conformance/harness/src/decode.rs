@@ -2,12 +2,12 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE HARNESS'S OWN DECODER: what a dialect frame says, read into one neutral vocabulary so the
-//! legs can name the concepts a door relayed (`Norm`) and the units a far end's reports add up to.
-//!
-//! The plane reads a frame only to meter it (a session is a relay, Law 5), so it no longer carries
-//! a full reader. This is that reader, moved here from the plane crate's `codec` module as it stood
-//! (busbar-plane-streaming dev 02f3824): the OpenAI Realtime GA and Gemini Live readers and the IR
-//! they read into. Its writers are not moved: nothing the harness judges writes a frame.
+
+
+
+
+
+
 
 #![allow(dead_code)]
 
@@ -19,10 +19,9 @@ use busbar_plane_streaming::codec::ir::usage::{read_count_u64, IrDuplexUsage};
 use bytes::Bytes;
 use serde_json::Value;
 
-// ── the IR ──────────────────────────────────────────────────────────────────────────────────────
 
-/// CLIENT → SERVER events (`BUSBAR-1.6.0.md` #18/#45). The union of the client-originated cases across the four layers.
-/// **This vocabulary has no analog anywhere in the tree today** — building it is the net-new IR work.
+
+/// Client-to-server events across the four layers.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrClientEvent {
     /// An uplink audio frame (`dir: Up`) — `input_audio_buffer.append`.
@@ -33,7 +32,7 @@ pub enum IrClientEvent {
     Tool(IrDuplexTool),
 }
 
-/// SERVER → CLIENT events (`BUSBAR-1.6.0.md` #18/#45). The union of the server-originated cases across the four layers —
+/// Server-to-client events across the four layers,
 /// the sibling of `IrStreamEvent`, plane-owned.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrServerEvent {
@@ -81,7 +80,7 @@ pub enum IrServerEvent {
     },
 }
 
-/// THE NEUTRAL CONTROL / CONFIG IR (`BUSBAR-1.6.0.md` #18/#45). Translatable, but same-dialect it is verbatim carriage.
+/// Neutral control and configuration IR; same-dialect events retain their original bytes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrDuplexControl {
     /// Configure the session — the authoritative copy the plane holds server-side and re-applies; a
@@ -115,7 +114,7 @@ pub enum IrDuplexControl {
         /// The item to delete.
         item_ref: String,
     },
-    /// Barge-in bookkeeping (`BUSBAR-1.6.0.md` #18/#45): truncate a played item at the audio the user ACTUALLY heard —
+    /// Barge-in bookkeeping: truncate a played item at the audio the user actually heard —
     /// `conversation.item.truncate`. `audio_played_ms` is plane-computed state (busbar tracks playback
     /// position on WebSocket, where the server emits audio faster than realtime), NOT a field copied
     /// off the wire; it maps to/from the wire's `audio_end_ms`.
@@ -131,7 +130,7 @@ pub enum IrDuplexControl {
 
 /// THE CORRELATION ABSTRACTION for one in-flight tool call — NOT the wire `call_id`.
 ///
-/// Modeled on the LLM plane's `IrDelta::InputJsonDelta` id-remap move (`BUSBAR-1.6.0.md` #18/#45): a
+/// A
 /// `CallRef → (client_call_id, upstream_call_id)` table held in the session scope lets a client that
 /// speaks OpenAI `call_id` be bridged to a Gemini Live tool-call that correlates by NAME, not id.
 ///
@@ -241,7 +240,7 @@ pub struct IrAudioRef {
     pub content_index: Option<u32>,
 }
 
-/// THE NEUTRAL AUDIO-FRAME IR (`BUSBAR-1.6.0.md` #18/#45). `media` is OPAQUE — the identity transform by default; the IR
+/// Neutral audio-frame IR. `media` is opaque and uses the identity transform by default; the IR
 /// exists for the meter/audit tap, not the reshape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrAudioFrame {
@@ -260,28 +259,12 @@ pub struct IrAudioFrame {
     pub format: Option<AudioFormat>,
 }
 
-// ── per-session decode state ────────────────────────────────────────────────────────────────────
+
 
 /// PER-SESSION DECODE STATE threaded through the reader — the analog of the LLM reader's
-/// `StreamDecodeState`. Holds what is per-session, not per-frame: monotonic frame sequencing, the
-/// `CallRef ↔ call_id` correlation table (`BUSBAR-1.6.0.md` #18/#45), the negotiated output format, and the barge-in
-/// playback-position bookkeeping (`BUSBAR-1.6.0.md` #18/#45 — the plane tracks bytes played because the upstream emits
-/// audio faster than realtime).
-/// THE CEILING ON THE `call_id → CallRef` TABLE, stated here rather than left implicit.
-///
-/// The table is a correlation convenience — open, args, close and result for ONE call meeting under
-/// one handle — not a ledger, and nothing removes from it within a session (a `conversation.item.delete`
-/// deletes an ITEM, which is not the call). A client that mints distinct `call_id`s therefore grows
-/// it for as long as the call lasts. 1024 is far past any real turn's concurrent tool calls, so the
-/// eviction below is unreachable in ordinary use; past it the OLDEST entry goes and a re-sighting of
-/// an evicted id correlates as a NEW call, which is the honest answer once the older correlation is
-/// no longer held.
 pub const MAX_TRACKED_CALL_IDS: usize = 1024;
 
 /// THE CEILING ON THE DROPPED-FIELD DIAGNOSTIC LIST. The list is a diagnostic tap, not a ledger: a
-/// peer that patches the session with unmodelled fields every frame must not be able to grow it
-/// without limit. Past the ceiling the OLDEST note goes — the most recent drops are the ones an
-/// operator is looking at.
 pub const MAX_TRACKED_DROPPED_FIELDS: usize = 64;
 
 #[derive(Debug)]
@@ -333,9 +316,6 @@ impl DecodeState {
     }
 
     /// The [`CallRef`] for a wire `call_id`, minting a fresh monotonic handle the first time the id is
-    /// seen and returning the SAME handle on every later sighting (open → args → close → result all
-    /// correlate to one ref). Bounded by [`MAX_TRACKED_CALL_IDS`]: past the ceiling the oldest id is
-    /// evicted, so a session cannot be made to grow this table without limit by minting call ids.
     pub fn ref_for_call_id(&mut self, call_id: &str) -> CallRef {
         if let Some(r) = self.call_ids.get(call_id) {
             return *r;
@@ -354,8 +334,6 @@ impl DecodeState {
     }
 
     /// REMEMBER the tool name the model announced for a `call_id`. OpenAI's `function_call_output`
-    /// carries no name; Gemini's `functionResponse` REQUIRES one, so the name is kept from the
-    /// originating call and handed back on the result. An empty name records nothing.
     pub fn remember_call_name(&mut self, call_id: &str, name: &str) {
         if name.is_empty() || call_id.is_empty() {
             return;
@@ -365,14 +343,12 @@ impl DecodeState {
     }
 
     /// The tool name remembered for a `call_id` (empty when the call was never announced on this
-    /// session — a result for an id we never saw open cannot invent a name).
     #[must_use]
     pub fn call_name(&self, call_id: &str) -> &str {
         self.call_names.get(call_id).map_or("", String::as_str)
     }
 
     /// RECORD a wire field the decode could not model and dropped — the plane's "warn" made readable.
-    /// Bounded by [`MAX_TRACKED_DROPPED_FIELDS`].
     pub fn record_dropped_field(&mut self, field: &str) {
         self.dropped_fields.push_back(field.to_string());
         while self.dropped_fields.len() > MAX_TRACKED_DROPPED_FIELDS {
@@ -387,7 +363,7 @@ impl DecodeState {
     }
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────────────────────────────
+
 
 fn parse(wire: &[u8]) -> Option<Value> {
     serde_json::from_slice::<Value>(wire).ok()
@@ -402,15 +378,9 @@ fn u64_at(v: &Value, key: &str) -> u64 {
 }
 
 /// One output token per this many bytes of an unreadable usage report: the llm plane's floor
-/// estimate (`TRUNCATED_TAIL_BYTES_PER_TOKEN`).
 const FLOOR_BYTES_PER_TOKEN: u64 = 4;
 
 /// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity
-/// was reported), a readable count is the count (through the crate's one seam,
-/// [`read_count_u64`]), and a present-but-UNREADABLE count is a REFUSAL (#42) —
-/// the old `unwrap_or_default` metered a count the provider really sent as zero, and every money view
-/// over that turn was then faithfully wrong. The error is the operator-facing message: the field and
-/// a BOUNDED spelling (cut on a character, so a hostile multi-byte spelling cannot panic the cut).
 fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     match o.and_then(|x| x.get(key)) {
         None => Ok(0),
@@ -422,10 +392,7 @@ fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     }
 }
 
-/// WHAT AN UNREADABLE USAGE REPORT BILLS (owner ruling 2026-10-27: spend is always attributed and
-/// nothing is silent): the llm plane's floor, one output token per [`FLOOR_BYTES_PER_TOKEN`] bytes
-/// of the report and at least one, marked as the plane's floor. Its one log line names the field and
-/// its spelling; the door's call capture carries it to the plugin's host log.
+/// Bill a nonzero output-token floor based on the unreadable usage report's byte length.
 fn usage_floor(report_len: usize, _message: &str) -> IrDuplexUsage {
     IrDuplexUsage {
         text_out: (report_len as u64 / FLOOR_BYTES_PER_TOKEN).max(1),
@@ -435,8 +402,6 @@ fn usage_floor(report_len: usize, _message: &str) -> IrDuplexUsage {
 }
 
 /// Read the item correlation this dialect states on a downlink audio event. Each field is carried only
-/// when the wire actually said it — an absent field stays absent rather than becoming an empty string
-/// or a zero index, which name a different (real) item.
 fn audio_ref_of(v: &Value) -> IrAudioRef {
     let text = |k: &str| {
         v.get(k)
@@ -458,38 +423,18 @@ fn audio_ref_of(v: &Value) -> IrAudioRef {
 }
 
 /// base64-decode a wire audio string to opaque media bytes (the identity IR is the decoded bytes).
-///
-/// `None` on a payload that is not base64, and every read path must DROP that frame rather than
-/// substitute an empty one. The callee returns `Option` deliberately — it refuses even a lone
-/// trailing sextet "rather than silently drop it, honoring the fail-loud contract" — and an empty
-/// frame relayed and metered in place of a refusal is indistinguishable from a caller who said
-/// nothing, which is the one confusion a voice plane cannot afford. The Twilio grammar in this same
-/// crate already answers this way (`BadPayload`, never an empty payload).
 fn decode_audio(b64: &str) -> Option<Bytes> {
     busbar_contract::media::base64_decode(b64).map(Bytes::from_owner)
 }
 
 /// DECODE A `session` OBJECT LENIENTLY — the drop-and-warn discipline the cross-dialect map states
-/// for values this plane does not model (`voice-cross-dialect-map.json`: an unmodelled telephony
-/// codec, an eagerness with no twin, a noise-reduction knob are each recorded as a DROPPED FIELD, not
-/// a refused session).
-///
-/// The whole-object parse is tried first (the ordinary path, no allocation beyond serde's). Only when
-/// it fails is the patch salvaged FIELD BY FIELD: a key that cannot stand alone is the key the plane
-/// cannot model, so that key alone is dropped — noted in [`DecodeState::dropped_fields`] — and the
-/// rest of the client's patch survives. Defaulting the whole object instead would silently replace the
-/// client's instructions, tools, voice and turn detection with an EMPTY session, which is the one
-/// answer a session patch must never give.
-///
-/// Unknown KEYS are not drops: `SessionConfig` ignores them by design (a partial GA patch names only
-/// what it changes), so they never reach this path.
 fn session_config_lenient(session: &Value, st: &mut DecodeState) -> SessionConfig {
     let read = |v: &Value| serde_json::from_value::<SessionConfig>(v.clone());
     if let Ok(cfg) = read(session) {
         return cfg;
     }
     let Some(obj) = session.as_object() else {
-        // Not an object at all — there is no field to salvage.
+
         st.record_dropped_field("session");
         return SessionConfig::default();
     };
@@ -504,20 +449,20 @@ fn session_config_lenient(session: &Value, st: &mut DecodeState) -> SessionConfi
     }
     let kept = Value::Object(kept);
     read(&kept).unwrap_or_else(|_| {
-        // Every field stood alone yet the set does not parse — nothing left to salvage honestly.
+
         st.record_dropped_field("session");
         SessionConfig::default()
     })
 }
 
-// ── OpenAI Realtime GA ──────────────────────────────────────────────────────────────────────────
+
 
 /// The OpenAI Realtime GA dialect.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OpenAiRealtime;
 
 mod oa_wire {
-    // client → server
+
     pub const SESSION_UPDATE: &str = "session.update";
     pub const INPUT_AUDIO_APPEND: &str = "input_audio_buffer.append";
     pub const INPUT_AUDIO_COMMIT: &str = "input_audio_buffer.commit";
@@ -527,7 +472,7 @@ mod oa_wire {
     pub const ITEM_DELETE: &str = "conversation.item.delete";
     pub const RESPONSE_CREATE: &str = "response.create";
     pub const RESPONSE_CANCEL: &str = "response.cancel";
-    // server → client
+
     pub const SESSION_CREATED: &str = "session.created";
     pub const SPEECH_STARTED: &str = "input_audio_buffer.speech_started";
     pub const SPEECH_STOPPED: &str = "input_audio_buffer.speech_stopped";
@@ -541,7 +486,7 @@ mod oa_wire {
     pub const RESPONSE_DONE: &str = "response.done";
     pub const RATE_LIMITS_UPDATED: &str = "rate_limits.updated";
     pub const ERROR: &str = "error";
-    // shared item nouns
+
     pub const ITEM_FN_CALL_OUTPUT: &str = "function_call_output";
     pub const ITEM_FN_CALL: &str = "function_call";
 }
@@ -590,8 +535,8 @@ impl OpenAiRealtime {
                     let call_id = str_at(&item, "call_id");
                     let call_ref = st.ref_for_call_id(call_id);
                     let output = Bytes::from(str_at(&item, "output").to_owned().into_bytes());
-                    // The dialect's own result item carries no tool name; the one the model announced
-                    // is remembered per call id, for the dialects that require it.
+
+
                     let name = st.call_name(call_id).to_string();
                     vec![IrClientEvent::Tool(IrDuplexTool::CallResult {
                         call_ref,
@@ -673,8 +618,8 @@ impl OpenAiRealtime {
                     let call_id = str_at(&item, "call_id");
                     let call_ref = st.ref_for_call_id(call_id);
                     let name = str_at(&item, "name").to_string();
-                    // Remember the name for the RESULT leg: OpenAI's `function_call_output` carries
-                    // none, and a Gemini `functionResponse` requires one.
+
+
                     st.remember_call_name(call_id, &name);
                     vec![IrServerEvent::Tool(IrDuplexTool::CallOpen {
                         call_ref,
@@ -699,10 +644,10 @@ impl OpenAiRealtime {
                 let call_id = str_at(&v, "call_id");
                 let call_ref = st.ref_for_call_id(call_id);
                 let mut out = Vec::new();
-                // THE COMPLETE ARGUMENTS THE CLOSE STATES. This dialect repeats the whole argument
-                // string on the done event; a dialect that delivers the call atomically needs exactly
-                // that, and a peer whose deltas were never seen (a session joined mid-call) has
-                // nothing else. Dropping it dispatched the call with no arguments at all.
+
+
+
+
                 let arguments = str_at(&v, "arguments");
                 if !arguments.is_empty() {
                     out.push(IrServerEvent::Tool(IrDuplexTool::CallArgs {
@@ -718,8 +663,8 @@ impl OpenAiRealtime {
                 out
             }
             oa_wire::RESPONSE_DONE => {
-                // An absent `usage` is no report (zero, as before); a present-but-unreadable billed
-                // count bills the plane's floor and says so (#42: never metered at zero).
+
+
                 match v
                     .get("response")
                     .and_then(|r| r.get("usage"))
@@ -743,23 +688,7 @@ impl OpenAiRealtime {
     }
 }
 
-/// Extract the split token classes from a `response.done.usage` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
-/// SEPARATE classes; extraction-only, never client-translated).
-///
-/// The stated `input_tokens`/`output_tokens` totals are what the far end bills ("Usage statistics
-/// for the Response, this will correspond to billing", the Realtime API reference), and the
-/// per-modality breakdown (`input_token_details`/`output_token_details`) only SPLITS them. So each
-/// side bills the larger of its stated total and the sum of every entry its breakdown carries
-/// (`audio_tokens`, `text_tokens`, and on input `image_tokens`), never the audio and text entries
-/// alone: a turn that also carried image input billed its audio and text and dropped the rest.
-/// Audio bills as audio and image tokens as image tokens (each its own declared class); every
-/// other token the side bills is attributed to `text`. It is an integer passthrough of the wire
-/// figures, no rate lookup or multiply, so #71's hot-path rule is untouched.
-///
-/// This is the exact twin of the Gemini Live dialect's `usage_from_metadata` (`gemini/mod.rs`).
-///
-/// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
-/// present-but-unreadable one is an `Err` the caller bills the floor for ([`usage_floor`], #42).
+/// Extract separate audio and text token classes from `response.done.usage`.
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     let ind = u.get("input_token_details");
     let outd = u.get("output_token_details");
@@ -785,22 +714,21 @@ fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     })
 }
 
-// ── Gemini Live ─────────────────────────────────────────────────────────────────────────────────
+
 
 /// The Gemini Live dialect.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GeminiLive;
 
 mod gl_wire {
-    // client → server
+
     pub const SETUP: &str = "setup";
     pub const CLIENT_CONTENT: &str = "clientContent";
     pub const REALTIME_INPUT: &str = "realtimeInput";
     /// The manual end-of-uplink marker nested under `realtimeInput`. Gemini's cross-dialect twin of
-    /// OpenAI's discrete `input_audio_buffer.commit` — both end the buffered uplink turn.
     pub const AUDIO_STREAM_END: &str = "audioStreamEnd";
     pub const TOOL_RESPONSE: &str = "toolResponse";
-    // server → client
+
     pub const SETUP_COMPLETE: &str = "setupComplete";
     pub const SERVER_CONTENT: &str = "serverContent";
     pub const TOOL_CALL: &str = "toolCall";
@@ -808,31 +736,19 @@ mod gl_wire {
 }
 
 /// Map a Gemini audio `mimeType` to the shared [`AudioFormat`], IN THE DIRECTION IT ARRIVED.
-///
-/// The two directions of this dialect run at DIFFERENT rates — 16 kHz is what Gemini requires on its
-/// uplink, 24 kHz is what the model synthesizes — and each format carries exactly one
-/// bytes-per-millisecond constant. The uplink meter divides the client's bytes by it, and the
-/// barge-in truncate math divides the downlink's.
-///
-/// So the probe is directional and states the rate. UPLINK PCM is `Pcm16At16k` at 16 kHz and `Pcm16`
-/// at 24 kHz: counting 16 kHz bytes at the 24 kHz rate billed two-thirds of the audio the caller
-/// spoke. DOWNLINK PCM is accepted only at the rate the truncate math measures in: a 16 kHz downlink
-/// blob has no frame, and admitting it as `Pcm16` would meter 480 bytes of 16 kHz audio (30 ms) as
-/// 10 ms, cutting the user off mid-word at the next barge-in. An untagged `audio/pcm` takes the
-/// direction's own rate, which is what an untagged frame in that direction is.
 #[must_use]
 pub fn audio_format_from_mime(mime: &str, dir: UpDown) -> Option<AudioFormat> {
     let m = mime.to_ascii_lowercase();
     if !m.starts_with("audio/pcm") {
         return None;
     }
-    // The `rate=` parameter is matched EXACTLY against each `;`-delimited part, never by substring:
-    // `"rate=160000"` (10x the real 16 kHz rate) CONTAINS `"rate=16000"` as a literal substring, and a
-    // `.contains` probe mismeasured it as the 16 kHz rate it is not — on the downlink that mismeasures
-    // the truncate math's bytes-per-ms by 10x (premature barge-in truncation) and mismeters billed
-    // audio duration by the same factor. A rate parameter that IS stated but matches neither known
-    // value is a rate this dialect does not recognize, and is REFUSED — not an untagged blob, and
-    // never guessed at as the nearest-looking known value.
+
+
+
+
+
+
+
     let mut rate_16k = false;
     let mut rate_24k = false;
     let mut untagged = true;
@@ -847,10 +763,10 @@ pub fn audio_format_from_mime(mime: &str, dir: UpDown) -> Option<AudioFormat> {
         }
     }
     match dir {
-        // The uplink's own rate is 16 kHz; a blob that states 24 kHz is metered at 24 kHz.
+
         UpDown::Up if rate_16k || untagged => Some(AudioFormat::Pcm16At16k),
         UpDown::Up if rate_24k => Some(AudioFormat::Pcm16),
-        // The truncate math measures against THIS rate; anything else is a different format.
+
         UpDown::Down if rate_24k || untagged => Some(AudioFormat::Pcm16),
         _ => None,
     }
@@ -872,15 +788,6 @@ fn system_instruction_text(si: &Value) -> Option<String> {
 }
 
 /// Map Gemini `realtimeInputConfig.automaticActivityDetection` onto the shared VAD IR's THREE states
-/// (see `SessionConfig::turn_detection`), which Gemini's own wire also distinguishes:
-///
-/// - a config that names no `automaticActivityDetection` says nothing about turn detection → `None`
-///   (absent), so re-framing it does not invent a setting the caller never asked for;
-/// - `disabled: true` is Gemini's explicit "the client drives turns" → `Some(None)`;
-/// - anything else is a configured detector → `Some(Some(..))`.
-///
-/// Gemini's sensitivity enums have no shared home (dropped); OpenAI-only knobs (`threshold` /
-/// `create_response` / `interrupt_response`) take their shared defaults.
 fn vad_from_realtime_input_config(ric: &Value) -> Option<Option<IrVad>> {
     let aad = ric.get("automaticActivityDetection")?;
     if aad.get("disabled").and_then(Value::as_bool) == Some(true) {
@@ -888,9 +795,9 @@ fn vad_from_realtime_input_config(ric: &Value) -> Option<Option<IrVad>> {
     }
     Some(Some(IrVad::ServerVad {
         threshold: 0.5,
-        // A timing that does not fit in the shared IR's `u32` takes the SAME documented default an
-        // absent field takes. Narrowing with `as` would turn a nonsense value into "no padding at
-        // all" / "no silence window at all" — working settings nobody configured.
+
+
+
         prefix_padding_ms: aad
             .get("prefixPaddingMs")
             .and_then(Value::as_u64)
@@ -907,9 +814,6 @@ fn vad_from_realtime_input_config(ric: &Value) -> Option<Option<IrVad>> {
 }
 
 /// Decode a Gemini `setup` object into the shared [`SessionConfig`] (the cross-dialect superset).
-///
-/// A field the plane cannot model is DROPPED and RECORDED (the per-field drop-and-warn discipline the
-/// OpenAI session patch already follows) — never defaulted into a working setting nobody asked for.
 fn session_config_from_setup(setup: &Value, st: &mut DecodeState) -> SessionConfig {
     let gc = setup
         .get("generationConfig")
@@ -932,11 +836,11 @@ fn session_config_from_setup(setup: &Value, st: &mut DecodeState) -> SessionConf
         .and_then(|s| s.get("voiceName"))
         .and_then(Value::as_str)
         .map(str::to_string);
-    // A CAP THAT DOES NOT FIT IS NOT "NO CAP". Present-but-unreadable is a REFUSAL of that field: it
-    // is dropped and recorded, and the rest of the setup stands. Letting it fall through to `None`
-    // silently handed the session an UNBOUNDED response where the client asked for a bounded one —
-    // the one direction a limit must never move on its own. (The OpenAI dialect refuses the same
-    // narrowing on its own `max_response_output_tokens`.)
+
+
+
+
+
     let max_output_tokens = match gc.get("maxOutputTokens") {
         None | Some(Value::Null) => None,
         Some(v) => match v.as_u64().and_then(|n| u32::try_from(n).ok()) {
@@ -976,7 +880,7 @@ fn session_config_from_setup(setup: &Value, st: &mut DecodeState) -> SessionConf
 /// The modality split of a Gemini `*TokensDetails` array (`[{modality, tokenCount}]`): its AUDIO,
 /// IMAGE and VIDEO entries, and the sum of every entry. BILLED COUNTS, read through
 /// [`billed_count`]: an absent array, modality or count is zero, a present but unreadable count is
-/// an `Err` the caller turns into a refusal (#42).
+/// an `Err` the caller turns into a refusal.
 #[derive(Default)]
 struct Split {
     audio: u64,
@@ -1008,22 +912,7 @@ fn modality_split(details: Option<&Value>) -> Result<Split, String> {
     Ok(split)
 }
 
-/// Extract the split token classes from a Gemini `usageMetadata` object (`BUSBAR-1.6.0.md` #18/#45 — audio vs text are
-/// SEPARATE classes; extraction-only, never client-translated).
-///
-/// GOOGLE'S TOTAL IS BILLED (the owner's gemini-tool-use-billing ruling, `BUSBAR-1.6.0.md`: "a
-/// grounded Gemini turn bills Google's total, tool-use prompt tokens included"). Input is the
-/// prompt (the larger of `promptTokenCount` and the sum of every `promptTokensDetails` entry, so
-/// IMAGE, VIDEO and DOCUMENT tokens bill beside AUDIO and TEXT) plus the tool-use prompt (the larger
-/// of `toolUsePromptTokenCount` and its `toolUsePromptTokensDetails`); output is the response (the
-/// larger of `responseTokenCount` and its `responseTokensDetails`) plus `thoughtsTokenCount`, which
-/// Google prices as output ("Output price (including thinking tokens)"). Where `totalTokenCount`
-/// states more than that sum, the remainder bills as input text. AUDIO, IMAGE and VIDEO entries bill
-/// as their own declared classes; every other token is attributed to `text`. It is an integer
-/// passthrough of the wire figures, no rate lookup or multiply.
-///
-/// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
-/// present-but-unreadable one is an `Err` the caller turns into a refusal (#42).
+/// Extract separate audio and text token classes from Gemini `usageMetadata`.
 fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
     let prompt = modality_split(u.get("promptTokensDetails"))?;
     let tool = modality_split(u.get("toolUsePromptTokensDetails"))?;
@@ -1068,39 +957,39 @@ impl GeminiLive {
         }
 
         if let Some(cc) = v.get(gl_wire::CLIENT_CONTENT) {
-            // A client turn (`turns` + `turnComplete`) is injected VERBATIM as a conversation item —
-            // the plane locks/reconciles it but never reshapes the content bytes.
+
+
             return vec![IrClientEvent::Control(IrDuplexControl::ItemCreate {
                 item: cc.clone(),
             })];
         }
 
         if let Some(ri) = v.get(gl_wire::REALTIME_INPUT) {
-            // Uplink audio arrives in TWO Gemini spellings, both decoded to `IrAudioFrame{dir:Up}` with
-            // a monotonic seq: the GA (`v1beta`) `realtimeInput.audio` SINGLE inline blob, and the
-            // legacy `realtimeInput.mediaChunks[]` ARRAY. A `{mimeType,data}` blob whose mime is not a
-            // modeled audio format has no shared frame (drop).
+
+
+
+
             let mut out = Vec::new();
             let mut push_blob = |blob: &Value, out: &mut Vec<IrClientEvent>| {
                 let Some(format) = audio_format_from_mime(str_at(blob, "mimeType"), UpDown::Up)
                 else {
-                    return; // non-audio realtime input has no shared frame (drop).
+                    return;
                 };
                 let Some(media) = decode_audio(str_at(blob, "data")) else {
-                    return; // a payload that is not base64 is not silence — emit no frame.
+                    return;
                 };
                 out.push(IrClientEvent::AudioFrame(IrAudioFrame {
                     dir: UpDown::Up,
                     seq: st.next_up_seq(),
                     media,
-                    // This dialect names no item on either audio direction.
+
                     origin: IrAudioRef::default(),
-                    // The rate the blob's mime states: the rate its bytes are metered at.
+
                     format: Some(format),
                 }));
             };
-            // Prefer the GA single blob when present so a GA peer never double-decodes; else fall back
-            // to the legacy per-chunk array (one frame each).
+
+
             if let Some(audio) = ri.get("audio") {
                 push_blob(audio, &mut out);
             } else if let Some(chunks) = ri.get("mediaChunks").and_then(Value::as_array) {
@@ -1108,10 +997,10 @@ impl GeminiLive {
                     push_blob(chunk, &mut out);
                 }
             }
-            // `realtimeInput.audioStreamEnd` is Gemini's manual end-of-uplink marker; it is the
-            // cross-dialect twin of OpenAI's discrete `input_audio_buffer.commit`. Map it to the shared
-            // `IrDuplexControl::InputAudioCommit` so the "end the buffered uplink turn" concept survives
-            // cross-dialect (a frame may carry audio AND the end marker; emit the commit after the audio).
+
+
+
+
             if ri.get(gl_wire::AUDIO_STREAM_END).is_some() {
                 out.push(IrClientEvent::Control(IrDuplexControl::InputAudioCommit));
             }
@@ -1124,10 +1013,10 @@ impl GeminiLive {
                 for r in rs {
                     let call_id = str_at(r, "id");
                     let call_ref = st.ref_for_call_id(call_id);
-                    // The `response` object is the tool's opaque output payload (the moat normalizes
-                    // correlation, not the bytes). `functionResponse.name` is REQUIRED by this dialect,
-                    // so it is carried on the IR; a response that omits it falls back to the name the
-                    // originating call announced.
+
+
+
+
                     let wire_name = str_at(r, "name");
                     let name = if wire_name.is_empty() {
                         st.call_name(call_id).to_string()
@@ -1165,10 +1054,10 @@ impl GeminiLive {
             }];
         }
 
-        // The message-type branches frame the content; `usageMetadata` is a TOP-LEVEL field that may ride
-        // on ANY downlink message (a `serverContent` or `toolCall` frame as well as a standalone one), so
-        // it is read once, after the branch, never only when the frame carries nothing else — usage
-        // riding on a content frame was otherwise billed as zero tokens (MONEY-AUDIT STR-4).
+
+
+
+
         let mut out = if let Some(sc) = v.get(gl_wire::SERVER_CONTENT) {
             let mut out = Vec::new();
             if let Some(parts) = sc
@@ -1179,29 +1068,29 @@ impl GeminiLive {
                 for p in parts {
                     if let Some(inline) = p.get("inlineData") {
                         let mime = str_at(inline, "mimeType");
-                        // The played-out position below is measured in the shared format's own
-                        // bytes-per-ms, so a downlink blob at any other rate has no frame here.
+
+
                         let Some(format) = audio_format_from_mime(mime, UpDown::Down) else {
                             continue;
                         };
                         let Some(media) = decode_audio(str_at(inline, "data")) else {
-                            continue; // a payload that is not base64 is not silence — emit no frame.
+                            continue;
                         };
                         out.push(IrServerEvent::AudioFrame(IrAudioFrame {
                             dir: UpDown::Down,
                             seq: st.next_down_seq(),
                             media,
-                            // A Gemini `modelTurn` part carries no response/item correlation, and an
-                            // id nobody issued is worse than an absent one.
+
+
                             origin: IrAudioRef::default(),
                             format: Some(format),
                         }));
                     }
-                    // A `text` part / transcription side-channel has no shared IR home (drop+warn).
+
                 }
             }
-            // `interrupted` = the model's generation was cut off by a barge-in → the shared barge-in
-            // signal. `turnComplete` = the model turn's audio is complete → AudioDone.
+
+
             if sc.get("interrupted").and_then(Value::as_bool) == Some(true) {
                 out.push(IrServerEvent::SpeechStarted {
                     audio_start_ms: 0,
@@ -1221,10 +1110,10 @@ impl GeminiLive {
                     let call_id = str_at(c, "id");
                     let call_ref = st.ref_for_call_id(call_id);
                     let name = str_at(c, "name").to_string();
-                    // Remember the name for the RESULT leg — this dialect requires it back.
+
                     st.remember_call_name(call_id, &name);
-                    // Gemini delivers the call ATOMICALLY; expand it into the shared STREAMED triple
-                    // (open → args → close) so the correlation moat matches the OpenAI codec exactly.
+
+
                     out.push(IrServerEvent::Tool(IrDuplexTool::CallOpen {
                         call_ref,
                         call_id: call_id.to_string(),
@@ -1247,14 +1136,14 @@ impl GeminiLive {
             }
             out
         } else {
-            // `toolCallCancellation`, `goAway`, `sessionResumptionUpdate` and any unknown frame have no
-            // shared IR home — degrade to empty (drop+warn).
+
+
             Vec::new()
         };
 
         if let Some(um) = v.get(gl_wire::USAGE_METADATA) {
-            // A present-but-unreadable billed count bills the plane's floor and says so (#42),
-            // never meters it at zero.
+
+
             out.push(IrServerEvent::Usage(
                 usage_from_metadata(um).unwrap_or_else(|message| usage_floor(report_len, &message)),
             ));

@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE ROOT CELLS' ADDRESS (this crate's `links` row): the composition root compiles this plane's
-//! own root cells from the path printed here, reading it as `DEP_BUSBAR_DOOR_CELLS_<CRATE>_CELLS`
-//! (the same for a path dependency and a pinned one). Nothing is generated and nothing is linked.
 
 use std::error::Error;
 use std::path::PathBuf;

@@ -1,5 +1,4 @@
 //! The plane's per-turn bookkeeping: the counters a turn keeps that no usage report carries, and a
-//! closed turn's counts per declared class.
 
 use crate::codec::ir::{AudioFormat, IrDuplexUsage};
 use busbar_contract::ids::MeterClassId;
@@ -15,7 +14,7 @@ use crate::meta;
 /// derive itself: `audio_seconds_in` from the byte counts of ingress audio frames, `tool_calls` from
 /// counting the tool calls the far end opens as they are read.
 ///
-/// **The session is one unit, so its uplink audio is converted ONCE (MONEY-AUDIT STR-2).** Two
+/// **The session is one unit, so its uplink audio is converted once.** Two
 /// positions are carried from turn to turn rather than reset with the turn's counts: the bytes of
 /// admitted audio short of a whole millisecond (a frame's bytes do not divide into milliseconds
 /// evenly, and flooring each frame lost the remainder every frame), and the milliseconds the
@@ -43,7 +42,6 @@ pub struct TurnCounters {
 }
 
 /// The ticks a millisecond of audio divides into: the least common multiple of every format's bytes
-/// per millisecond (48, 32 and 8), so one byte of any format is a whole number of ticks.
 const TICKS_PER_MS: u64 = 96;
 
 const _: () = {
@@ -54,7 +52,6 @@ const _: () = {
 
 impl TurnCounters {
     /// Count `bytes` of admitted uplink audio, read under `format`. The part of a millisecond the
-    /// bytes leave over is carried onto the next frame, never floored away.
     pub fn admit_audio(&mut self, format: AudioFormat, bytes: usize) {
         let ticks = (bytes as u64).saturating_mul(TICKS_PER_MS / format.bytes_per_ms());
         let total = self.audio_ticks_rem.saturating_add(ticks);
@@ -76,8 +73,6 @@ impl TurnCounters {
     }
 
     /// Close the turn: answer its counters as they stood, and leave in their place the next turn's,
-    /// zero apart from the session's carried audio position (the settled milliseconds now include
-    /// this turn's, and the sub-millisecond remainder rides on).
     pub fn close(&mut self) -> TurnCounters {
         let closed = *self;
         *self = TurnCounters {
@@ -91,8 +86,6 @@ impl TurnCounters {
     }
 
     /// The `audio_seconds_in` this turn bills: the session's cumulative seconds after it less the
-    /// cumulative seconds before it, each converted through [`meta::audio_seconds_in`] — so a
-    /// session's turns sum to its exact admitted duration rounded up once, including fractions.
     #[must_use]
     pub fn audio_seconds_in(&self) -> u64 {
         self.cumulative_audio_seconds()
@@ -101,8 +94,7 @@ impl TurnCounters {
 
     fn cumulative_audio_seconds(&self) -> u64 {
         let ms = self.audio_ms_before.saturating_add(self.audio_ms_in);
-        // A fraction of a millisecond after an exact second is a fraction of the NEXT second.
-        // Divide before adding it, so the millisecond counter keeps its saturating range.
+
         meta::audio_seconds_in(ms).saturating_add(u64::from(
             ms.is_multiple_of(1_000) && self.audio_ticks_rem != 0,
         ))
@@ -110,24 +102,13 @@ impl TurnCounters {
 }
 
 /// A CLOSED TURN'S RAW COUNTS PER DECLARED CLASS — the lines this plane's `meter` emits for a turn
-/// whose answer reported `usage` (`None` for an ending that reported none: an upstream error, a
-/// carrier stop, a session torn down mid-turn) and whose own bookkeeping is `counters`. Each class is
-/// the declared symbol, milliseconds are converted to the seconds `audio_seconds_in` is declared in
-/// through [`TurnCounters::audio_seconds_in`] (the session's cumulative figure, converted once), and
-/// a zero count is omitted (a zero and an absent line settle
-/// alike). Counts only: no rate is read and no figure results.
-///
-/// This is the plane's one reading of a turn for a host that drives the session itself rather than
-/// through the unit loop.
 #[must_use]
 pub fn class_counts(
     usage: Option<&IrDuplexUsage>,
     counters: TurnCounters,
 ) -> Vec<(MeterClassId, u64)> {
     let reported = usage.copied().unwrap_or_default();
-    // `cached_tokens` is NOT ledgered here: it is a subset of the input token classes above, not a
-    // billable class beside them (see `meta::CLASS_CACHED_TOKENS`'s doc).
-    // Pricing it too would double-bill the same cached input.
+
     [
         (meta::CLASS_AUDIO_TOKENS_IN, reported.audio_in),
         (meta::CLASS_AUDIO_TOKENS_OUT, reported.audio_out),

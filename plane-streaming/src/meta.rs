@@ -1,17 +1,10 @@
 //! What this plane declares about itself: its meter classes and its one operation class.
-//!
-//! The meter-class list is the voice row's list (`audio_tokens_in/out`, `text_tokens_in/out`,
-//! `audio_seconds_in`, `tool_calls`; `cached_tokens` is attribution only) and the two input classes
-//! the providers bill apart from text, `image_tokens_in` and `video_tokens_in` (classes are
-//! strings the plane declares). It names `audio_seconds_in` and no outbound twin: the downlink is
-//! already priced by `audio_tokens_out`.
 
 use busbar_contract::ids::{MeterClassId, OpClassId};
 
 const MS_PER_SECOND: u64 = 1_000;
 
 /// The seconds figure the `audio_seconds_in` class carries, from the milliseconds this plane counts.
-/// A part-second rounds UP: audio that arrived is not audio that cost nothing.
 #[must_use]
 pub const fn audio_seconds_in(ms: u64) -> u64 {
     ms.div_ceil(MS_PER_SECOND)
@@ -30,8 +23,6 @@ pub const CLASS_TEXT_TOKENS_IN: MeterClassId = MeterClassId::new("text_tokens_in
 pub const CLASS_TEXT_TOKENS_OUT: MeterClassId = MeterClassId::new("text_tokens_out");
 
 /// The key that names a cache-read token count: NOT a billable class (it is a subset of the input
-/// token classes, and pricing it beside them would double-bill the same cached input). The tests
-/// hold that no turn reports it.
 #[cfg(test)]
 pub const CLASS_CACHED_TOKENS: MeterClassId = MeterClassId::new("cached_tokens");
 
@@ -39,11 +30,9 @@ pub const CLASS_CACHED_TOKENS: MeterClassId = MeterClassId::new("cached_tokens")
 pub const CLASS_AUDIO_SECONDS_IN: MeterClassId = MeterClassId::new("audio_seconds_in");
 
 /// The class key the image input tokens of a turn are counted under (OpenAI Realtime's
-/// `input_token_details.image_tokens`, Gemini Live's IMAGE modality entries).
 pub const CLASS_IMAGE_TOKENS_IN: MeterClassId = MeterClassId::new("image_tokens_in");
 
 /// The class key the video input tokens of a turn are counted under (Gemini Live's VIDEO modality
-/// entries).
 pub const CLASS_VIDEO_TOKENS_IN: MeterClassId = MeterClassId::new("video_tokens_in");
 
 /// The class key a tool call is counted under.

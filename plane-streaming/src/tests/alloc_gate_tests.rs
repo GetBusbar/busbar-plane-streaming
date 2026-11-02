@@ -11,9 +11,6 @@ fn frame_bytes() -> Vec<u8> {
 }
 
 /// The bytes the serializer produced, restated as the reference the renderer is held to.
-///
-/// The member ORDER is the envelope's own (`event`, `streamSid`, `media`), the order Twilio's Media
-/// Streams documents write it in and the codec's serializer emits.
 fn reference(stream_sid: &str, mulaw: &[u8]) -> Vec<u8> {
     #[derive(serde::Serialize)]
     struct Payload {
@@ -64,8 +61,6 @@ fn base64(data: &[u8]) -> String {
 /// The rendered envelope is the serializer's, byte for byte.
 #[test]
 fn the_rendered_envelope_is_the_one_the_serializer_produced() {
-    // Every length class the payload can end on, because base64 pads three of the four differently,
-    // plus the empty frame and an identifier the serializer would have had to escape.
     let payloads: Vec<Vec<u8>> = vec![
         Vec::new(),
         vec![0x7f],

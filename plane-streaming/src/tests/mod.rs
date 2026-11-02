@@ -6,8 +6,6 @@ mod selectors {
     use busbar_contract::grammar::Selector;
 
     /// A one-level prefix claims the segment below it and nothing else. A sibling whose name merely
-    /// starts with the prefix's bytes is a different route, and matching it here would hand a
-    /// request to a dialect the boot never proved this plane had claimed.
     #[test]
     fn a_one_level_prefix_stops_at_the_segment_boundary() {
         let s = Selector::PrefixOneLevel("/twilio");
@@ -19,9 +17,6 @@ mod selectors {
     }
 
     /// The test-only claim table the voice conformance harness reads (`claims::DIALECT_CLAIMS`, no
-    /// door publishes it) names Twilio Media Streams on the WebSocket transport, one path level
-    /// under `/twilio`, under the `webhook-signature` alternative alone, as the door's line does
-    /// (the test below holds the line itself).
     #[test]
     fn the_harness_claim_table_names_twilio_on_the_websocket_carrier_under_the_webhook_signature() {
         use crate::claims::{dialect_for, Dialect, DIALECT_CLAIMS, WS_TRANSPORT};
@@ -42,8 +37,7 @@ mod selectors {
         );
         assert_eq!(claim.selector, Selector::PrefixOneLevel("/twilio"));
         assert_eq!(claim.scheme_alternatives, &["webhook-signature"]);
-        // An arrival one level under `/twilio` names the dialect; the prefix alone and a deeper
-        // path do not, and neither does another dialect's path.
+
         assert_eq!(
             dialect_for("/twilio/inbound"),
             Some(Dialect::TwilioMediaStreams)
@@ -54,11 +48,6 @@ mod selectors {
     }
 
     /// Twilio Media Streams is a streaming DIALECT carried by the WebSocket transport, not a
-    /// transport of its own (the design lists five transports and no telephony one). Its line on
-    /// the door's guest list (`plane_door::ROUTES`, the routes the plane publishes) is an upgrade
-    /// on the WebSocket transport, one `{call_id}` segment under `/twilio`, and authenticates under
-    /// the `webhook-signature` alternative alone: Twilio holds no busbar bearer or API key. (Audit
-    /// S83: this was asserted over a test-only claim table no door publishes.)
     #[test]
     fn twilio_media_streams_is_claimed_on_the_websocket_carrier_under_the_webhook_signature() {
         use crate::claims::WS_TRANSPORT;
@@ -94,7 +83,6 @@ mod selectors {
 mod alloc_gate_tests;
 
 /// The bytes a caller's answer body puts on the wire, read as a test's stand-in for the host's reply
-/// buffer: a sealed answer through the SDK's test-only driver (`test-seal`).
 pub(crate) fn body_bytes(body: crate::driven::Body) -> Vec<u8> {
     match body {
         crate::driven::Body::Public(bytes) => bytes,

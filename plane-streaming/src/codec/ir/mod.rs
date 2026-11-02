@@ -2,16 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The duplex / session vocabulary: the plane's own nouns.
-//!
-//! A live session is a relay: frames pass as they came, under the governed splice, and the plane
-//! reads them only to meter. So what is modelled here is what a session locks and meters:
-//!
-//! | Concern | Module |
-//! |---|---|
-//! | the session config a session is locked to | [`config`] |
-//! | the audio formats uplink audio is metered at | [`media`] |
-//! | the usage a far end reports | [`usage`] |
-//! | the meter's reads of each dialect ([`codec::OpenAiRealtimeCodec`], [`GeminiLiveCodec`]) | [`codec`] |
 
 pub mod codec;
 pub mod config;

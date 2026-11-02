@@ -2,12 +2,10 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Tests for `crates/busbar-plane-streaming/src/request_unit.rs`: the mint door, answered by a
-//! ticket busbar mints (row 132).
 
 use super::*;
 
 /// A piece from `from`, `last` or not. The mint reads no body: `_bytes` names what the caller
-/// sent, for the reader.
 fn piece(from: From, _bytes: &[u8], last: bool) -> Piece {
     Piece { from, last }
 }
@@ -22,7 +20,7 @@ fn locked() -> SessionConfig {
 #[test]
 fn the_mint_door_asks_for_a_ticket_locking_its_session_once() {
     let mut unit = RequestUnit::open(Door::Mint, locked()).expect("a request door");
-    // Nothing before the caller's last piece; an ATTEMPT never comes to a unit that dials nothing.
+
     assert!(matches!(
         unit.on_piece(piece(From::Caller, b"{", false)),
         Answer::Nothing
@@ -36,7 +34,7 @@ fn the_mint_door_asks_for_a_ticket_locking_its_session_once() {
     };
     assert_eq!(ttl_secs, 600, "a ten-minute ticket");
     assert_eq!(crate::ticket::locked_by(&record).expect("reads"), locked());
-    // Asked once.
+
     assert!(matches!(
         unit.on_piece(piece(From::Caller, b"", true)),
         Answer::Nothing
@@ -45,7 +43,6 @@ fn the_mint_door_asks_for_a_ticket_locking_its_session_once() {
 }
 
 /// The mint door's answer: the OpenAI-compatible `{value, expires_at_unix}` shape, the ticket
-/// sealed through the SDK (R7).
 #[test]
 fn a_minted_ticket_is_answered_in_the_shape_sdks_read() {
     let mut unit = RequestUnit::open(Door::Mint, locked()).expect("a request door");
@@ -81,7 +78,7 @@ fn a_minted_ticket_is_answered_in_the_shape_sdks_read() {
     ));
 }
 
-/// RED: a mint the host refused is the served plane's 502, naming why and nothing secret.
+/// A refused mint preserves the served 502 text without exposing secrets.
 #[test]
 fn a_refused_mint_keeps_the_served_text() {
     let mut unit = RequestUnit::open(Door::Mint, locked()).expect("a request door");
@@ -121,10 +118,7 @@ fn a_session_door_opens_no_request_unit_and_a_far_end_never_answers_the_mint() {
     ));
 }
 
-/// RED: A KEY OUTSIDE THE SESSION MODEL'S GRANT GETS NO TICKET (R10 grant ruling): the mint is
-/// refused before anything is minted, with an explained refusal in the caller's dialect, the
-/// OpenAI REST error envelope (`permission_error`, 403), naming the entry the grant does not
-/// reach. The unit is answered: nothing more is asked of the host for it.
+/// A key outside the session model's grant receives no ticket.
 #[test]
 fn a_key_outside_the_session_models_grant_gets_no_ticket() {
     let mut unit = RequestUnit::open(Door::Mint, locked()).expect("a request door");
@@ -134,7 +128,7 @@ fn a_key_outside_the_session_models_grant_gets_no_ticket() {
     let Answer::Rejected(reply, row) = unit.not_granted("m-cap") else {
         panic!("answered, refused");
     };
-    // The refusal is the unit's audit row too, naming the pool and never the key.
+
     assert_eq!(
         row,
         crate::driven::Rejected {

@@ -2,37 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Live sessions through the door: a session is one unit with one line.
-//!
-//! A piece that names a stream is a live session's. The door keeps one [`Live`] per stream, built
-//! at the stream's first piece over the newest live generation's `streams:` section, and answers
-//! each piece in the driver's duplex vocabulary:
-//!
-//! - A CALLER piece goes through the session ([`SessionUnit::from_caller`]); a frame it owes the
-//!   far end is that answer's `EMIT_TO_FAR_END` (one turn). The caller's last piece ends the
-//!   session: its open turn settles once and the answer is `EMIT_DONE`.
-//! - A FAR-END piece goes through the session ([`SessionUnit::from_far_end`]); a frame it owes the
-//!   caller is that answer's emission.
-//! - ONE FRAME PER ANSWER. Every frame keeps its own message boundary, so a piece that leaves more
-//!   than one frame owed (the telephony carrier's start and the locked session it is translated
-//!   into, a ceiling's error and the end) answers the first and queues the rest. A queued frame is
-//!   the session's unsolicited output: the door wakes the instance's driver ticket, `drive` names
-//!   the session, and each collection (`FROM_KERNEL`, no bytes, no attempt) answers the next queued
-//!   frame, toward the side it is bound for.
-//! - Every answer reports the session's cumulative units, the eight classes the plane counts over its
-//!   closed turns and its open turn's running counts (so a cancel or a cut, which reports nothing
-//!   of its own, bills what streamed from the last answer), and, once the far end has accepted the
-//!   session (its upgrade's switch or success, the SDP call's success), its fee unit
-//!   ([`PER_SESSION_CLASS`], `1`): a session whose far end never answered (its open failed, or it
-//!   refused the upgrade) reports none, and its fee is refunded. The kernel checkpoints them
-//!   and writes the session's one line at its end; the plane holds no reservation and never cuts on
-//!   money.
-//! - THE WALL-CLOCK CEILING (`streams.session_max_secs`, Q21a) is measured on the kernel's tick
-//!   clock: while a live generation configures one the door asks to be ticked every
-//!   [`CEILING_TICK_NS`], a session's clock starts at the first tick after its first piece, and a
-//!   session past its ceiling is told why in its dialect and ends once its queued frames are
-//!   collected.
-//! - A CANCEL on either side's ticket ends the session: it is forgotten, and the kernel's cleanup
-//!   writes its line.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -50,14 +19,9 @@ use crate::session_unit::{CumulativeUnits, Plan, SessionUnit};
 const NS_PER_SEC: u64 = 1_000_000_000;
 
 /// How often the door asks to be ticked while a live generation configures a session ceiling: a
-/// session's clock starts, and its ceiling is enforced, at most this late.
-///
-/// The clock starts at a tick rather than at the first piece because a piece carries no clock
-/// reading on the tick clock, and a ceiling compared across two clocks is no ceiling.
 pub const CEILING_TICK_NS: u64 = NS_PER_SEC;
 
 /// The tail's class index of the session's fee unit (`per_session`), after the eight counted
-/// classes ([`crate::session_unit::CLASSES`]).
 pub const PER_SESSION_CLASS: u32 = crate::session_unit::CLASSES.len() as u32;
 
 /// The most live sessions the door keeps at once; past it, a new stream is refused.
@@ -128,8 +92,7 @@ pub struct Live {
     /// else its name), on the plain realtime and telephony doors; `None` on the sideband
     /// (it names its call) and on the Gemini Live socket (its model rides the setup frame).
     dial_model: Option<String>,
-    /// Busbar's own call an SDP door's session placed (row 132): the call a sideband names, freed
-    /// when the session ends.
+    /// The call placed by an SDP session, released when that session ends.
     placed: Option<String>,
     /// A sideband's payload-free initial dial is still owed on its empty opening crossing.
     attach_opening: bool,
@@ -149,8 +112,6 @@ pub struct Live {
 
 impl Live {
     /// The session a stream's first piece on `door` opens, under `cfg`; `None` for a door that
-    /// answers one request. The telephony door locks the carrier's µ-law on both legs; the other
-    /// doors lock the section's session.
     #[cfg(test)]
     #[must_use]
     pub fn open(door: Door, cfg: &StreamsCfg) -> Option<Live> {
@@ -158,8 +119,6 @@ impl Live {
     }
 
     /// The session params `door` locks under `cfg`, as the open's hooks are shown them: the
-    /// section's session, with the carrier's 8 kHz µ-law both ways on the telephony door, so it
-    /// passes straight through with no resample.
     #[must_use]
     pub fn locked(door: Door, cfg: &StreamsCfg) -> SessionConfig {
         match door {
@@ -173,8 +132,6 @@ impl Live {
     }
 
     /// [`Self::open`], locked to `rewritten` where a session-open hook rewrote the params
-    /// ([`Self::locked`]) this session opens under, with the section's two token ceilings applied
-    /// ([`with_ceilings`]).
     #[must_use]
     pub fn open_locked(
         door: Door,
@@ -182,8 +139,7 @@ impl Live {
         rewritten: Option<SessionConfig>,
     ) -> Option<Live> {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
-        // The locked session as the provider is told it: under the section's token ceilings, the
-        // session model by its wire name.
+
         let locked = with_ceilings(
             cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg))),
             cfg,
@@ -233,7 +189,6 @@ impl Live {
     }
 
     /// The far end accepted the session's upgrade: it answered the session, and its fee unit is
-    /// incurred. A far end that refused the upgrade never answered it.
     pub fn accept(&mut self) {
         self.accepted = true;
         self.answered = true;
@@ -252,9 +207,6 @@ impl Live {
     }
 
     /// The target the session dials under the member's base URL: the dialect's socket `path`; for
-    /// a session attached to a provider's call, that call only (`?call_id=`, the provider's
-    /// sideband connection to the call's own session); for a plain or telephony session, the
-    /// session's model (`?model=`, form-escaped, as OpenAI's own WS surface takes it).
     #[must_use]
     pub fn dial_target(&self, path: &str) -> String {
         match (&self.call_id, &self.dial_model) {
@@ -268,7 +220,6 @@ impl Live {
     }
 
     /// Whether the far end sent a usage report the reader could not read and the kernel has not
-    /// been told; telling clears it.
     pub fn take_unreadable(&mut self) -> bool {
         each!(&mut self.unit, |u| u.take_unreadable())
     }
@@ -280,14 +231,12 @@ impl Live {
     }
 
     /// THE SESSION'S OPENING CALL: `frame`, owed the far end before anything else (the SDP door's
-    /// request, which places busbar's own call and so dials the session's far end at its open).
     pub fn open_far(&mut self, frame: Vec<u8>) {
         self.queued.push_front((Side::FarEnd, frame));
         self.opening = true;
     }
 
     /// Whether the far-bound frame being written is the session's opening call (once): the body of
-    /// the open that dials the far end, never a text message on it.
     pub fn take_opening(&mut self) -> bool {
         std::mem::take(&mut self.opening)
     }
@@ -326,9 +275,6 @@ impl Live {
     #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, bytes: &[u8], last: bool) {
         if std::mem::take(&mut self.attach_opening) && bytes.is_empty() && !last {
-            // The kernel's initial crossing opens the provider socket before the caller sends
-            // JSON. No text bit: this empty body is the dial's head alone, never an empty JSON
-            // message on the socket. An attached call already has its SDP session lock.
             self.open_far(Vec::new());
         }
         let plan = each!(&mut self.unit, |u| {
@@ -347,7 +293,6 @@ impl Live {
     }
 
     /// A far-end piece. It incurs no fee of its own: the fee is the far end's acceptance of the
-    /// session ([`Live::accept`], [`Live::answered_call`]), never a refusal's body.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_far_end(&mut self, bytes: &[u8]) {
         let plan = each!(&mut self.unit, |u| u.from_far_end(bytes));
@@ -355,7 +300,6 @@ impl Live {
     }
 
     /// The tick clock reads `now_ns`: the session's clock starts on its first tick, and a session
-    /// past its ceiling is told why and ends. Answers whether it now owes a frame or its end.
     pub fn tick(&mut self, now_ns: u64) -> bool {
         let started = *self.started_ns.get_or_insert(now_ns);
         let Some(ceiling) = self.ceiling_secs else {
@@ -370,9 +314,6 @@ impl Live {
     }
 
     /// The next answer: one queued frame, or, with none queued, the session's end when it ended.
-    /// A caller-side answer (`near`) carries a frame toward either side, oldest first, and the
-    /// session's end; a far-side answer reaches only the caller, so it carries the oldest frame
-    /// bound for the caller and never the end (the caller side answers that, once collected).
     pub fn next(&mut self, near: bool) -> Emit {
         let at = if near {
             (!self.queued.is_empty()).then_some(0)
@@ -400,8 +341,6 @@ impl Live {
     }
 
     /// The session's cumulative units, as the door reports them: (class index, amount), the zero
-    /// classes left out; the fee unit is `1` once the far end has answered, unless the session is
-    /// attached to a call whose SDP offer already reported the call's fee.
     #[must_use]
     pub fn units(&self) -> Vec<(u32, u64)> {
         let units: CumulativeUnits = each!(&self.unit, |u| u.units());
@@ -414,10 +353,6 @@ impl Live {
 }
 
 /// The section's token ceilings over the session params `locked`: the per-response output cap is
-/// `streams.max_output_tokens`, or the session's own where that is lower, and the context window is
-/// `streams.context_window_tokens`. Each dialect states them in its own keys when the session is
-/// locked (`max_output_tokens` and `truncation` on OpenAI Realtime, `generationConfig.maxOutputTokens`
-/// and `contextWindowCompression` on Gemini Live).
 #[must_use]
 pub fn with_ceilings(mut locked: SessionConfig, cfg: &StreamsCfg) -> SessionConfig {
     let cap = match locked.max_output_tokens {
@@ -430,15 +365,6 @@ pub fn with_ceilings(mut locked: SessionConfig, cfg: &StreamsCfg) -> SessionConf
 }
 
 /// The session-open params a committed hook rewrite produced, or why they cannot be used.
-/// The rewrite is a JSON object PATCHED over the `locked` params as the hook was shown them: a key
-/// the hook named wins, a key it did not name keeps the locked value (naming a key with `null`
-/// clears it). The merge comes before the decode, so a patch that names one bad field cannot be
-/// applied at all; nor can output that is not JSON, or JSON that is not an object. The caller
-/// preserves the locked params and reports rejection once its projection completes.
-///
-/// # Errors
-///
-/// The output is not JSON, not an object, or not a session config once merged.
 pub fn committed_session_config(
     locked: &SessionConfig,
     rewrite: &[u8],
@@ -485,9 +411,6 @@ pub struct Sessions {
 
 impl Sessions {
     /// Stream `stream`'s session, opened on `door` under `cfg` at its first piece. `None` for a
-    /// door that answers one request, a stream past [`MAX_SESSIONS`], or a stream whose session
-    /// ended: a caller's piece after its call ended (a second Twilio `stop`) is refused,
-    /// never opened as a fresh session that ends and settles a second time.
     pub fn get_or_open(&mut self, stream: u64, door: Door, cfg: &StreamsCfg) -> Option<&mut Live> {
         if !self.live.contains_key(&stream) {
             if self.live.len() >= MAX_SESSIONS || self.ended.contains(&stream) {
@@ -501,9 +424,6 @@ impl Sessions {
     }
 
     /// Keep the session-open params a hook rewrote (or a ticket locks) for the session unit `unit`
-    /// opens, until its first piece. Answers `false`, keeping nothing, for a new unit while
-    /// [`MAX_SESSIONS`] are kept: the open is refused, and no kept entry is dropped to make room.
-    /// An entry already kept is restated in place.
     #[must_use]
     pub fn rewrite(&mut self, unit: u64, params: SessionConfig) -> bool {
         if self.rewritten.len() >= MAX_SESSIONS && !self.rewritten.contains_key(&unit) {
@@ -514,14 +434,12 @@ impl Sessions {
     }
 
     /// The session-open params stated for the session unit `unit` opens (a hook's rewrite, or a
-    /// ticket's record), until its first piece opens it.
     #[must_use]
     pub fn rewritten(&self, unit: u64) -> Option<&SessionConfig> {
         self.rewritten.get(&unit)
     }
 
     /// Whether as many sessions are live as the door keeps ([`MAX_SESSIONS`]): a new one is
-    /// refused.
     #[must_use]
     pub fn full(&self) -> bool {
         self.live.len() >= MAX_SESSIONS
@@ -553,7 +471,6 @@ impl Sessions {
     }
 
     /// Whether the session on `ticket`, or stream `stream` (`0` = none named), had its far end
-    /// answer.
     #[must_use]
     pub fn far_answered(&self, ticket: Ticket, stream: u64) -> bool {
         self.tickets
@@ -570,7 +487,6 @@ impl Sessions {
     }
 
     /// The op on `ticket` is cancelled: the session it serves, if any, is over. Answers whether
-    /// one was.
     pub fn cancel(&mut self, ticket: Ticket) -> bool {
         match self.tickets.get(&ticket).copied() {
             Some(stream) => {
@@ -582,7 +498,6 @@ impl Sessions {
     }
 
     /// The tick clock reads `now_ns`: every session's clock and ceiling. Answers whether any
-    /// session now owes an answer of its own.
     pub fn tick(&mut self, now_ns: u64) -> bool {
         let mut owed = false;
         for live in self.live.values_mut() {
@@ -610,7 +525,6 @@ impl Sessions {
     }
 
     /// Whether `stream` is, or was until recently, a live session's: a refusal of it is told in
-    /// the session's stream, never as the answer to an upgrade.
     #[must_use]
     pub fn served(&self, stream: u64) -> bool {
         self.live.contains_key(&stream) || self.ended.contains(&stream)

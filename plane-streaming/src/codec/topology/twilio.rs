@@ -2,27 +2,9 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The Twilio Media Streams envelope for the telephony topology.
-//!
-//! Twilio speaks a JSON-over-WS protocol on its Media Streams leg: lifecycle events (`connected`,
-//! `start`, `mark`, `dtmf`, `stop` — the whole set Twilio sends TO the socket, because an event
-//! this codec does not model is a decode REFUSAL to everything downstream) plus per-frame `media`
-//! events whose `payload` is base64 8 kHz µ-law. The telephony session ([`TwilioBridge`], driven by
-//! `crate::session_unit::SessionUnit`) rewrites only this envelope, so the carrier-specific work is
-//! this thin codec that:
-//!
-//! * DECODES an inbound Twilio WS frame into a [`TwilioEvent`], base64-decoding a `media` payload to
-//!   the raw µ-law bytes the far end's uplink append carries.
-//! * ENCODES the far end's µ-law audio back into the Twilio outbound `media` envelope, and relays a
-//!   tool call the model makes down the session as the far end wrote it (Law 11).
-//! * REFUSES a `start` whose negotiated media format is not `g711_ulaw` / 8000 Hz — a silent format
-//!   mismatch would corrupt the barge-in truncate arithmetic without erroring, so it fails closed.
-//! * Admits only the media of the stream the call's first `start` bound (Twilio sends one `start`
-//!   per stream): media naming another stream, and a second `start`, are not admitted.
 
 use serde::Serialize;
 
-// The crate's one base64 implementation: the contract's `media` codec, which `ir/codec` also
-// decodes audio through.
 use busbar_contract::media::{base64_decode, base64_encode};
 
 use crate::codec::ir::codec::WireEvent;
@@ -136,12 +118,10 @@ pub enum TwilioEvent {
 }
 
 /// The Twilio envelope codec: stateless decode/encode between Twilio's JSON Media Streams frames and
-/// the raw µ-law `Vec<u8>` the telephony proxy carries.
 pub struct TwilioEnvelope;
 
 impl TwilioEnvelope {
     /// DECODE one inbound Twilio WS frame into a [`TwilioEvent`]. A `media` event's base64 payload is
-    /// decoded to raw µ-law bytes. Fails closed on any frame that is not well-formed Twilio JSON.
     pub fn decode(frame: &[u8]) -> Result<TwilioEvent, TwilioError> {
         let v: serde_json::Value =
             serde_json::from_slice(frame).map_err(|_| TwilioError::Malformed)?;
@@ -239,7 +219,6 @@ impl TwilioEnvelope {
     }
 
     /// ENCODE raw µ-law bytes into a Twilio outbound `media` envelope for a given `stream_sid`. The
-    /// field order is fixed so the serialization is deterministic and byte-stable.
     #[must_use]
     pub fn encode_media(stream_sid: &str, mulaw: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -248,14 +227,6 @@ impl TwilioEnvelope {
     }
 
     /// The same envelope, rendered into a buffer the caller already holds.
-    ///
-    /// This is the shape the downlink writes in. The envelope is fixed (three members, in this
-    /// order) and everything about it except the identifier and the payload is known at compile
-    /// time. Building a document, a string for the payload, and then serializing would spend three
-    /// allocations per audio frame, and a call carries fifty frames a second in each direction.
-    /// The buffer is CLEARED, not appended to, so a caller may hand the same one back frame after
-    /// frame and pay for its growth once. An identifier the serializer would have to escape goes
-    /// through the serializer, which is the authority on those bytes.
     pub fn encode_media_into(out: &mut Vec<u8>, stream_sid: &str, mulaw: &[u8]) {
         out.clear();
         if !is_bare_json_string(stream_sid) {
@@ -286,14 +257,12 @@ impl TwilioEnvelope {
 }
 
 /// Whether a string is its own JSON body: printable ASCII with neither character a JSON string
-/// cannot carry raw. Everything else goes to the serializer.
 fn is_bare_json_string(s: &str) -> bool {
     s.bytes()
         .all(|b| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\')
 }
 
 /// Standard base64 (RFC 4648) with padding, appended to a buffer the caller holds: the same bytes
-/// `busbar_contract::media::base64_encode` produces, without the string it would allocate.
 fn base64_encode_into(data: &[u8], out: &mut Vec<u8>) {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     for chunk in data.chunks(3) {
@@ -330,8 +299,6 @@ struct OutboundPayload {
 }
 
 /// ASSERT the negotiated media format is the locked `g711_ulaw` / 8000 Hz / mono carrier, refusing
-/// anything else. A mismatch corrupts the 8-bytes-per-ms barge-in arithmetic silently, so it is refused
-/// outright rather than reformatted or warned about.
 pub fn assert_g711_ulaw(fmt: &MediaFormat) -> Result<(), TwilioError> {
     if fmt.encoding == TWILIO_MULAW_ENCODING
         && fmt.sample_rate == TWILIO_SAMPLE_RATE
@@ -371,7 +338,6 @@ pub enum CallerStep {
 }
 
 /// A carrier frame that ends the call, said in one log line naming why: the call drops, and the
-/// operator can tell why every call from a misconfigured stream ends.
 fn refused(why: &TwilioError) -> CallerStep {
     tracing::warn!("the telephony carrier's frame ends the call: {why}");
     CallerStep::Refused
@@ -385,14 +351,9 @@ impl TwilioBridge {
     }
 
     /// Read one caller frame. A start with no stream id, or in another media format, is refused; so
-    /// is a frame that is not Twilio's shape or carries a payload that is not clean base64 (data
-    /// resuming after padding is never billed as a longer payload). An event this reader does not
-    /// model is dropped.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, frame: &[u8]) -> CallerStep {
         match TwilioEnvelope::decode(frame) {
-            // The call's stream is the one its first start binds: Twilio sends one start per
-            // stream, and a second binds nothing (media naming it is not admitted).
             Ok(TwilioEvent::Start(_)) if self.stream_sid.is_some() => CallerStep::Nothing,
             Ok(TwilioEvent::Start(start)) => {
                 if start.stream_sid.is_empty() {
@@ -427,10 +388,6 @@ impl TwilioBridge {
     }
 
     /// Rewrite one frame bound for the caller into the carrier's envelope: model audio becomes a
-    /// `media` frame on the call's stream, and a barge-in clears the audio the carrier has queued.
-    /// A tool call the model makes is relayed down the session as the far end wrote it (Law 11: "a
-    /// tool call on any session, Twilio included, is relayed down that session as-is"; busbar
-    /// neither drops nor answers it). `None` for any other frame: the carrier has no event for it.
     #[must_use]
     pub fn to_caller(&self, frame: &[u8]) -> Option<Vec<u8>> {
         let v: serde_json::Value = serde_json::from_slice(frame).ok()?;
@@ -455,8 +412,6 @@ impl TwilioBridge {
 }
 
 /// Whether the far end's event `kind` (the frame `v`) carries a tool call the model made: its
-/// arguments as they stream (`response.function_call_arguments.*`), or the `function_call` item
-/// itself as the response and the conversation state it.
 fn is_tool_call(kind: &str, v: &serde_json::Value) -> bool {
     if kind.starts_with("response.function_call_arguments.") {
         return true;

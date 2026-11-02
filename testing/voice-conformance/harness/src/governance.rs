@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! THE FIVE VISION CHECKPOINTS, AT THE DOOR — observations, never a conformance result (the runner
-//! keeps governance out of the conformance tally). Each is probed on both doors and judged like
-//! any leg; the process always exits 0.
+
+
 
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{FROM_CALLER, FROM_FAR_END, PIECE_HAS_STATUS, PIECE_LAST};
@@ -33,12 +33,12 @@ pub fn run(rig: &Rig, checkpoint: &str) -> i32 {
     0
 }
 
-// ── V1: a barge-in is the caller's (Law 11) ─────────────────────────────────────────────────────
+
 
 fn barge_script(p: &Plugin<Plane>) -> Log {
     let _ = open(p, SESSION, Some(PUBLIC));
     let mut s = Session::open(p, 100, 5);
-    // 96 bytes of 24 kHz PCM16: the caller has heard 2 ms of the far end's answer.
+
     s.push(FROM_FAR_END, 0, &downlink(96));
     s.push(
         FROM_FAR_END,
@@ -89,7 +89,7 @@ fn barge_in(rig: &Rig, checkpoint: &str) {
     );
 }
 
-// ── V2: a session is bounded ────────────────────────────────────────────────────────────────────
+
 
 const CEILING: &[u8] = br#"{"session":{"model":"m-cap"},"session_max_secs":1}"#;
 
@@ -153,7 +153,7 @@ fn ceiling(rig: &Rig, checkpoint: &str) {
     );
 }
 
-// ── V3: a turn's units settle once ──────────────────────────────────────────────────────────────
+
 
 /// The three answers of a turn whose report is re-called once, as lines.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,7 +165,7 @@ fn settle_script(p: &Plugin<Plane>) -> Settled {
     let _ = open(p, SESSION, Some(PUBLIC));
     let mut s = Session::open(p, 120, 5);
     s.push(FROM_CALLER, 0, &uplink(1000));
-    // The far end's first piece carries its status: the upgrade's switch, its acceptance.
+
     let first = Piece {
         status: 101,
         ..session(120, 5, FROM_FAR_END, PIECE_HAS_STATUS, USAGE_DONE)
@@ -222,7 +222,7 @@ fn settled_once(rig: &Rig, checkpoint: &str) {
     );
 }
 
-// ── V4: at the door the lock is spliced over an OpenAI-only concept ──────────────────────────────
+
 
 fn downscope_script(p: &Plugin<Plane>) -> Log {
     let _ = open(p, SESSION, Some(PUBLIC));
@@ -278,7 +278,7 @@ fn downscope(rig: &Rig, checkpoint: &str) {
     );
 }
 
-// ── D2: an ended session is closed hard ─────────────────────────────────────────────────────────
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CloseObs {

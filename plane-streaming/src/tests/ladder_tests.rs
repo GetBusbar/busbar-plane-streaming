@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE LADDER RED for `plane-streaming/src/plane_door.rs`: the plane's lines on a guest
-//! list reproduce the served plane's dispatch ladder exactly (`BUSBAR-1.6.0.md` section 6, "Auth
-//! points and guest lists", step 3). Every served route resolves to the same (dialect, door), and
-//! a request no served route took resolves to no line. A request whose path a line matches under
-//! another method is answered 405 with that line's Allow, as the served plane answered it.
-//!
-//! The match here is the spec's, stated in the test: a line matches when its method set holds the
-//! method and its path does (exact bytes, or a pattern where `{…}` is exactly one non-empty
-//! segment); an exact path ranks above a pattern, and two matching lines at equal rank are the
-//! ambiguity boot refuses.
+//! Guest-list route selection for the streaming plane's doors.
 
 use super::*;
 use crate::driven::Door;
@@ -167,8 +158,7 @@ fn a_served_path_under_another_method_is_405_with_the_lines_allow() {
 fn the_sockets_are_upgrade_lines_and_the_one_request_doors_are_not() {
     for (i, line) in ROUTES.iter().enumerate() {
         let door = Door::of(i as u32).expect("a door per line");
-        // The SDP door opens a session over a datagram carrier (row 132): a session, not an
-        // upgrade line.
+
         let datagram = door == Door::Sdp;
         assert_eq!(
             line.upgrade,
@@ -234,11 +224,6 @@ fn no_line_is_open_and_the_telephony_line_is_signed() {
 }
 
 /// A `{call_id}` route is claimed as a PATTERN, not as a one-level prefix. Without `CLAIM_PATTERN`
-/// the published claim reads as the prefix `/twilio/{call_id}` (one segment under it), which also
-/// catches a path the route was never meant to carry. RED arms: every pattern route carries
-/// `CLAIM_PATTERN` and never `CLAIM_EXACT`; every exact route the reverse; and the neighbouring
-/// path the prefix reading would have caught (`/twilio/{call_id}/extra`-shaped, one more level)
-/// is not matched by the pattern.
 #[test]
 fn a_call_id_route_is_claimed_as_a_pattern_and_a_neighbour_is_not() {
     use busbar_contract::abi::plane::{CLAIM_EXACT, CLAIM_PATTERN};
@@ -263,9 +248,7 @@ fn a_call_id_route_is_claimed_as_a_pattern_and_a_neighbour_is_not() {
         patterns, 3,
         "the sideband, Gemini and Twilio sockets are the pattern routes"
     );
-    // The neighbour: one more segment than the pattern has is no match (a prefix reading of
-    // `/twilio` + one level would not catch it either, but `/twilio/x/extra` would be caught by a
-    // looser prefix; the pattern pins the segment count).
+
     let twilio = ROUTES
         .iter()
         .find(|r| r.target == "/twilio/{call_id}")

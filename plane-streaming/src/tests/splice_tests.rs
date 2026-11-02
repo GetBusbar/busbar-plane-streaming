@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Tests for `crates/busbar-plane-streaming/src/splice.rs`: only the governed object is rebuilt,
-//! the caller's members keep their bytes, keys are read as the far end reads them.
 
 use super::*;
 
@@ -91,10 +90,7 @@ fn asked(frame: &[u8], cap: u32) -> Value {
     v["response"]["max_output_tokens"].clone()
 }
 
-/// RED-BEFORE-GREEN (lead ruling: a caller's own `max_output_tokens` never bypasses the configured
-/// output cap). RED: the response rule set nothing, so a caller's `response.create` asking for
-/// more than `streams.max_output_tokens` (or for `"inf"`) went to the far end as written, and the
-/// response ran past the operator's ceiling.
+/// A caller's response cap above the configured ceiling is lowered to it.
 #[test]
 fn a_callers_response_cap_above_the_ceiling_is_lowered_to_it() {
     let frame = br#"{"type":"response.create","response":{"max_output_tokens":5000,"modalities":["text"]}}"#;
@@ -116,7 +112,6 @@ fn a_callers_response_cap_above_the_ceiling_is_lowered_to_it() {
 }
 
 /// A caller's lower `max_output_tokens` stands: the effective value is the lower of the two, and
-/// the caller's other members keep their bytes.
 #[test]
 fn a_callers_response_cap_below_the_ceiling_stands() {
     let frame =
@@ -128,20 +123,14 @@ fn a_callers_response_cap_below_the_ceiling_stands() {
     );
 }
 
-/// RED-BEFORE-GREEN (lead ruling): a `response.create` that names no `max_output_tokens` asks for
-/// the configured cap. RED: it went out naming none, and the far end read none as its own default.
+/// A response without an explicit cap uses the configured ceiling.
 #[test]
 fn a_response_naming_no_cap_asks_for_the_ceiling() {
     let frame = br#"{"type":"response.create","response":{"modalities":["text"]}}"#;
     assert_eq!(asked(frame, 1000), 1000);
 }
 
-/// RED-BEFORE-GREEN (lead ruling): the pre-GA spelling of the output ceiling a caller writes in its
-/// `session.update`, `max_response_output_tokens`, is held under the same ceiling as
-/// `max_output_tokens`: the lower of the caller's value and the cap, the cap for `"inf"`. A frame
-/// that does not write it is not given it; the GA `max_output_tokens` the lock sets carries the
-/// cap. RED: the beta key was neither cut nor set, so a caller's 5000 or `"inf"` reached the far
-/// end past the section's 1000.
+/// A caller's pre-GA session output cap stays under the configured ceiling.
 #[test]
 fn a_callers_pre_ga_session_output_cap_is_held_under_the_ceiling() {
     let locked = SessionConfig {
@@ -180,11 +169,7 @@ fn capped_session(cap: u32) -> SessionConfig {
     }
 }
 
-/// RED-BEFORE-GREEN (lead ruling: the effective output ceiling is the lower of the caller's value
-/// and the cap): a caller's GA `session.update` asking for less than the cap keeps its own value; one
-/// asking for more, or for `"inf"`, is lowered to the cap; one naming none gets the cap. RED (the
-/// lower value): the lock set `max_output_tokens` over the caller's, so a caller's 200 went out as
-/// the cap's 1000. The higher and absent cases held before as well.
+/// A GA session uses the lower of the caller's output cap and the configured ceiling.
 #[test]
 fn a_callers_ga_session_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
     let rule = OpenAiRealtimeCodec.configure_rule(&capped_session(1000));
@@ -203,13 +188,7 @@ fn a_callers_ga_session_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
     assert_eq!(absent["max_output_tokens"], 1000, "{absent}");
 }
 
-/// RED-BEFORE-GREEN (lead ruling), Gemini Live: a caller's `setup.generationConfig.maxOutputTokens`
-/// below the cap is kept (under either spelling of its keys), one above it is lowered, and a setup
-/// naming none, or no `generationConfig` at all, gets the cap; the caller's other
-/// `generationConfig` members keep their values. RED (the lower value): the lock merged its
-/// `maxOutputTokens` over the caller's, so a caller's 200 went out as the cap's 1000. The higher and
-/// absent cases held before as well. RED (round 4): a `null` generationConfig passed through, and
-/// the cap was never written.
+/// A Gemini setup uses the lower of the caller's output cap and the configured ceiling.
 #[test]
 fn a_gemini_callers_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
     let rule =
@@ -235,8 +214,7 @@ fn a_gemini_callers_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
     assert_eq!(absent["maxOutputTokens"], 1000, "{absent}");
     let none = config(br#"{"setup":{"model":"models/gemini-live"}}"#);
     assert_eq!(none["maxOutputTokens"], 1000, "{none}");
-    // A `null` generationConfig (either spelling) reads under protobuf JSON as the field unset:
-    // left as written, the far end would run at its own default, past the cap.
+
     for frame in [
         &br#"{"setup":{"generationConfig":null}}"#[..],
         br#"{"setup":{"generation_config":null}}"#,
@@ -257,11 +235,7 @@ fn a_gemini_callers_output_cap_is_the_lower_of_its_own_and_the_ceiling() {
     }
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S74): a frame naming the governed member more than
-/// once at its top level (whatever each copy holds, however its key is spelled) is refused: the
-/// frame goes nowhere. RED: every copy was rebuilt and re-serialized with the whole locked object,
-/// so a cheap frame of a thousand `"session":{}` copies cost a thousand locked objects of memory and
-/// far-end traffic.
+/// A frame repeating a governed member is refused without amplification.
 #[test]
 fn a_frame_repeating_the_governed_member_is_refused_never_amplified() {
     let locked = rule(serde_json::json!({"instructions": "x".repeat(4096)}));
@@ -285,9 +259,7 @@ fn a_frame_repeating_the_governed_member_is_refused_never_amplified() {
     assert!(text(&once).contains("xxxx"));
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S12): the OpenAI Realtime error event the plane
-/// authors when a session reaches its ceiling carries the `error.type` the dialect's error event
-/// requires, as the plane's other authored error (the budget cut) does. RED: it carried none.
+/// The Realtime ceiling error event states its error type.
 #[test]
 fn the_ceiling_error_event_states_its_error_type() {
     let frame = OpenAiRealtimeCodec

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THE VOICE CONFORMANCE HARNESS — the driver behind `testing/voice-conformance/`, re-homed onto
-//! the streaming plane's DOOR (ARCHITECT Q6: the streaming plane's conformance MUST-set, built
-//! against `busbar-plane-streaming`, linked and dlopened, RED arm kept).
+//! The voice conformance harness drives the streaming plane's plugin door,
+//! built against `busbar-plane-streaming` in linked and dropped-in forms,
+//! with planted wrong answers available for negative checks.
 //!
 //! A dev-only testkit binary: never shipped, no production dependency. Every assertion drives the door
 //! through `busbar-plugin-loader` BOTH ways — the LINKED door (`busbar_plane_streaming::plane_door::door`)

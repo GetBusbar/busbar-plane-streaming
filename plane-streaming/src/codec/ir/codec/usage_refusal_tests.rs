@@ -1,11 +1,5 @@
-//! ITEM 133 (the duplex twin) — A PRESENT-BUT-UNREADABLE BILLED COUNT BILLS THE FLOOR (#42; owner
-//! ruling 2026-10-27).
-//!
-//! Both duplex dialects read every billed count as `read_count_u64(..).unwrap_or_default()`, so a
-//! stringified count metered a real turn at ZERO. Each test drives the real `meter_down` path: an
-//! unreadable count now bills the llm plane's floor over the report's bytes (one output token per
-//! four bytes, at least one), marked as the floor, never a usage report carrying zero; an ABSENT
-//! count keeps meaning zero.
+//! Present but unreadable billed counts bill the usage floor.
+
 use super::gemini::GeminiLiveCodec;
 use super::*;
 use serde_json::json;
@@ -73,9 +67,7 @@ fn gemini_live_absent_counts_still_read_as_zero() {
     assert_eq!((u.text_in, u.text_out, u.cached), (0, 50, 0));
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S57): a usage report that is PRESENT but is not an
-/// object (a string, a number, an array) is unreadable usage on a delivered turn: it bills the
-/// floor and says so, never an all-zero report. A JSON `null` is no report, as an absent one is.
+/// Present usage that is not an object bills the floor in both dialects.
 #[test]
 fn a_present_usage_that_is_not_an_object_bills_the_floor_in_both_dialects() {
     for usage in [json!("n/a"), json!(42), json!([1, 2])] {

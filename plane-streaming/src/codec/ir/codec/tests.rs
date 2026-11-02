@@ -2,13 +2,9 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! CODEC UNIT TESTS — what the meter reads off the OpenAI Realtime GA dialect: the usage a
-//! `response.done` reports, the errors and opened tool calls that close or count in a turn, and the
-//! uplink audio a caller sends.
 
 use super::*;
 use serde_json::json;
-
-// ── helpers ──────────────────────────────────────────────────────────────────────────────────────
 
 fn b64(bytes: &[u8]) -> String {
     busbar_contract::media::base64_encode(bytes)
@@ -43,8 +39,6 @@ fn audio_format_math() {
     assert_eq!(AudioFormat::G711Ulaw.bytes_per_ms(), 8);
 }
 
-// ── media: the uplink audio counted ──────────────────────────────────────────────────────────────
-
 #[test]
 fn uplink_audio_append_counts_its_decoded_bytes() {
     let payload = b"pretend-uplink-audio-bytes";
@@ -57,7 +51,6 @@ fn uplink_audio_append_counts_its_decoded_bytes() {
 }
 
 /// AUDIO THAT DOES NOT DECODE IS NOT SILENCE: an uplink payload that is not base64 counts nothing,
-/// never a zero-length frame indistinguishable from a caller saying nothing.
 #[test]
 fn an_undecodable_audio_payload_counts_nothing() {
     assert!(up(&json!({ "type": "input_audio_buffer.append", "audio": "!!!!" })).is_empty());
@@ -67,8 +60,6 @@ fn an_undecodable_audio_payload_counts_nothing() {
         "well-formed audio still counts"
     );
 }
-
-// ── tools and errors ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn an_added_function_call_item_opens_a_tool_call_and_no_other_item_does() {
@@ -92,8 +83,6 @@ fn error_event_closes_the_turn() {
     );
 }
 
-// ── degrade, don't error ─────────────────────────────────────────────────────────────────────────
-
 #[test]
 fn malformed_or_unmetered_frames_meter_nothing() {
     assert!(OpenAiRealtimeCodec.meter_down(b"{ broken").is_empty());
@@ -107,8 +96,6 @@ fn malformed_or_unmetered_frames_meter_nothing() {
     }
     assert!(up(&json!({ "type": "never.heard.of.it", "audio": b64(&[1]) })).is_empty());
 }
-
-// ── usage extraction (`BUSBAR-1.6.0.md` #18/#45) ──────────────────────────────────────────────────────────────────────
 
 #[test]
 fn response_done_usage_extracts_split_token_classes() {
@@ -132,11 +119,7 @@ fn response_done_usage_extracts_split_token_classes() {
     assert_eq!(u.text_out, 10);
 }
 
-/// RED-BEFORE-GREEN (MONEY; the Realtime API reference: `usage` "will correspond to billing", and
-/// `input_token_details.image_tokens` is "The number of image tokens used as input for the
-/// Response"): a turn whose input carried an image bills its image tokens under their own class,
-/// and the input classes sum to the stated `input_tokens`. RED: only the audio and text entries
-/// were read, so the 10 image tokens billed zero.
+/// Realtime image input tokens are billed.
 #[test]
 fn image_input_tokens_are_billed() {
     let src = json!({
@@ -161,8 +144,7 @@ fn image_input_tokens_are_billed() {
     assert_eq!((u.audio_out, u.text_out), (60, 20), "{u:?}");
 }
 
-/// RED-BEFORE-GREEN (MONEY): the image tokens bill even when the stated total is absent: each side
-/// bills the sum of every entry of its breakdown. RED: the image entry was never read.
+/// Image input tokens are billed even when the stated total is absent.
 #[test]
 fn image_input_tokens_are_billed_without_a_stated_total() {
     let src = json!({
@@ -177,11 +159,6 @@ fn image_input_tokens_are_billed_without_a_stated_total() {
 
 #[test]
 fn cached_input_tokens_are_not_billed_twice() {
-    // OpenAI Realtime reports `input_token_details.cached_tokens` as a SUBSET of the input classes it
-    // sits beside (`audio_tokens` + `text_tokens`), exactly as Chat Completions reports
-    // `prompt_tokens_details.cached_tokens` inside `prompt_tokens`. So the billing fold must bill the
-    // UNCACHED remainder as `input` and the cached portion as `cache_read` — never the full input
-    // figure alongside the cache figure, which would charge the cached tokens on both lanes.
     let src = json!({
         "type": "response.done",
         "response": {
@@ -195,12 +172,10 @@ fn cached_input_tokens_are_not_billed_twice() {
         }
     });
     let u = &usage_of(&src);
-    // The IR carrier stays wire-faithful: extraction only, the raw provider figures.
+
     assert_eq!(u.audio_in, 1000);
     assert_eq!(u.cached, 800);
-    // The BILLING fold is where the subset is netted out.
-    // The served meter bills the input as reported: the cached subset is part of it, billed once
-    // there, and no class bills it again (cached tokens are attribution only).
+
     let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
     assert!(
         billed
@@ -215,18 +190,7 @@ fn cached_input_tokens_are_not_billed_twice() {
     );
 }
 
-// ── usage: the modality breakdown is a REFINEMENT, not the only source ──────────────────────────
-//
-// The two tests below are anchored to `testing/voice-conformance/fixtures/openai/response.done.json`,
-// the conformance battery's shared OpenAI Realtime `response.done` fixture (hand-written, not a
-// recorded capture), rather than to a literal typed here, so the reader and the
-// battery read one shape; each test states exactly what it varies from it and why.
-
 /// Load the committed OpenAI Realtime `response.done` fixture (hand-written, not a capture).
-///
-/// It lives in this repo's voice-conformance fixture tree (moved here from busbar with the harness),
-/// where the conformance battery judges against it; a missing file is a
-/// failure, never a skip.
 fn captured_response_done() -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../testing/voice-conformance/fixtures/openai/response.done.json");
@@ -236,20 +200,6 @@ fn captured_response_done() -> Value {
 }
 
 /// A turn that states only its TOTALS is billed those totals, not ZERO.
-///
-/// `extract_usage` read only the per-modality breakdown (`input_token_details`/`output_token_details`)
-/// and defaulted a missing one to `0`. The breakdown is a REFINEMENT of the stated
-/// `input_tokens`/`output_tokens`, never their sole source — OpenAI Realtime can state the totals and
-/// omit the split — so a real, answered turn METERED AT ZERO. That is silent under-billing: no error,
-/// no warning, a ledger row faithfully reporting that nothing happened.
-///
-/// The Gemini Live dialect in this same crate already had this fallback (`usage_from_metadata`).
-/// Only the OpenAI twin was missing it, so the identical session metered correctly on one dialect and
-/// at zero on the other — which is why this is an oversight, not a decision.
-///
-/// VARIED FROM THE CAPTURE: the two `*_token_details` members are REMOVED, and nothing else. That is
-/// precisely the wire case the capture cannot show (it carries the breakdown) and the one
-/// the defect lived in. The stated totals are the capture's own.
 #[test]
 fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
     let mut src = captured_response_done();
@@ -289,8 +239,6 @@ fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
         "the split is unknown, so nothing claims audio"
     );
 
-    // The lane the billing fold sums onto is what actually decides the invoice.
-    // The served meter bills the stated totals across its input and output classes, never zero.
     let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
     let sum_of = |names: &[&str]| -> u64 {
         billed
@@ -312,9 +260,6 @@ fn usage_falls_back_to_stated_totals_when_the_modality_breakdown_is_absent() {
 }
 
 /// When the breakdown IS present it WINS — the stated totals are a fallback, never an override.
-///
-/// Driven by the fixture EXACTLY AS COMMITTED, no variation at all: this is the ordinary wire case,
-/// and the fallback must be invisible on it.
 #[test]
 fn a_present_breakdown_is_not_overridden_by_the_stated_totals() {
     let src = captured_response_done();
@@ -325,10 +270,7 @@ fn a_present_breakdown_is_not_overridden_by_the_stated_totals() {
     assert_eq!(u.text_out, 20, "the captured text-out slice: {u:?}");
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S2): a far end stating counts near `u64::MAX` saturates
-/// the input total, which then sits below the audio and image breakdown it must cover. The text
-/// slice is what is left of the input, never a wrapped subtraction: zero, as the Gemini twin
-/// (`usage_from_metadata`) answers the same report.
+/// Saturated input totals leave no text slice and never wrap.
 #[test]
 fn a_saturated_input_total_leaves_no_text_slice_and_never_wraps() {
     let u = usage_of(&json!({"type":"response.done","response":{"usage":{

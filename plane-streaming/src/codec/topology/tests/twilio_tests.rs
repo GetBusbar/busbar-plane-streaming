@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! TWILIO ENVELOPE TESTS (behind `runtime`): the JSON Media Streams envelope decodes/encodes to the
-//! raw µ-law bytes the telephony proxy carries; the base64 payload maps to the exact wire bytes; the
-//! `start` media-format guard refuses a non-`g711_ulaw` negotiation.
 
 use crate::codec::topology::twilio::{assert_g711_ulaw, TwilioEnvelope, TwilioError, TwilioEvent};
 
@@ -11,12 +9,8 @@ fn frame(v: serde_json::Value) -> Vec<u8> {
     serde_json::to_vec(&v).unwrap()
 }
 
-// ── The captured inbound `media` frame decodes, and decode→encode is byte-stable on the wire shape ──
-
 #[test]
 fn media_frame_round_trips_byte_stable() {
-    // A canonical OUTBOUND frame is the byte-stable shape (inbound frames carry extra diagnostic fields
-    // Twilio does not want echoed back): encode → decode → encode reproduces the exact bytes.
     let raw = vec![0u8, 0, 0];
     let canonical = TwilioEnvelope::encode_media("MZ1", &raw);
     assert_eq!(
@@ -40,11 +34,8 @@ fn media_frame_round_trips_byte_stable() {
     assert_eq!(re_encoded, canonical, "decode→encode is byte-stable");
 }
 
-// ── The base64 µ-law payload maps to the exact raw bytes TelephonyProxy::run's client_in expects ────
-
 #[test]
 fn base64_payload_maps_to_raw_mulaw_bytes() {
-    // A full inbound `media` frame as Twilio actually sends it (sequenceNumber, track, chunk, timestamp).
     let inbound = frame(serde_json::json!({
         "event": "media",
         "sequenceNumber": "3",
@@ -56,10 +47,9 @@ fn base64_payload_maps_to_raw_mulaw_bytes() {
     else {
         panic!("expected a media event");
     };
-    // "////" is the canonical base64 of three 0xFF bytes — the exact raw µ-law bytes handed to client_in.
+
     assert_eq!(payload, vec![0xFFu8, 0xFF, 0xFF]);
 
-    // And a second known vector, to prove it is genuinely base64-decoding, not passing the string through.
     let zeros = frame(serde_json::json!({
         "event": "media",
         "media": { "payload": "AAAA" },
@@ -72,8 +62,6 @@ fn base64_payload_maps_to_raw_mulaw_bytes() {
     };
     assert_eq!(payload, vec![0u8, 0, 0]);
 }
-
-// ── The lifecycle events decode without flowing into the session pump ───────────────────────────────
 
 #[test]
 fn lifecycle_events_decode() {
@@ -102,12 +90,6 @@ fn lifecycle_events_decode() {
 }
 
 /// A CALLER PRESSING A KEY IS A LIFECYCLE EVENT, NOT A HOSTILE FRAME.
-///
-/// `dtmf` is one of the six messages Twilio Media Streams sends TO the socket, emitted on the
-/// inbound track when a DTMF-enabled stream hears a touch-tone. Leaving it unmodelled makes it an
-/// `UnknownEvent`, and the plane maps any decode error onto a malformed-frame refusal — so a caller
-/// pressing 5 would be handled as a garbled or forged frame. It carries no audio, so it decodes to
-/// its own variant and the adapter discards it exactly like `mark`.
 #[test]
 fn a_dtmf_keypress_decodes_as_a_lifecycle_event() {
     let dtmf = TwilioEnvelope::decode(&frame(serde_json::json!({
@@ -124,9 +106,7 @@ fn a_dtmf_keypress_decodes_as_a_lifecycle_event() {
             digit: "5".into()
         }
     );
-    // A `dtmf` frame with the inner object missing still decodes — the digit is what Twilio may
-    // omit, and refusing the whole frame over a missing digit would reintroduce the same refusal
-    // this variant exists to remove.
+
     assert_eq!(
         TwilioEnvelope::decode(&frame(
             serde_json::json!({"event": "dtmf", "streamSid": "MZ1"})
@@ -139,11 +119,8 @@ fn a_dtmf_keypress_decodes_as_a_lifecycle_event() {
     );
 }
 
-// ── The start media-format guard REFUSES a non-g711_ulaw negotiation (fail closed, not warn) ────────
-
 #[test]
 fn start_media_format_guard_refuses_non_g711() {
-    // A g711_ulaw / 8000Hz / mono start passes the guard.
     let good = frame(serde_json::json!({
         "event": "start",
         "start": {
@@ -160,7 +137,6 @@ fn start_media_format_guard_refuses_non_g711() {
     assert_eq!(start.call_sid, "CA1");
     assert!(assert_g711_ulaw(&start.media_format).is_ok());
 
-    // A 16 kHz PCM start is REFUSED — the wrong bytes must never reach the barge-in truncate math.
     let bad = frame(serde_json::json!({
         "event": "start",
         "start": {
@@ -182,8 +158,6 @@ fn start_media_format_guard_refuses_non_g711() {
     );
 }
 
-// ── Malformed / unknown frames fail closed ──────────────────────────────────────────────────────────
-
 #[test]
 fn malformed_and_unknown_frames_fail_closed() {
     assert_eq!(
@@ -194,7 +168,7 @@ fn malformed_and_unknown_frames_fail_closed() {
         TwilioEnvelope::decode(&frame(serde_json::json!({"event": "teleport"}))),
         Err(TwilioError::UnknownEvent("teleport".into()))
     );
-    // A media event whose payload is not valid base64 is refused, not admitted as garbage bytes.
+
     assert_eq!(
         TwilioEnvelope::decode(&frame(serde_json::json!({
             "event": "media", "streamSid": "MZ1", "media": { "payload": "*not*base64*" }
@@ -223,10 +197,7 @@ fn media_of(sid: &str) -> Vec<u8> {
     }))
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S55): a carrier frame that ends the call (a start
-/// in another media format, a frame not in Twilio's shape, a payload that is not clean base64) is
-/// said in one log line naming why, so an operator can tell why every call from a misconfigured
-/// stream ends. RED: the call ended with no line anywhere.
+/// A refused carrier frame is logged once with its reason.
 #[test]
 fn a_refused_carrier_frame_is_said_in_one_log_line_naming_why() {
     use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
@@ -248,9 +219,7 @@ fn a_refused_carrier_frame_is_said_in_one_log_line_naming_why() {
     assert!(cap.contains("malformed"), "{:?}", cap.messages());
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S13): the stream a call's `start` binds is the
-/// one its media must name; a second `start` (Twilio sends one per stream) binds nothing, so media
-/// naming the second stream is not admitted. RED: each start rebound the stream.
+/// A second start frame cannot rebind the call's stream.
 #[test]
 fn a_second_start_does_not_rebind_the_calls_stream() {
     use crate::codec::topology::twilio::{CallerStep, TwilioBridge};

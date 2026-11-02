@@ -2,18 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! A FRAME READ FOR THE METER, NOT FOR ITS PAYLOAD.
-//!
-//! A live session meters every frame in both directions, and nearly every frame is audio: a
-//! whole-frame read builds the frame as a `serde_json::Value`, copying its base64 audio into a
-//! string of its own, and then decodes that audio, only for the meter to take its length. These
-//! reads answer the meter's questions off the frame's own bytes:
-//!
-//! - [`Head`]: a frame's top-level member names and its `type`, read leniently (nothing below the
-//!   top level is checked or kept), which is enough to tell that a far-end frame cannot carry a
-//!   usage report, an error or a tool call's open, and so needs no whole-frame read;
-//! - [`Lite`]: the whole frame, read exactly as strictly as a `Value` read (every string checked, a
-//!   repeated member's last value the one that counts), with its strings borrowed from the frame;
-//! - [`base64_len`]: the length a base64 payload decodes to, without decoding it.
 
 use serde::de::{Deserialize, Deserializer, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use std::borrow::Cow;
@@ -191,17 +179,12 @@ impl<'de> Visitor<'de> for HeadVisitor {
 }
 
 /// The length [`busbar_contract::media::base64_decode`] decodes `b64` to, counted without decoding
-/// it: every base64 digit is six bits, so `n` digits are `n * 6 / 8` bytes. `None` exactly where the
-/// decode refuses: a byte that is neither a digit, `=` nor whitespace, a digit after the padding,
-/// or a lone trailing digit.
 #[must_use]
 pub fn base64_len(b64: &str) -> Option<usize> {
     digits_len(b64, b"+/")
 }
 
 /// [`base64_len`] over either base64 alphabet, the standard one (`+`, `/`) and the URL-safe one
-/// (`-`, `_`), as a protobuf JSON far end (Gemini Live) reads a `bytes` field: the length a decode
-/// in the blob's own alphabet yields. `None` where neither alphabet decodes it.
 #[must_use]
 pub fn base64_len_any_alphabet(b64: &str) -> Option<usize> {
     digits_len(b64, b"+/-_")

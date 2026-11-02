@@ -2,8 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Tests for `crates/busbar-plane-streaming/src/session_door.rs`: a live session on the door,
-//! one frame per answer, each side's frames in order, the session's end answered on the caller's
-//! side only, and the ceiling read on the tick clock.
 
 use std::num::NonZeroU32;
 
@@ -54,8 +52,6 @@ fn a_one_request_door_opens_no_session() {
     assert!(Live::open(Door::Mint, &StreamsCfg::default()).is_none());
 }
 
-/// The SDP door's session (row 132) owes the far end busbar's own call before anything else, and
-/// a session told to end ends once what it owes is collected.
 #[test]
 fn the_sdp_sessions_call_is_owed_the_far_end_first() {
     let mut s = Live::open(Door::Sdp, &StreamsCfg::default()).expect("a session door");
@@ -124,7 +120,6 @@ fn the_far_ends_usage_reaches_the_caller_and_the_sessions_units() {
 }
 
 /// A barge-in is the caller's to act on (Law 11): the far-side answer carries the event to the
-/// caller as the far end sent it, and nothing is owed the far end.
 #[test]
 fn a_far_side_answer_carries_only_a_frame_for_the_caller() {
     let mut s = sideband();
@@ -145,7 +140,6 @@ fn a_far_side_answer_carries_only_a_frame_for_the_caller() {
 }
 
 /// The caller's last piece settles the open turn once: the audio it admitted is in the session's
-/// units (as it was, running, in every answer before), and only the caller side answers the end.
 #[test]
 fn the_callers_last_piece_settles_the_open_turn_and_ends_the_session() {
     let mut s = sideband();
@@ -192,7 +186,6 @@ fn the_telephony_door_reads_the_carriers_envelope() {
 }
 
 /// The ceiling is read on the tick clock: the session's clock starts at its first tick, and a
-/// session past its ceiling tells the caller why and then ends.
 #[test]
 fn a_session_past_its_ceiling_is_told_why_then_ends() {
     let cfg = StreamsCfg {
@@ -260,10 +253,6 @@ fn drive_names_the_sessions_that_owe_output() {
     assert_eq!(all.ready_count(), 2);
 }
 
-/// THE SESSION'S FEE UNIT (ARCHITECT Q-L5-FEE (A); Q17-6): `per_session` is reported `1` once the
-/// far end accepts the session, never before, and never for a far-end piece alone (a refused
-/// upgrade's body; audit S1). A session whose far end never answered (its
-/// open failed) reports no fee unit however much its caller sent, so the kernel refunds the fee.
 #[test]
 fn the_fee_unit_is_incurred_when_the_far_end_first_answers() {
     let mut s = sideband();
@@ -299,10 +288,6 @@ fn the_fee_unit_is_incurred_when_the_far_end_first_answers() {
     assert!(s.units().contains(&(PER_SESSION_CLASS, 1)), "still one");
 }
 
-/// THE SESSION-OPEN REWRITE (ARCHITECT Q-L5B-PROJECT; the retired streams crate's projection,
-/// verbatim): a hook's rewrite is a PATCH over the locked params (a key it names wins, a key it
-/// does not keep the plane's value, `null` clears); output that is not JSON, not an object, or not
-/// a session config once merged is refused, never opened as if no rewrite had been made.
 #[test]
 fn a_session_open_rewrite_patches_the_locked_params_or_refuses() {
     let locked = SessionConfig {
@@ -334,8 +319,6 @@ fn a_session_open_rewrite_patches_the_locked_params_or_refuses() {
 }
 
 /// A session-open rewrite that cannot be applied leaves the open unmodified and says so: one log
-/// line naming the session-open hook stage and why (audit S52, the one hook-rewrite rule); one that
-/// applies says nothing.
 #[test]
 fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
     let locked = SessionConfig::default();
@@ -357,12 +340,11 @@ fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
 }
 
 /// A session opened after its open's hooks rewrote the params opens under the rewritten params,
-/// once; a stream with none opens under what its door locks.
 #[test]
 fn a_rewritten_session_open_locks_the_rewritten_params_once() {
     let cfg = StreamsCfg::default();
     assert_eq!(Live::locked(Door::Sideband, &cfg), cfg.session);
-    // The telephony lock is the section's session with µ-law both ways, and nothing else.
+
     let telephony = Live::locked(Door::Twilio, &cfg);
     assert_eq!(telephony.input_audio_format, Some(AudioFormat::G711Ulaw));
     assert_eq!(telephony.output_audio_format, Some(AudioFormat::G711Ulaw));
@@ -380,8 +362,7 @@ fn a_rewritten_session_open_locks_the_rewritten_params_once() {
         ..cfg.session.clone()
     };
     assert!(sessions.rewrite(7, rewritten));
-    // The session opens LOCKED to the rewrite: a caller's session update takes its voice (audit
-    // S78: a rewrite consumed but not applied is caught here, not only by the stash emptying).
+
     let update = br#"{"type":"session.update","session":{}}"#;
     let locked_voice = |live: &mut Live| {
         live.from_caller(update, false);
@@ -410,10 +391,7 @@ fn a_rewritten_session_open_locks_the_rewritten_params_once() {
     );
 }
 
-/// RED-BEFORE-GREEN (Part 2 #45, Twilio Media Streams "with a µ-law codec"; the telephony lock):
-/// the telephony door's far end is told the session it is locked to once the carrier states its
-/// stream: µ-law both ways, over the operator's own session (here its instructions). RED: nothing
-/// was ever sent, so the far end read the carrier's µ-law as its default PCM16.
+/// The telephony door sends its locked session when the carrier starts.
 #[test]
 fn the_telephony_door_tells_the_far_end_its_locked_session_at_the_carriers_start() {
     let cfg = StreamsCfg {
@@ -449,11 +427,7 @@ fn the_telephony_door_tells_the_far_end_its_locked_session_at_the_carriers_start
     assert_eq!(v["session"]["instructions"], "be brief", "{v}");
 }
 
-/// RED-BEFORE-GREEN (the GA `/v1/realtime` socket the doors dial with no `OpenAI-Beta` header;
-/// OpenAI's beta-to-GA migration: "set `session.type`, move output audio configuration under
-/// `session.audio.output`"): the telephony lock is told in the GA `session` shape, with no
-/// pre-GA top-level key. RED: the lock was `{input_audio_format: g711_ulaw, ...}` with no
-/// `session.type`, which the GA socket does not read, so the far end read µ-law as 24 kHz PCM.
+/// The telephony lock is sent in the GA session shape.
 #[test]
 fn the_telephony_lock_is_told_in_the_ga_session_shape() {
     let mut s = Live::open(Door::Twilio, &StreamsCfg::default()).expect("a session door");
@@ -493,13 +467,7 @@ fn tool_calls() -> u32 {
         .expect("declared") as u32
 }
 
-/// RED-BEFORE-GREEN (MONEY, THE DESIGN section 7: "`cut-stream` cuts it, and a cut bills what
-/// streamed"; units are reported "as they happen"): the kernel bills a session from the last units
-/// it reported, however it ends, and a cancel (a `cut-stream` budget cut, a drain) reports none of
-/// its own. So every answer carries the OPEN turn's running counts. A caller that streamed 2.5 s
-/// while the far end opened one tool call, cut before any usage report, bills 3 `audio_seconds_in`
-/// and 1 `tool_calls` with its fee. RED: the answers reported closed turns only, the last
-/// checkpoint before the cancel was the fee alone, and the 2.5 s and the call were never billed.
+/// A session cancelled mid-turn has already reported the open turn's usage.
 #[test]
 fn a_session_the_kernel_cancels_mid_turn_has_already_reported_the_open_turn() {
     let t = Ticket {
@@ -526,7 +494,6 @@ fn a_session_the_kernel_cancels_mid_turn_has_already_reported_the_open_turn() {
 }
 
 /// The open turn's running counts never fall when the turn closes: a usage report moves them into
-/// the closed total, so the kernel's checkpoint is monotone across the close.
 #[test]
 fn a_turns_close_moves_its_running_counts_and_the_total_never_falls() {
     let mut s = sideband();
@@ -546,10 +513,7 @@ fn a_turns_close_moves_its_running_counts_and_the_total_never_falls() {
     assert!(s.units().contains(&(seconds(), 3)), "{:?}", s.units());
 }
 
-/// RED-BEFORE-GREEN (`streams.max_output_tokens` and `streams.context_window_tokens`, the section's
-/// two token ceilings): each is stated to the far end in the dialect's own key when the session is
-/// locked, the output cap lowered to the session's own where that is lower. RED: both keys were
-/// parsed, defaulted and never read, so an operator's cap was no cap.
+/// The configured output and context token ceilings reach the far end.
 #[test]
 fn the_sections_token_ceilings_reach_the_far_end() {
     let cfg = StreamsCfg {
@@ -605,10 +569,7 @@ fn the_sections_token_ceilings_reach_the_far_end() {
     );
 }
 
-/// RED-BEFORE-GREEN (lead ruling: a caller's own `max_output_tokens` never bypasses the configured
-/// output cap), through a live session: a `response.create` reaches the far end asking for the
-/// lower of the caller's value and `streams.max_output_tokens`, and for the cap where it names
-/// none. RED: the caller's 5000 went out as written, past the section's 1000.
+/// A caller's `response.create` cannot lift the configured output ceiling.
 #[test]
 fn a_callers_response_create_cannot_lift_the_output_ceiling() {
     let cfg = StreamsCfg {
@@ -633,9 +594,7 @@ fn a_callers_response_create_cannot_lift_the_output_ceiling() {
     }
 }
 
-/// RED on dev: a stream whose session ended (the caller's `stop`, a cancel) is never opened again.
-/// The caller's next piece on it (a second Twilio `stop`) is refused rather than answered by a
-/// fresh session that ends, reports `done` and settles a second time.
+/// An ended stream is never opened again.
 #[test]
 fn an_ended_stream_is_never_opened_again() {
     let t = Ticket {
@@ -662,12 +621,6 @@ fn an_ended_stream_is_never_opened_again() {
     assert_eq!(all.len(), 0);
 }
 
-/// RED-BEFORE-GREEN (busbar row 159; ARCHITECT ruling 2026-10-23 on `BUSBAR-1.6.0.md` Part 2 #45:
-/// OpenAI's own WS surface takes the model on the socket's query): a plain session (`GET
-/// /v1/realtime`) and a telephony session dial the provider's realtime socket naming the session's
-/// model (`?model=`), escaped so it carries no other parameter; a sideband names only its call
-/// (`?call_id=`), and the Gemini Live socket names none. RED: every OpenAI Realtime session that was
-/// attached to no call dialled the bare socket, which the provider refuses without a model.
 #[test]
 fn a_plain_or_telephony_session_dials_the_socket_naming_the_sessions_model() {
     let named = |model: &str| StreamsCfg {
@@ -707,12 +660,7 @@ fn a_plain_or_telephony_session_dials_the_socket_naming_the_sessions_model() {
     );
 }
 
-/// RED (audit plane-streaming round 52b0f93ac9, S49): the session-open params kept for units not yet
-/// opened are bounded as every table of the plane is: at [`MAX_SESSIONS`] a NEW unit's params are
-/// refused (the caller refuses the open), and no kept entry is dropped to make room; restating an
-/// entry already kept (a projection's re-call) replaces it in place. RED: the oldest entry was
-/// evicted (a hook's clamp or a taken ticket's lock, which its session then opened without), even
-/// when the key being written was already kept.
+/// Retained session-open parameters refuse at their bound without evicting existing units.
 #[test]
 fn the_kept_session_params_refuse_at_the_bound_and_never_evict() {
     let mut all = Sessions::default();

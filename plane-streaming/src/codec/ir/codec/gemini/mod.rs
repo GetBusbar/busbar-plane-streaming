@@ -2,14 +2,6 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The second dialect, Google **Gemini Live** (`BidiGenerateContent`): what a session meters off
-//! it, and the `setup` a locked session is told.
-//!
-//! WIRE SHAPE. Gemini Live is a JSON duplex where each message is an object with ONE top-level key
-//! naming its kind (`setup` / `clientContent` / `realtimeInput` / `toolResponse` client→server;
-//! `setupComplete` / `serverContent` / `toolCall` / `toolCallCancellation` / `usageMetadata`
-//! server→client). `usageMetadata` may ride on any downlink message. Gemini delivers a tool call
-//! ATOMICALLY (`toolCall.functionCalls[]`): each call in it is one opened call. Gemini Live has no
-//! in-band error message (it reports errors with the socket's close).
 
 use super::peek::{base64_len_any_alphabet, Head, Lite};
 use super::{billed_count, usage_floor, usage_object, DuplexReader, Metered};
@@ -29,26 +21,14 @@ mod wire {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct GeminiLiveCodec;
 
-// ── mime / audio-format helpers ───────────────────────────────────────────────────────────────────
-
 /// Map a Gemini UPLINK audio `mimeType` to the shared [`AudioFormat`] its bytes are metered at.
-///
-/// 16 kHz is what Gemini requires on its uplink, and each format carries exactly one
-/// bytes-per-millisecond constant the uplink meter divides the client's bytes by. So uplink PCM is
-/// `Pcm16At16k` at 16 kHz (and untagged, the uplink's own rate) and `Pcm16` at 24 kHz: counting
-/// 16 kHz bytes at the 24 kHz rate billed two-thirds of the audio the caller spoke.
 #[must_use]
 pub fn audio_format_from_mime(mime: &str) -> Option<AudioFormat> {
     let m = mime.to_ascii_lowercase();
     if !m.starts_with("audio/pcm") {
         return None;
     }
-    // The `rate=` parameter is matched EXACTLY against each `;`-delimited part, never by substring:
-    // `"rate=160000"` (10x the real 16 kHz rate) CONTAINS `"rate=16000"` as a literal substring, and a
-    // `.contains` probe mismeasured it as the 16 kHz rate it is not, and mismetered billed audio
-    // duration by 10x. A rate parameter that IS stated but matches neither known
-    // value is a rate this dialect does not recognize, and is REFUSED — not an untagged blob, and
-    // never guessed at as the nearest-looking known value.
+
     let mut rate_16k = false;
     let mut rate_24k = false;
     let mut untagged = true;
@@ -62,7 +42,7 @@ pub fn audio_format_from_mime(mime: &str) -> Option<AudioFormat> {
             }
         }
     }
-    // The uplink's own rate is 16 kHz; a blob that states 24 kHz is metered at 24 kHz.
+
     if rate_16k || untagged {
         Some(AudioFormat::Pcm16At16k)
     } else if rate_24k {
@@ -72,10 +52,7 @@ pub fn audio_format_from_mime(mime: &str) -> Option<AudioFormat> {
     }
 }
 
-// ── setup ─────────────────────────────────────────────────────────────────────────────────────────
-
 /// The `setup` members a session locked to `cfg` states, as the governed splice puts them over a
-/// caller's own `setup` ([`crate::splice`]).
 #[must_use]
 pub(crate) fn setup_locked(cfg: &SessionConfig) -> serde_json::Map<String, Value> {
     match setup_from_session_config(cfg) {
@@ -88,10 +65,6 @@ pub(crate) fn setup_locked(cfg: &SessionConfig) -> serde_json::Map<String, Value
 }
 
 /// THE `setup` FRAME a session locked to `cfg` is told, with the locked session's members in Gemini's
-/// shape. Modalities are UPPERCASED to Gemini's enum tokens; server VAD's padding and silence
-/// windows are `automaticActivityDetection`'s, and barge-in off (`interrupt_response: false`) is
-/// `activityHandling: NO_INTERRUPTION`; the activation `threshold` and `create_response` have no
-/// Gemini field.
 pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
     let mut setup = serde_json::Map::new();
     if let Some(model) = &cfg.model {
@@ -113,7 +86,6 @@ pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
         );
     }
     if let Some(MaxOutputTokens::Limit(n)) = cfg.max_output_tokens {
-        // The `"inf"` sentinel has no Gemini equivalent — Gemini simply omits the cap.
         gc.insert("maxOutputTokens".into(), json!(n));
     }
     if !gc.is_empty() {
@@ -129,16 +101,12 @@ pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
         setup.insert("tools".into(), Value::Array(cfg.tools.clone()));
     }
     if let Some(trigger) = cfg.context_window_tokens {
-        // The plane's context-window ceiling: the far end compresses the context, on its sliding
-        // window, once it reaches it.
         setup.insert(
             "contextWindowCompression".into(),
             json!({ "triggerTokens": trigger, "slidingWindow": {} }),
         );
     }
-    // Three-state (see `SessionConfig::turn_detection`): an ABSENT turn_detection names no setting,
-    // so no `realtimeInputConfig` is written at all and the session keeps what it had. Only an
-    // explicit `null` writes Gemini's own disable marker.
+
     match &cfg.turn_detection {
         None => {}
         Some(None) => {
@@ -157,14 +125,13 @@ pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
                 "prefixPaddingMs": prefix_padding_ms,
                 "silenceDurationMs": silence_duration_ms,
             }});
-            // Barge-in off is Gemini's `activityHandling`; on is its default, and names nothing.
+
             if !interrupt_response {
                 config["activityHandling"] = json!("NO_INTERRUPTION");
             }
             setup.insert("realtimeInputConfig".into(), config);
         }
         Some(Some(IrVad::SemanticVad { .. })) => {
-            // Semantic VAD has no Gemini knob set; enable automatic detection generically.
             setup.insert(
                 "realtimeInputConfig".into(),
                 json!({ "automaticActivityDetection": {} }),
@@ -173,8 +140,6 @@ pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
     }
     json!({ wire::SETUP: Value::Object(setup) })
 }
-
-// ── usage ↔ usageMetadata ─────────────────────────────────────────────────────────────────────────
 
 /// The modality split of a Gemini `*TokensDetails` array (`[{modality, tokenCount}]`): its AUDIO,
 /// IMAGE and VIDEO entries, and the sum of every entry. BILLED COUNTS, read through
@@ -212,21 +177,6 @@ fn modality_split(details: Option<&Value>) -> Result<Split, String> {
 }
 
 /// Extract the split token classes from a Gemini `usageMetadata` object (audio vs text are
-/// separate classes; extraction-only, never client-translated).
-///
-/// Google's total is billed: a grounded Gemini turn bills Google's total, tool-use prompt tokens
-/// included. Input is the
-/// prompt (the larger of `promptTokenCount` and the sum of every `promptTokensDetails` entry, so
-/// IMAGE, VIDEO and DOCUMENT tokens bill beside AUDIO and TEXT) plus the tool-use prompt (the larger
-/// of `toolUsePromptTokenCount` and its `toolUsePromptTokensDetails`); output is the response (the
-/// larger of `responseTokenCount` and its `responseTokensDetails`) plus `thoughtsTokenCount`, which
-/// Google prices as output ("Output price (including thinking tokens)"). Where `totalTokenCount`
-/// states more than that sum, the remainder bills as input text. AUDIO, IMAGE and VIDEO entries bill
-/// as their own declared classes; every other token is attributed to `text`. It is an integer
-/// passthrough of the wire figures, no rate lookup or multiply.
-///
-/// Every count is a BILLED count and is read through [`billed_count`]: absent is zero, and a
-/// present-but-unreadable one is an `Err` the caller turns into a refusal.
 fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
     usage_object(u, wire::USAGE_METADATA)?;
     let prompt = modality_split(u.get("promptTokensDetails"))?;
@@ -257,11 +207,8 @@ fn usage_from_metadata(u: &Value) -> Result<IrDuplexUsage, String> {
     })
 }
 
-// ── the reads ───────────────────────────────────────────────────────────────────────────────────
-
 impl DuplexReader for GeminiLiveCodec {
     /// Each call a `toolCall` opens (a frame that is a `setupComplete` or a `serverContent` opens
-    /// none), then the `usageMetadata` any frame but a `setupComplete` carries.
     fn meter_down(&self, frame: &[u8]) -> Vec<Metered> {
         let metered = Head::read(frame).is_none_or(|h| {
             h.keys.iter().any(|k| {
@@ -321,22 +268,13 @@ impl DuplexReader for GeminiLiveCodec {
     }
 
     /// `realtimeInput`'s GA `audio` blob, else each legacy `mediaChunks[]` blob, at the format its
-    /// mime states; a frame that is a `setup` or a `clientContent` carries none. Audio the plane
-    /// cannot meter is refused (`Err`), never relayed unmetered: a GA `audio` blob whose mime is not
-    /// a PCM rate the meter counts, or whose data does not decode in either base64 alphabet; a
-    /// legacy chunk whose mime is `audio/*` and the same; and a GA `audio` blob beside any legacy
-    /// audio chunk (the meter reads the GA blob alone, the far end may read both). A chunk that is
-    /// not audio (video) is not audio the meter counts, and passes.
     fn uplink_audio(
         &self,
         top: &Lite<'_>,
         admit: &mut dyn FnMut(Option<AudioFormat>, usize),
     ) -> Result<(), crate::splice::Unmeterable> {
         use crate::splice::Unmeterable;
-        // ProtoJSON accepts original proto names as well as lowerCamelCase. Its ordered
-        // duplicate/oneof rule is last-wins (or a parse refusal), never an arbitrary spelling:
-        // https://protobuf.dev/programming-guides/json/#duplicate-keys . Read the same final
-        // message the far end reads, without changing one byte of the relayed frame.
+
         let Some((kind, ri)) = proto_member(
             top,
             &[
@@ -355,8 +293,7 @@ impl DuplexReader for GeminiLiveCodec {
         if !matches!(kind, "realtimeInput" | "realtime_input") {
             return Ok(());
         }
-        // Validate overwritten realtime payloads too. ProtoJSON's duplicate rule chooses the
-        // final well-typed value; an earlier malformed value is not a second valid spelling.
+
         if let Lite::Obj(members) = top {
             for (key, value) in members {
                 if matches!(key.as_ref(), "realtimeInput" | "realtime_input")
@@ -379,7 +316,7 @@ fn realtime_audio(
     let Lite::Obj(members) = ri else {
         return Err(Unmeterable);
     };
-    // Validate every spelling before applying last-wins, including an overwritten object.
+
     for (key, value) in members {
         match (key.as_ref(), value) {
             ("audio", Lite::Null) | ("mediaChunks" | "media_chunks", Lite::Null) => {}
@@ -429,7 +366,6 @@ fn realtime_audio(
 }
 
 /// A Blob's known scalar fields must be well-typed even when a later alias replaces them.
-/// Bytes use ProtoJSON's accepted standard/URL-safe and padded/unpadded base64 forms.
 fn validate_blob(blob: &Lite<'_>) -> Result<(), crate::splice::Unmeterable> {
     use crate::splice::Unmeterable;
     proto_text(blob, &["mimeType", "mime_type"])?;
@@ -450,7 +386,6 @@ fn validate_blob(blob: &Lite<'_>) -> Result<(), crate::splice::Unmeterable> {
 }
 
 /// Select the same ordered field in the borrowed shape and the numeric JSON value. Value keeps
-/// the last exact spelling; Lite also retains the ordering between its two accepted spellings.
 fn proto_value<'a, 'frame>(
     top: &'a Lite<'frame>,
     value: &'a Value,
@@ -468,7 +403,6 @@ fn proto_value<'a, 'frame>(
 }
 
 /// Only schema fields the usage meter consumes are named here. Arbitrary caller/tool payloads
-/// and the relayed frame remain untouched. Resolve aliases before the existing count validation.
 fn canonical_usage(top: &Lite<'_>, value: &Value) -> Result<Value, String> {
     if !value.is_object() {
         return Err("Gemini usageMetadata is not an object".into());
@@ -517,8 +451,6 @@ fn canonical_usage(top: &Lite<'_>, value: &Value) -> Result<Value, String> {
 }
 
 /// A known ProtoJSON field (or oneof), resolved in original wire order across its known
-/// spellings. Null is unset. A null beside another spelling is refused: peers may clear the
-/// preceding field or ignore the null, so neither interpretation may admit unmetered audio.
 fn proto_member<'a, 'frame>(
     top: &'a Lite<'frame>,
     names: &[&str],
@@ -541,7 +473,6 @@ fn proto_member<'a, 'frame>(
 }
 
 /// A known string field; absent/null is its protobuf default, an empty string. A malformed
-/// selected value is refused rather than silently reinterpreted as that default.
 fn proto_text<'a, 'frame>(
     top: &'a Lite<'frame>,
     names: &[&str],
@@ -561,7 +492,6 @@ fn proto_text<'a, 'frame>(
 }
 
 /// The mime prefix of an audio blob (matched ignoring case, as [`audio_format_from_mime`] reads
-/// the mime).
 const AUDIO_MIME_PREFIX: &str = "audio/";
 
 #[cfg(test)]

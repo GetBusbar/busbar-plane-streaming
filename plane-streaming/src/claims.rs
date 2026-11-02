@@ -1,41 +1,25 @@
 //! The transports the door's routes are carried on ([`WS_TRANSPORT`], [`HTTP_TRANSPORT`]), and a
-//! claim table only the tests (and the voice conformance harness) read.
-//!
-//! The shipped plane publishes its door's routes (`crate::plane_door::ROUTES`). The table below
-//! ([`DIALECT_CLAIMS`]) is not published: no door claims it, and its two one-shot operations
-//! (`/v1/audio/*`) are served by no door, so it is compiled for the tests alone. Twilio Media
-//! Streams rides the WebSocket carrier and authenticates under the `webhook-signature` alternative
-//! alone: Twilio holds no busbar bearer or API key.
 
 #[cfg(test)]
 use busbar_contract::grammar::{one_level_under, Claim, Selector};
 
 /// The transport the three WebSocket dialects (`openai-realtime`, `gemini-live`,
-/// `twilio-media-streams`) are claimed against.
 pub const WS_TRANSPORT: &str = "ws";
 
 /// The transport the two one-shot operations (`transcribe`, `tts`) are claimed against.
 pub const HTTP_TRANSPORT: &str = "http";
 
-/// The datagram transport the browser's media rides (row 132): the SDP door's claim, whose session
-/// busbar terminates, and the upstream call busbar places for it.
 pub const WEBRTC_TRANSPORT: &str = "webrtc";
 
 /// The credential scheme every one of this plane's claims authenticates under.
-///
-/// One scheme with alternatives, not several schemes, the same discipline `busbar-plane-llm` uses:
-/// which alternative a unit narrows to is the authenticate step's answer.
 #[cfg(test)]
 pub(crate) const SCHEME: &str = "streaming-key";
 
 /// The alternatives a duplex-session unit (`ws`) may narrow to: a bearer token or a vendor API-key
-/// header, presented once at session open and cached for the life of the session.
 #[cfg(test)]
 const WS_SCHEME_ALTS: &[&str] = &["bearer", "api-key"];
 
 /// The one alternative a Twilio Media Streams unit may narrow to: the webhook signature Twilio puts
-/// on the WebSocket upgrade (`X-Twilio-Signature`). Twilio holds no busbar credential, so a bearer or
-/// API-key alternative here would be either unusable or unauthenticated.
 #[cfg(test)]
 const TWILIO_SCHEME_ALTS: &[&str] = &["webhook-signature"];
 
@@ -86,9 +70,7 @@ const fn claim(
         selector,
         scheme: Some(SCHEME),
         scheme_alternatives: alts,
-        // None of this plane's claims declares an idempotency location: a duplex session has
-        // no single request body to key a replay on, and the two one-shot operations are read
-        // straight through rather than replay-cached, matching the previous release's behaviour.
+
         idempotency: None,
     }
 }
@@ -139,10 +121,6 @@ pub const DIALECT_CLAIMS: &[DialectClaim] = &[
 ];
 
 /// Which dialect a request's target names, by walking the claims in declaration order.
-///
-/// The same walk the kernel runs itself from the declared claims, exposed here so the decode step
-/// can name the dialect it is about to read without a second, differently-ordered answer existing
-/// anywhere.
 #[cfg(test)]
 #[must_use]
 pub fn dialect_for(path: &str) -> Option<Dialect> {
@@ -153,15 +131,12 @@ pub fn dialect_for(path: &str) -> Option<Dialect> {
 }
 
 /// Whether one selector matches a request path.
-///
-/// Only the forms this plane's claims actually use are answered.
 #[cfg(test)]
 pub(crate) fn matches_selector(s: &Selector, path: &str) -> bool {
     match s {
         Selector::PathSuffix(suffix) => path.ends_with(suffix),
         Selector::PathContains(needle) => path.contains(needle),
-        // The contract's rule, read rather than restated: a second spelling here could hand a
-        // request to a dialect the boot's overlap check never saw this plane claim.
+
         Selector::PrefixOneLevel(prefix) => one_level_under(prefix, path),
         _ => false,
     }

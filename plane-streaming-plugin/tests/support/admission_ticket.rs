@@ -35,7 +35,7 @@ impl busbar_test_kit::services_double::ServicesDouble for AdmissionHost {
                 stored.outcome = Outcome::Failed;
                 stored
             }
-            // A READY scalar outside ticket.take's vocabulary is a broken host response.
+
             Admission::Broken => Stored::ready(u64::MAX),
         }
     }
