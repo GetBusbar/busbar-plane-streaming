@@ -63,9 +63,11 @@ fn actual_cdylib_and_linked_streaming_statements_match() {
     assert_eq!(l.name(), r.name());
     assert_eq!(l.kind(), r.kind());
     assert_eq!(l.max_inflight(), r.max_inflight());
-    if std::env::var_os("BUSBAR_EXPECT_RELEASE").is_some() {
-        assert!(!cfg!(debug_assertions), "release profile requested");
-    }
+    #[cfg(debug_assertions)]
+    assert!(
+        std::env::var_os("BUSBAR_EXPECT_RELEASE").is_none(),
+        "release profile requested"
+    );
 }
 
 #[test]
