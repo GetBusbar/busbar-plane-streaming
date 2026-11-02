@@ -186,8 +186,14 @@ fn submitted_piece(
         lease: done.lease,
         recall: None,
     };
+    if let Some(error) = &called.error {
+        assert_credential_absent(error);
+    }
     // SAFETY: Done has returned the frame; the dispatcher no longer writes these buffers.
-    let rendered = unsafe { (&mut *memory.buffers.get()).answer(&called, out) };
+    let completed = unsafe { &mut *memory.buffers.get() };
+    assert_credential_absent(&completed.reply);
+    assert_credential_absent(&completed.arena);
+    let rendered = completed.answer(&called, out);
     // SAFETY: the joined frame proves this op cannot access its lent pointers again.
     // Reclaim without assuming when the worker drops its final owner clone.
     *buffers = unsafe { std::mem::replace(&mut *memory.buffers.get(), Bufs::new(0)) };

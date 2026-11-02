@@ -577,11 +577,6 @@ impl Bufs {
     }
 
     fn answer(&mut self, c: &busbar_plugin_loader::dispatch::Called, o: OnPieceOut) -> String {
-        if let Some(error) = &c.error {
-            pinned_cases::assert_credential_absent(error);
-        }
-        pinned_cases::assert_credential_absent(&self.reply);
-        pinned_cases::assert_credential_absent(&self.arena);
         self.last_need = o.need;
         self.last_flags = o.flags;
         self.last_audit = if o.records_needed != 0 {

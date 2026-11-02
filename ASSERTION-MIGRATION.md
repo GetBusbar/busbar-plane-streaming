@@ -191,3 +191,13 @@ worker releases its last owner clone. The existing Bufs defaults remain the same
 for all prior both-ways tests; Vec storage permits only these pinned buffers to
 use the original capacities. Original per-step first-crossing pins stay in place;
 actual resume deltas are reported separately without a scheduling-dependent pin.
+
+
+A subsequent source-only scope correction moves the complete Called-error and
+raw reply/arena canary checks from the shared Bufs renderer into the pinned
+submitted-piece completion, after joined Done and before rendering. Thus every
+pinned credential sink remains scanned, while unrelated original direct-call
+capacity tests do not repeatedly scan whole allocated buffers. Their loops,
+limits, thresholds, assertions, and product behavior are unchanged. The prior
+22f7294 native receipt remains evidence for that immutable source only; this
+normal successor requires its own qualification.
