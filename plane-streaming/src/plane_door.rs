@@ -208,13 +208,23 @@ pub const MEDIA_SETTINGS: &str = "media";
 
 /// The plane's connection needs: its keyed doors and its telephony door inbound; outbound, to the
 const NEEDS: &[Need] = &[
-    need(DIRECTION_INBOUND, WS_TRANSPORT, abi_str(KEY_AUTH), NONE),
-    need(DIRECTION_INBOUND, HTTP_TRANSPORT, abi_str(KEY_AUTH), NONE),
+    need(
+        DIRECTION_INBOUND,
+        WS_TRANSPORT,
+        abi_str(KEY_AUTH),
+        abi_str("listen"),
+    ),
+    need(
+        DIRECTION_INBOUND,
+        HTTP_TRANSPORT,
+        abi_str(KEY_AUTH),
+        abi_str("listen"),
+    ),
     need(
         DIRECTION_INBOUND,
         WS_TRANSPORT,
         abi_str(SIGNATURE_AUTH),
-        NONE,
+        abi_str("listen"),
     ),
     outbound(WS_TRANSPORT, REALTIME_STYLE),
     outbound(WS_TRANSPORT, LIVE_STYLE),
