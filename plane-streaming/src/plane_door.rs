@@ -24,8 +24,9 @@ use busbar_contract::abi::plane::{
     RefusalIn, RefusalOut, ServeIn, ServeOut, UnitCount, ANSWER_LAYOUT, AUDIT_REJECTED,
     CLAIM_TICKET, EMIT_DONE, EMIT_TO_FAR_END, FROM_CALLER, FROM_FAR_END, FROM_KERNEL,
     INGRESS_DUPLEX_SESSION, INGRESS_REQUEST_RESPONSE, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST,
-    PIECE_OUT_TEXT, PIECE_REFUSED, PRINCIPAL_REQUIRED, RECORD_AUDIT, ROUTE_DIRECT, SHAPE_PIECEWISE,
-    SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE, UNITS_FLOOR, UNITS_REPORTED,
+    PIECE_OUT_TEXT, PIECE_REFUSED, PRINCIPAL_REQUIRED, RECORD_AUDIT, ROUTE_DIRECT,
+    ROUTE_SCOPE_LOCAL, SHAPE_PIECEWISE, SPAN_ABSENT, TAIL_REFUSED_PIECE, TAP_FAULT_DECODE,
+    UNITS_FLOOR, UNITS_REPORTED,
 };
 use busbar_contract::abi::sdk::door::{abi_str, statement};
 use busbar_contract::abi::sdk::life::Refusal;
@@ -1211,10 +1212,14 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         out.error(CALLS_FULL_TEXT);
         return Outcome::Refused;
     }
-    // Busbar mints the ticket locally; the request counts
-    // against the caller's caps as any admitted call does.
+    // Busbar mints locally, but a configured model's pool grant must be judged before the
+    // counted admission. No model keeps the existing local no-provider response; an absent
+    // model is never a wildcard over the catalogue.
     if a.door == Door::Mint {
-        out.local();
+        match instance.get().and_then(Plane::mint_entry) {
+            Some(model) => out.route(ROUTE_SCOPE_LOCAL, &model),
+            None => out.local(),
+        }
         out.counted();
         return Outcome::Ready;
     }
