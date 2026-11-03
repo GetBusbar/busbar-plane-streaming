@@ -2210,7 +2210,7 @@ fn the_sdp_door_places_busbars_call_locked_to_its_ticket_and_the_sideband_resolv
             opened,
             format!(
                 "Ready emitted= more=0 far=false done=false status=201 verb= target= \
-                 fields=[\"location=/v1/realtime/calls/{id}\"]"
+                 fields=[\"location=/v1/realtime/calls/{id}\", \"content-type=application/sdp\"]"
             )
         );
 
@@ -2657,6 +2657,10 @@ fn an_sdp_open_answered_short_answers_its_201_and_location_on_the_re_call() {
         assert!(
             whole.contains("location=/v1/realtime/calls/rtc_"),
             "busbar's call in Location: {whole}"
+        );
+        assert!(
+            whole.contains("content-type=application/sdp"),
+            "the SDP response type survives a short-output recall: {whole}"
         );
     }
 }

@@ -1386,10 +1386,16 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         lock(&p.brokered).record(id.clone(), caller.unwrap_or_default().to_string(), now_ms);
         head = Some((
             201,
-            vec![(
-                crate::driven::FIELD_LOCATION,
-                crate::ticket::call_location(&id),
-            )],
+            vec![
+                (
+                    crate::driven::FIELD_LOCATION,
+                    crate::ticket::call_location(&id),
+                ),
+                (
+                    FIELD_CONTENT_TYPE,
+                    crate::ticket::SDP_CONTENT_TYPE.to_string(),
+                ),
+            ],
         ));
     }
     sessions.crossed(given.stream(), given.head().ticket());
