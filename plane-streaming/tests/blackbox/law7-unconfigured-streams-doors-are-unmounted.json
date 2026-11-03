@@ -37,7 +37,8 @@
         "path": "/v1/realtime/client_secrets",
         "body_lacks": [
           "error_description"
-        ]
+        ],
+        "within_secs": 30
       }
     },
     {
@@ -47,7 +48,8 @@
         "path": "/v1/realtime/gemini",
         "body_lacks": [
           "error_description"
-        ]
+        ],
+        "within_secs": 30
       }
     }
   ],

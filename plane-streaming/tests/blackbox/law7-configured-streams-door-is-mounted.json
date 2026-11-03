@@ -36,11 +36,18 @@
         "method": "POST",
         "path": "/v1/realtime/client_secrets",
         "status": 401,
-        "body_contains": [
-          "error_description"
-        ]
+        "within_secs": 30,
+        "response_headers_eq": {
+          "www-authenticate": "Bearer resource_metadata=\"http://127.0.0.1:{data_port}/.well-known/oauth-protected-resource/v1/realtime\""
+        },
+        "json_eq": {
+          "": {
+            "error": "unauthorized"
+          }
+        },
+        "body_eq": "{\"error\":\"unauthorized\"}"
       }
     }
   ],
-  "_comment": "Exact Streaming subset of dist/default/tests/law7_served_surface.rs and fixtures/law7_plane_doors.txt. Unconfigured donor asserts only absence of error_description, not a status. Configured donor asserts 401 and error_description. No configured Gemini oracle exists in the donor."
+  "_comment": "Law7 configured Streaming request, with approved e44 anonymous challenge contract: exact 401, resource_metadata WWW-Authenticate, full unauthorized JSON and exact body. Anonymous Absent intentionally has no error_description. Boot60 and call30 preserve donor bounds."
 }
