@@ -1405,7 +1405,9 @@ fn arrive_flags(p: &Plugin<Plane>, claim: u32) -> u8 {
 /// Every door that reaches the far end names the DIRECT route `streams.session.model` (the entry the
 #[test]
 fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route() {
-    use busbar_contract::abi::plane::{ROUTE_COUNTED, ROUTE_DIRECT, ROUTE_LOCAL, ROUTE_POOL};
+    use busbar_contract::abi::plane::{
+        ROUTE_COUNTED, ROUTE_DIRECT, ROUTE_LOCAL, ROUTE_POOL, ROUTE_SCOPE_LOCAL,
+    };
     let d = Dispatcher::new(DispatchConfig::default());
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
@@ -1419,8 +1421,8 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
         }
         assert_eq!(
             arrive_route(p, 0),
-            (Outcome::Ready, ROUTE_LOCAL, String::new()),
-            "the mint door dials nothing"
+            (Outcome::Ready, ROUTE_SCOPE_LOCAL, "m-cap".to_string()),
+            "the mint stays local while naming the model whose grant precedes counted admission"
         );
         assert_eq!(
             arrive_flags(p, 0) & ROUTE_COUNTED,
@@ -1438,13 +1440,24 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
             "the metadata path is no claim of the plane (1.5.5 parity)"
         );
     }
-    let bare = linked(&d);
-    assert_eq!(open(&bare, 1, b"{}", Some(PUBLIC)).0, Outcome::Ready);
-    assert_eq!(
-        arrive_route(&bare, 3),
-        (Outcome::Ready, ROUTE_POOL, String::new()),
-        "no model, no route named"
-    );
+    for bare in [linked(&d), dropped(&d)] {
+        assert_eq!(open(&bare, 1, b"{}", Some(PUBLIC)).0, Outcome::Ready);
+        assert_eq!(
+            arrive_route(&bare, 3),
+            (Outcome::Ready, ROUTE_POOL, String::new()),
+            "no model, no route named"
+        );
+        assert_eq!(
+            arrive_route(&bare, 0),
+            (Outcome::Ready, ROUTE_LOCAL, String::new()),
+            "an unconfigured mint stays local and names no wildcard model"
+        );
+        assert_eq!(
+            arrive_flags(&bare, 0) & ROUTE_COUNTED,
+            ROUTE_COUNTED,
+            "the unconfigured local mint retains its counted admission contract"
+        );
+    }
 }
 
 /// `project` of unit 31 on `claim` with `rewrite` (empty = none): its outcome, the projected body
