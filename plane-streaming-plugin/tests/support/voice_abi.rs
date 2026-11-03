@@ -184,6 +184,8 @@ pub struct Arrived {
     pub principal: u32,
     /// The route class and the entry it names.
     pub route: (u8, String),
+    /// The admission route flags, including counted admission.
+    pub route_flags: u8,
     /// The plane's refusal code and status.
     pub refusal: (u32, u32),
     /// The units the admission was told to expect.
@@ -212,6 +214,7 @@ pub fn arrive(p: &Plugin<Plane>, claim: u32) -> Arrived {
         op_class: a.out.op_class,
         principal: a.out.principal_need,
         route: (a.out.route, read(a.out.pool)),
+        route_flags: a.out.route_flags,
         refusal: (a.out.refusal, a.out.refusal_status),
         units: a.out.units_written,
     }

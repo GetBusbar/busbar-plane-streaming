@@ -5,7 +5,7 @@ pub mod voice_abi;
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{
     AUDIT_REJECTED, FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST,
-    PRINCIPAL_REQUIRED, RECORD_AUDIT, ROUTE_DIRECT, ROUTE_LOCAL, ROUTE_POOL,
+    PRINCIPAL_REQUIRED, RECORD_AUDIT, ROUTE_COUNTED, ROUTE_DIRECT, ROUTE_POOL, ROUTE_SCOPE_LOCAL,
 };
 use busbar_plugin_loader::dispatch::{DispatchConfig, Dispatcher};
 use serde_json::{json, Value};
@@ -37,7 +37,8 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
         let arrived = arrive(&p, 0);
         let mint = piece(&p, &request(7, 0, FROM_CALLER, PIECE_LAST, &[]));
         assert_eq!(arrived.outcome, Outcome::Ready);
-        assert_eq!(arrived.route, (ROUTE_LOCAL, String::new()));
+        assert_eq!(arrived.route, (ROUTE_SCOPE_LOCAL, MODEL.to_string()));
+        assert_ne!(arrived.route_flags & ROUTE_COUNTED, 0);
         assert!(!mint.to_far);
         assert_eq!(mint.need, 0);
         assert!(mint.verb.is_empty() && mint.target.is_empty());
@@ -611,11 +612,14 @@ fn routes_and_attempts_preserve_fresh_dials_without_early_output() {
             assert_eq!(
                 a.route,
                 if claim == 0 {
-                    (ROUTE_LOCAL, String::new())
+                    (ROUTE_SCOPE_LOCAL, MODEL.to_string())
                 } else {
                     (ROUTE_DIRECT, MODEL.to_string())
                 }
             );
+            if claim == 0 {
+                assert_ne!(a.route_flags & ROUTE_COUNTED, 0);
+            }
             arrivals.push(a);
         }
         let initial = piece(&p, &session(70, 5, FROM_CALLER, 0, &[]));
