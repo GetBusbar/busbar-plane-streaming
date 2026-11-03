@@ -1,0 +1,55 @@
+{
+  "schema": "blackbox/1",
+  "case": "law7: absent streams leaves realtime doors unmounted",
+  "requires": {
+    "sections": [
+      "streams"
+    ],
+    "features": [
+      "auth-admin-tokens"
+    ]
+  },
+  "credentials": {
+    "signing_key": true
+  },
+  "vars": {
+    "MOCK_KEY": "x",
+    "BUSBAR_ADMIN_TOKEN": "{admin_token}"
+  },
+  "files": {
+    "config.yaml": "listen: \"127.0.0.1:{data_port}\"\nadmin_listen: \"127.0.0.1:{admin_port}\"\nadvanced:\n  allow_destinations: [\"127.0.0.1\"]\nstore: {module: memory}\npublic_url: \"http://127.0.0.1:{data_port}\"\nidentity-providers:\n  admin-tokens:\n    module: admin-tokens\n    token: { env: BUSBAR_ADMIN_TOKEN }\nauth:\n  chain: [keys]\n  signing_key: { file: \"{signing_key_file}\" }\n  admin_auth: [admin-tokens]\nproviders:\n  mock:\n    api_key: { env: MOCK_KEY }\nmodels:\n  test-model:\n    provider: mock\n",
+    "providers.yaml": "mock:\n  protocol: anthropic\n  base_url: \"http://127.0.0.1:9\"\n"
+  },
+  "steps": [
+    {
+      "boot": {
+        "listening": [
+          "data",
+          "admin"
+        ],
+        "within_secs": 60
+      }
+    },
+    {
+      "call": {
+        "port": "data",
+        "method": "POST",
+        "path": "/v1/realtime/client_secrets",
+        "body_lacks": [
+          "error_description"
+        ]
+      }
+    },
+    {
+      "call": {
+        "port": "data",
+        "method": "POST",
+        "path": "/v1/realtime/gemini",
+        "body_lacks": [
+          "error_description"
+        ]
+      }
+    }
+  ],
+  "_comment": "Exact Streaming subset of dist/default/tests/law7_served_surface.rs and fixtures/law7_plane_doors.txt. Unconfigured donor asserts only absence of error_description, not a status. Configured donor asserts 401 and error_description. No configured Gemini oracle exists in the donor."
+}

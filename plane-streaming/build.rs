@@ -14,5 +14,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             .join("tests/root/mod.rs")
             .display()
     );
+    println!("cargo::rerun-if-changed=tests/blackbox");
+    println!(
+        "cargo::metadata=blackbox={}",
+        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?)
+            .join("tests/blackbox")
+            .display()
+    );
     Ok(())
 }
