@@ -230,4 +230,10 @@ impl busbar_contract::services::HostServices for MintHost {
     fn snapshot_read(&self, _caller: &Caller, _scope: u32) -> Snapshot {
         Snapshot::Refused(busbar_contract::services::UNSERVED)
     }
+    fn ticket_take(&self, _caller: &Caller, _unit: Option<u64>) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
+    fn random_fill(&self, _len: u64) -> Stored {
+        Stored::refused(busbar_contract::services::UNSERVED)
+    }
 }
