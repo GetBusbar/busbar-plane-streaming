@@ -48,6 +48,7 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
         assert_eq!(mint.emitted, MINT_REFUSED);
         let audio = uplink(100);
         let gemini_audio = gemini_uplink(100);
+        let mut rides = Vec::new();
         for (stream, claim, bytes, style) in [
             (20, 5, audio.as_slice(), "bearer"),
             (21, 3, gemini_audio.as_slice(), "x-goog-api-key"),
@@ -88,6 +89,7 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
                 .contains(&name.to_ascii_lowercase().as_str()));
                 assert!(!value.to_ascii_lowercase().starts_with("bearer "));
             }
+            rides.push((initial, ride));
             let mut dry = false;
             for _ in 0..64 {
                 let a = piece(&p, &session(stream, claim, FROM_KERNEL, 0, &[]));
