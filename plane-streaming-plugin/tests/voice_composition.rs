@@ -10,6 +10,9 @@ use busbar_contract::abi::plane::{
 use busbar_plugin_loader::dispatch::{DispatchConfig, Dispatcher};
 use serde_json::{json, Value};
 use voice_abi::*;
+#[path = "support/mint_entitlement.rs"]
+mod mint_entitlement;
+use mint_entitlement::GrantReply;
 
 const USAGE_DONE: &[u8] = br#"{"type":"response.done","response":{"usage":{"input_token_details":{"audio_tokens":10,"text_tokens":3},"output_token_details":{"audio_tokens":20,"text_tokens":4}}}}"#;
 const GEMINI_USAGE: &[u8] = br#"{"usageMetadata":{"promptTokenCount":140,"responseTokenCount":80,"totalTokenCount":220,"promptTokensDetails":[{"modality":"TEXT","tokenCount":40},{"modality":"AUDIO","tokenCount":100}],"responseTokensDetails":[{"modality":"AUDIO","tokenCount":80}]}}"#;
@@ -30,12 +33,13 @@ fn downlink(n: usize) -> Vec<u8> {
 fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let (d, host) = mint_entitlement::dispatcher(GrantReply::Denied);
         let p = load(&d, "voice-credentials", dropped);
         let served = p.served();
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
         let arrived = arrive(&p, 0);
         let mint = piece(&p, &request(7, 0, FROM_CALLER, PIECE_LAST, &[]));
+        host.assert_checked("voice-credentials", 7);
         assert_eq!(arrived.outcome, Outcome::Ready);
         assert_eq!(arrived.route, (ROUTE_SCOPE_LOCAL, MODEL.to_string()));
         assert_ne!(arrived.route_flags & ROUTE_COUNTED, 0);
@@ -663,7 +667,7 @@ fn audit_rows_name_the_pool_once_and_never_create_private_records() {
     const AUDIT_KIND: &str = "streaming_session";
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let (d, host) = mint_entitlement::dispatcher(GrantReply::Denied);
         let p = load(&d, "voice-audit", dropped);
         assert_eq!(p.served().audit_kind, AUDIT_KIND);
         assert_eq!(p.served().op_classes, [SESSION_OPEN_ACTION]);
@@ -719,6 +723,12 @@ fn audit_rows_name_the_pool_once_and_never_create_private_records() {
         }
         assert!(rows.is_empty(), "sessions author no records");
         let mint = piece(&p, &request(82, 0, FROM_CALLER, PIECE_LAST, &[]));
+        host.assert_checked("voice-audit", 82);
+        assert_eq!(mint.status, 403);
+        assert_eq!(mint.emitted, MINT_REFUSED);
+        assert!(!mint.to_far);
+        assert_eq!(mint.need, 0);
+        assert!(mint.verb.is_empty() && mint.target.is_empty());
         assert_eq!(mint.outcome, Outcome::Ready);
         rows.extend(mint.rows);
         let refused = refusal(&p, 83, 0, 403, "refused");
@@ -938,4 +948,38 @@ fn assert_default_lock(lock: &Value) {
         lock["session"]["truncation"]["token_limits"]["post_instructions"],
         CONTEXT_TOKENS - OUTPUT_TOKENS
     );
+}
+
+#[test]
+fn unavailable_entitlement_is_a_service_failure_without_a_policy_audit() {
+    for dropped in [false, true] {
+        for bound in [false, true] {
+            let (dispatcher, host) = if bound {
+                let (dispatcher, host) = mint_entitlement::dispatcher(GrantReply::Failed);
+                (dispatcher, Some(host))
+            } else {
+                (Dispatcher::new(DispatchConfig::default()), None)
+            };
+            let p = load(&dispatcher, "voice-grant-unavailable", dropped);
+            assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
+            let mint = piece(&p, &request(87, 0, FROM_CALLER, PIECE_LAST, &[]));
+            assert_eq!(mint.outcome, Outcome::Ready);
+            assert!(mint.done);
+            assert_eq!(mint.status, 502);
+            assert_eq!(
+                mint.emitted,
+                b"streaming ephemeral-secret mint failed: the host could not check the key's grant"
+            );
+            assert!(
+                mint.rows.is_empty(),
+                "service failure is not a policy rejection"
+            );
+            assert!(!mint.to_far);
+            assert_eq!(mint.need, 0);
+            assert!(mint.verb.is_empty() && mint.target.is_empty());
+            if let Some(host) = host {
+                host.assert_checked("voice-grant-unavailable", 87);
+            }
+        }
+    }
 }
