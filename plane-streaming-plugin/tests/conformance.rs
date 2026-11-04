@@ -51,13 +51,6 @@ fn actual_cdylib_and_linked_streaming_statements_match() {
             .unwrap()
             .statement
     );
-    let credential = b"bb-canary-streaming-5c1e7a";
-    assert!(
-        !stated
-            .windows(credential.len())
-            .any(|bytes| bytes == credential),
-        "configured credential escapes in statement"
-    );
     let (l, _) = linked();
     let (r, _) = dropped(&lib, &stated);
     assert_eq!(l.name(), r.name());

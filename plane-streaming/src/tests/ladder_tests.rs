@@ -8,7 +8,7 @@ use crate::driven::Door;
 
 /// The rank of a line whose path matches `path`; `None` when it does not match.
 fn path_rank(line: &Route, path: &str) -> Option<u8> {
-    if line.exact() {
+    if !line.target.contains('{') {
         return (line.target == path).then_some(2);
     }
     let want: Vec<&str> = line.target.split('/').collect();
@@ -223,7 +223,7 @@ fn no_line_is_open_and_the_telephony_line_is_signed() {
     assert_eq!(signed, ["/twilio/{call_id}"]);
 }
 
-/// A `{call_id}` route is claimed as a PATTERN, not as a one-level prefix. Without `CLAIM_PATTERN`
+/// A `{call_id}` route is claimed as a PATTERN, not as a one-level prefix.
 #[test]
 fn a_call_id_route_is_claimed_as_a_pattern_and_a_neighbour_is_not() {
     use busbar_contract::abi::plane::{CLAIM_EXACT, CLAIM_PATTERN};

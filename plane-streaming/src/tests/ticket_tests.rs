@@ -10,7 +10,8 @@ fn a_mint_asks_for_a_ten_minute_ticket() {
     assert_eq!(TTL_SECS, 600);
 }
 
-/// The mint door's answer is the OpenAI-compatible shape SDKs read, and nothing else: the ticket
+/// The mint door's answer is the OpenAI-compatible shape SDKs read, and nothing else: the
+/// ticket sealed through the SDK (R7), members in name order.
 #[test]
 fn the_caller_is_answered_the_ticket_and_its_expiry_only() {
     let m = crate::tests::sealed_minted("ek_abc", 1_700_000_600);

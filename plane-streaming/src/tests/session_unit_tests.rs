@@ -6,6 +6,14 @@
 use super::*;
 use crate::codec::ir::codec::OpenAiRealtimeCodec;
 use crate::codec::ir::media::AudioFormat;
+use crate::session::class_counts;
+
+impl<C> SessionUnit<C> {
+    /// `true` once the session has ended.
+    pub(crate) fn ended(&self) -> bool {
+        self.ended
+    }
+}
 
 fn json(v: serde_json::Value) -> Vec<u8> {
     serde_json::to_vec(&v).expect("json")
@@ -251,23 +259,51 @@ fn a_media_payload_resuming_after_padding_is_refused_and_never_billed() {
     }
 }
 
+/// A frame is read by its bytes, never its opcode: the same Gemini JSON, as Gemini's server sends
+/// it in a binary message or as a text message would carry it, reads alike, and is relayed whole.
 #[test]
-fn every_emitted_frame_is_a_text_message_and_either_opcode_is_read() {
-    let mut s = SessionUnit::open(
-        crate::codec::ir::codec::gemini::GeminiLiveCodec,
-        SessionConfig::default(),
-        false,
-    );
-    let setup = json(serde_json::json!({"setupComplete": {}}));
-    let plan = s.from_far_end(&setup);
-
-    assert_eq!(plan.to_caller, vec![setup.clone()], "relayed as it came");
-    assert!(plan.to_far_end.is_empty());
-    for frame in plan.to_caller.iter().chain(plan.to_far_end.iter()) {
-        assert!(
-            std::str::from_utf8(frame).is_ok(),
-            "an emitted frame is text"
+fn a_frame_is_read_by_its_bytes_whatever_message_carried_it() {
+    let usage = json(serde_json::json!({"serverContent": {"turnComplete": true},
+        "usageMetadata": {"promptTokenCount": 3, "responseTokenCount": 2}}));
+    let mut units = Vec::new();
+    for frame in [usage.clone(), usage.clone()] {
+        let mut s = SessionUnit::open(
+            crate::codec::ir::codec::gemini::GeminiLiveCodec,
+            SessionConfig::default(),
+            false,
         );
+        let plan = s.from_far_end(&frame);
+        assert_eq!(plan.to_caller, vec![usage.clone()], "relayed as it came");
+        assert!(plan.to_far_end.is_empty());
+        units.push(s.units());
+    }
+    assert_eq!(units[0], units[1]);
+    assert_ne!(units[0], CumulativeUnits::default(), "the usage is read");
+}
+
+/// The floor class index names the output text class in the class list, and every class a
+/// closed turn counts is a class the session reports (none is dropped on the way).
+#[test]
+fn the_class_indices_name_the_classes_a_turn_counts() {
+    assert_eq!(
+        CLASSES[TEXT_TOKENS_OUT as usize],
+        crate::meta::CLASS_TEXT_TOKENS_OUT
+    );
+    let mut counters = crate::session::TurnCounters::default();
+    counters.admit_audio(AudioFormat::Pcm16, 48_000);
+    counters.open_tool_call();
+    let usage = IrDuplexUsage {
+        audio_in: 1,
+        audio_out: 1,
+        text_in: 1,
+        text_out: 1,
+        image_in: 1,
+        video_in: 1,
+        cached: 1,
+        floor: false,
+    };
+    for (class, _) in class_counts(Some(&usage), counters) {
+        assert!(CLASSES.contains(&class), "{class:?} is reported");
     }
 }
 

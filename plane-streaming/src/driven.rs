@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! The plane's answers to the kernel plane driver: which door a claim is, and the request each
+//! session door sends its far end.
 
 use busbar_contract::abi::sdk::cred::{Cred, SealedWrite};
 
@@ -70,7 +71,10 @@ impl Door {
         )
     }
 
-    /// The outbound need a far request on this door rides (`OnPieceOut::need`): the socket of the
+    /// The outbound need a far request on this door rides (`OnPieceOut::need`): the socket of
+    /// the provider the door's session dials (Gemini Live's for the Gemini door, OpenAI
+    /// Realtime's for the sideband, telephony and plain realtime doors), and busbar's own call
+    /// to OpenAI Realtime for the SDP door (row 132: busbar terminates the browser's media).
     #[must_use]
     pub const fn rides(self) -> u32 {
         match self {
@@ -95,6 +99,7 @@ pub struct Arrival {
 }
 
 /// `arrive` for claim `claim`: every keyed door opens a session (or mints the ticket one opens
+/// with) for a known principal.
 #[must_use]
 pub const fn arrive(claim: u32) -> Option<Arrival> {
     match Door::of(claim) {
@@ -109,6 +114,9 @@ pub const fn arrive(claim: u32) -> Option<Arrival> {
 
 impl Door {
     /// The request a session's far-end turn on this door sends: the socket doors dial the
+    /// dialect's realtime socket (the credential is the kernel's, never in the target); the SDP
+    /// door places busbar's own call ([`call_attempt`]), its caller named by `caller_ref` for
+    /// attribution; the mint door dials nothing (`None`).
     #[must_use]
     pub fn route(self, caller_ref: Option<&str>) -> Option<Attempt> {
         let socket = |target| Attempt {
@@ -125,17 +133,14 @@ impl Door {
     }
 }
 
-/// The action a session open is audited under.
-#[cfg(test)]
-pub const SESSION_OPEN_ACTION: &str = "streaming.session.open";
-
-/// The realtime socket an OpenAI Realtime session dials, under the member's base URL. A sideband
+/// The realtime socket an OpenAI Realtime session dials, under the member's base URL.
 pub const REALTIME_SOCKET_PATH: &str = "/v1/realtime";
 
 /// The sideband door's path, before its `{call_id}` segment.
 pub const SIDEBAND_PREFIX: &str = "/v1/realtime/sideband/";
 
-/// Busbar's call a sideband arrival's `target` names: its `{call_id}` segment, less any query or
+/// Busbar's call a sideband arrival's `target` names: its `{call_id}` segment, less any query
+/// or fragment.
 #[must_use]
 pub fn sideband_call_id(target: &str) -> Option<&str> {
     let id = target.strip_prefix(SIDEBAND_PREFIX)?;
@@ -164,6 +169,9 @@ pub struct Attempt {
 }
 
 /// The SDP door's far-end request head: busbar's own call to the provider, one form
+/// ([`crate::ticket::call_form`]) carrying the locked session and busbar's description, and the
+/// caller named for the provider's attribution of the session (`OpenAI-Safety-Identifier`, the
+/// kernel's caller reference, never the principal).
 #[must_use]
 pub fn call_attempt(caller: Option<&str>) -> Attempt {
     let mut fields = vec![(FIELD_CONTENT_TYPE, CALL_FORM_TYPE.to_string())];
@@ -177,12 +185,14 @@ pub fn call_attempt(caller: Option<&str>) -> Attempt {
     }
 }
 
-/// A caller's answer body: public bytes, or a mint's answer sealed by the SDK (it carries busbar's
+/// A caller's answer body: public bytes, or a mint's answer sealed by the SDK (it carries
+/// busbar's bearer ticket, which this plane never holds as text and cannot read back: R7).
 #[allow(missing_debug_implementations)]
 pub enum Body {
     /// Public bytes (a refusal's text).
     Public(Vec<u8>),
     /// The SDK's sealed write: the door moves it into the host's reply buffer
+    /// (`SealedWrite::stream_into`).
     Sealed(SealedWrite),
 }
 
@@ -195,19 +205,9 @@ impl Body {
             Self::Sealed(w) => w.len(),
         }
     }
-
-    /// The public bytes; `None` for a sealed answer, which this plane never reads. (Read by the
-    #[cfg(test)]
-    #[must_use]
-    pub fn public(&self) -> Option<&[u8]> {
-        match self {
-            Self::Public(b) => Some(b),
-            Self::Sealed(_) => None,
-        }
-    }
 }
 
-/// What the caller is answered. Its `Debug` prints the body's length, never its bytes: a mint
+/// What the caller is answered.
 pub struct Reply {
     /// The status.
     pub status: u16,
@@ -242,10 +242,7 @@ pub fn mint_failed(reason: &str) -> Reply {
         status: MINT_FAILED_STATUS,
         fields: Vec::new(),
         body: Body::Public(
-            format!(
-                "streaming ephemeral-secret mint failed: ephemeral token mint failed: {reason}"
-            )
-            .into_bytes(),
+            format!("streaming ephemeral-secret mint failed: {reason}").into_bytes(),
         ),
     }
 }
@@ -274,6 +271,8 @@ pub fn pool_resource(entry: &str) -> String {
 }
 
 /// The status an SDP offer arriving as a plain request is refused with: 501 Not Implemented
+/// (RFC 9110 section 15.6.2): the door serves the offer only as a call session over the WebRTC
+/// carrier, which this unit does not carry.
 pub const SDP_PLAIN_REQUEST_STATUS: u16 = 501;
 
 /// The refusal for an SDP offer that reached the SDP door as a plain request.
@@ -297,6 +296,8 @@ pub fn sdp_plain_request() -> Reply {
 pub const MINT_NOT_GRANTED_STATUS: u16 = 403;
 
 /// The refusal of a mint whose key's grant does not reach `entry`, the model the ticket's call
+/// would be routed to (R10 grant ruling): the OpenAI REST error envelope the realtime SDKs read
+/// (`permission_error`, code `not_granted`), naming the entry and never the key.
 #[must_use]
 pub fn mint_not_granted(entry: &str) -> Reply {
     let body = serde_json::json!({"error": {

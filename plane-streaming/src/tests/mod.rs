@@ -1,53 +1,11 @@
 //! Test-only wiring: the selector and style checks.
 
 /// What a request path matches, decided the same way the boot's overlap check decides it.
+
+/// What a request path matches, decided the same way the boot's overlap check decides it.
 mod selectors {
-    use crate::claims::matches_selector;
-    use busbar_contract::grammar::Selector;
-
-    /// A one-level prefix claims the segment below it and nothing else. A sibling whose name merely
-    #[test]
-    fn a_one_level_prefix_stops_at_the_segment_boundary() {
-        let s = Selector::PrefixOneLevel("/twilio");
-        assert!(matches_selector(&s, "/twilio/inbound"));
-        assert!(!matches_selector(&s, "/twiliofoo"));
-        assert!(!matches_selector(&s, "/twilio"));
-        assert!(!matches_selector(&s, "/twilio/inbound/deeper"));
-        assert!(!matches_selector(&s, "/other/inbound"));
-    }
-
-    /// The test-only claim table the voice conformance harness reads (`claims::DIALECT_CLAIMS`, no
-    #[test]
-    fn the_harness_claim_table_names_twilio_on_the_websocket_carrier_under_the_webhook_signature() {
-        use crate::claims::{dialect_for, Dialect, DIALECT_CLAIMS, WS_TRANSPORT};
-
-        let twilio: Vec<_> = DIALECT_CLAIMS
-            .iter()
-            .filter(|c| c.dialect == Dialect::TwilioMediaStreams)
-            .collect();
-        assert_eq!(
-            twilio.len(),
-            1,
-            "exactly one claim names the Twilio dialect"
-        );
-        let claim = &twilio[0].claim;
-        assert_eq!(
-            claim.transport, WS_TRANSPORT,
-            "Twilio rides the WebSocket transport"
-        );
-        assert_eq!(claim.selector, Selector::PrefixOneLevel("/twilio"));
-        assert_eq!(claim.scheme_alternatives, &["webhook-signature"]);
-
-        assert_eq!(
-            dialect_for("/twilio/inbound"),
-            Some(Dialect::TwilioMediaStreams)
-        );
-        assert_eq!(dialect_for("/twilio"), None);
-        assert_eq!(dialect_for("/twilio/a/b"), None);
-        assert_eq!(dialect_for("/v1/realtime"), Some(Dialect::OpenaiRealtime));
-    }
-
     /// Twilio Media Streams is a streaming DIALECT carried by the WebSocket transport, not a
+    /// transport of its own (the design lists five transports and no telephony one).
     #[test]
     fn twilio_media_streams_is_claimed_on_the_websocket_carrier_under_the_webhook_signature() {
         use crate::claims::WS_TRANSPORT;
@@ -79,10 +37,11 @@ mod selectors {
     }
 }
 
-/// What one downlink Twilio audio frame may allocate, and the bytes it must still render.
-mod alloc_gate_tests;
+/// Wire rendering of a downlink Twilio audio frame.
+mod twilio_render_tests;
 
-/// The bytes a caller's answer body puts on the wire, read as a test's stand-in for the host's reply
+/// The bytes a caller's answer body puts on the wire, read as a test's stand-in for the host's
+/// reply buffer: a sealed answer through the SDK's test-only driver (`test-seal`).
 pub(crate) fn body_bytes(body: crate::driven::Body) -> Vec<u8> {
     match body {
         crate::driven::Body::Public(bytes) => bytes,

@@ -2,10 +2,18 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Tests for `crates/busbar-plane-streaming/src/session_door.rs`: a live session on the door,
+//! one frame per answer, each side's frames in order, the session's end answered on the
+//! caller's side only, and the ceiling read on the tick clock.
 
 use std::num::NonZeroU32;
 
 use super::*;
+
+impl Live {
+    pub(crate) fn open(door: Door, cfg: &StreamsCfg) -> Option<Self> {
+        Self::open_locked(door, cfg, None)
+    }
+}
 
 fn json(v: serde_json::Value) -> Vec<u8> {
     serde_json::to_vec(&v).expect("json")
@@ -120,6 +128,7 @@ fn the_far_ends_usage_reaches_the_caller_and_the_sessions_units() {
 }
 
 /// A barge-in is the caller's to act on (Law 11): the far-side answer carries the event to the
+/// caller as the far end sent it, and nothing is owed the far end.
 #[test]
 fn a_far_side_answer_carries_only_a_frame_for_the_caller() {
     let mut s = sideband();
@@ -139,7 +148,9 @@ fn a_far_side_answer_carries_only_a_frame_for_the_caller() {
     assert!(!s.ready(), "nothing is owed the far end");
 }
 
-/// The caller's last piece settles the open turn once: the audio it admitted is in the session's
+/// The caller's last piece settles the open turn once: the audio it admitted is in the
+/// session's units (as it was, running, in every answer before), and only the caller side
+/// answers the end.
 #[test]
 fn the_callers_last_piece_settles_the_open_turn_and_ends_the_session() {
     let mut s = sideband();
@@ -186,6 +197,7 @@ fn the_telephony_door_reads_the_carriers_envelope() {
 }
 
 /// The ceiling is read on the tick clock: the session's clock starts at its first tick, and a
+/// session past its ceiling tells the caller why and then ends.
 #[test]
 fn a_session_past_its_ceiling_is_told_why_then_ends() {
     let cfg = StreamsCfg {
@@ -318,7 +330,9 @@ fn a_session_open_rewrite_patches_the_locked_params_or_refuses() {
     }
 }
 
-/// A session-open rewrite that cannot be applied leaves the open unmodified and says so: one log
+/// A session-open rewrite that cannot be applied leaves the open unmodified and says so: one
+/// log line naming the session-open hook stage and why (audit S52, the one hook-rewrite rule);
+/// one that applies says nothing.
 #[test]
 fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
     let locked = SessionConfig::default();
@@ -365,6 +379,7 @@ fn a_rewrite_that_cannot_be_applied_is_named_in_one_log_line() {
 }
 
 /// A session opened after its open's hooks rewrote the params opens under the rewritten params,
+/// once; a stream with none opens under what its door locks.
 #[test]
 fn a_rewritten_session_open_locks_the_rewritten_params_once() {
     let cfg = StreamsCfg::default();
@@ -518,7 +533,8 @@ fn a_session_the_kernel_cancels_mid_turn_has_already_reported_the_open_turn() {
     );
 }
 
-/// The open turn's running counts never fall when the turn closes: a usage report moves them into
+/// The open turn's running counts never fall when the turn closes: a usage report moves them
+/// into the closed total, so the kernel's checkpoint is monotone across the close.
 #[test]
 fn a_turns_close_moves_its_running_counts_and_the_total_never_falls() {
     let mut s = sideband();
@@ -747,4 +763,41 @@ fn sideband_initial_crossing_opens_a_payload_free_socket_once() {
     let greeting = br#"{"type":"session.created","session":{}}"#;
     s.from_far_end(greeting);
     assert_eq!(s.next(false).frame, Some((Side::Caller, greeting.to_vec())));
+}
+
+#[test]
+fn audit_attached_sideband_does_not_bill_mirrored_provider_events() {
+    let mut live = sideband();
+    live.attach("provider_call".into());
+    live.accept();
+    live.from_far_end(&usage_done());
+    assert!(live.units().is_empty());
+    live.from_caller(&uplink(1000), false);
+    assert_eq!(live.units(), vec![(seconds(), 1)]);
+}
+
+#[test]
+fn audit_live_ceiling_remains_visible_after_generation_changes() {
+    let mut sessions = Sessions::default();
+    let cfg = StreamsCfg {
+        session_max_secs: NonZeroU32::new(1),
+        ..StreamsCfg::default()
+    };
+    sessions.get_or_open(1, Door::Realtime, &cfg).unwrap();
+    assert!(sessions.any_ceiling());
+    sessions.tick(1);
+    assert!(sessions.tick(1_000_000_001));
+    assert!(sessions.get(1).unwrap().ready());
+    sessions.close(1);
+    assert!(!sessions.any_ceiling());
+}
+
+#[test]
+fn audit_hook_crossing_cannot_replace_locked_tools() {
+    assert_eq!(hook_crossing(br#"{"messages":[],"tools":[]}"#), Some(false));
+    assert_eq!(
+        hook_crossing(br#"{"messages":[{"role":"user"}],"tools":[]}"#),
+        Some(true)
+    );
+    assert_eq!(hook_crossing(br#"{"voice":"alloy"}"#), None);
 }

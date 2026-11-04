@@ -32,7 +32,7 @@ impl AudioFormat {
         }
     }
 
-    /// The GA `session` format object for this format (`audio.input.format`, `audio.output.format`):
+    /// The GA format object used by `audio.input.format` and `audio.output.format`.
     #[must_use]
     pub fn ga_format(self) -> serde_json::Value {
         match self {
@@ -42,7 +42,7 @@ impl AudioFormat {
         }
     }
 
-    /// Parse a dialect wire token into a format, or `None` for an unrecognized one. `g711_alaw` is
+    /// Parse a dialect wire token into a format, or `None` for an unrecognized one. `g711_alaw` is not supported.
     #[must_use]
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
@@ -52,7 +52,7 @@ impl AudioFormat {
         }
     }
 
-    /// Bytes of audio per millisecond of playback. pcm16 = 24 samples/ms × 2 bytes = 48; g711 µ-law =
+    /// Bytes of audio per millisecond of playback. pcm16 = 24 samples/ms × 2 bytes = 48; g711 µ-law = 8 bytes/ms; Gemini 16 kHz PCM = 32 bytes/ms.
     #[must_use]
     pub const fn bytes_per_ms(self) -> u64 {
         match self {

@@ -5,7 +5,8 @@ use busbar_contract::abi::sdk::cred::{Cred, NotJsonText, SealedJson, SealedWrite
 
 use crate::codec::ir::config::SessionConfig;
 
-/// The prefix of every ticket the plane's mint door answers: the plane's issued-id prefix, declared
+/// The prefix of every ticket the plane's mint door answers: the plane's issued-id prefix,
+/// declared on its Statement, so the host leads every ticket it mints for the plane with it.
 pub const TICKET_PREFIX: &str = "ek_";
 
 /// The lifetime a minted ticket is asked for, in seconds.
@@ -17,19 +18,28 @@ pub const CALLS_PATH: &str = "/v1/realtime/calls";
 /// The media type of a session description.
 pub const SDP_CONTENT_TYPE: &str = "application/sdp";
 
-/// The boundary of the upstream call's form. A description never holds `\r\n--` and this word, and
-pub const FORM_BOUNDARY: &str = "busbar-call-form";
+/// The boundary word, written once for both [`FORM_BOUNDARY`] and [`CALL_FORM_TYPE`].
+macro_rules! form_boundary {
+    () => {
+        "busbar-call-form"
+    };
+}
+
+/// The boundary of the upstream call's form.
+pub const FORM_BOUNDARY: &str = form_boundary!();
 
 /// The upstream call's content type: a form under [`FORM_BOUNDARY`].
-pub const CALL_FORM_TYPE: &str = "multipart/form-data; boundary=busbar-call-form";
+pub const CALL_FORM_TYPE: &str = concat!("multipart/form-data; boundary=", form_boundary!());
 
 /// The header busbar's call names its caller in, so the provider can attribute the browser's
+/// session: the kernel's caller reference, never the principal.
 pub const SAFETY_IDENTIFIER_HEADER: &str = "OpenAI-Safety-Identifier";
 
 /// The prefix of a call id, busbar's and the provider's alike.
 const CALL_ID_PREFIX: &str = "rtc_";
 
 /// The caller's answer to a mint: the ticket and its expiry, and nothing else, members in name
+/// order.
 pub fn minted_answer(ticket: &Cred, expires_at_unix: u64) -> Result<SealedWrite, NotJsonText> {
     SealedJson::new()
         .public("expires_at_unix", expires_at_unix)
@@ -48,6 +58,7 @@ pub fn locked_by(record: &[u8]) -> Result<SessionConfig, String> {
 }
 
 /// The upstream call's form ([`CALL_FORM_TYPE`]): its body up to the opened part busbar's own
+/// description fills.
 pub fn call_form(locked: &SessionConfig) -> Result<Vec<u8>, String> {
     let session = serde_json::to_vec(&serde_json::Value::Object(locked.ga_session()))
         .map_err(|e| format!("the locked session did not serialize: {e}"))?;
@@ -79,7 +90,7 @@ pub fn call_location(id: &str) -> String {
     format!("{CALLS_PATH}/{id}")
 }
 
-/// A call id in a `Location`: the last path segment that is one, less any query or fragment. A
+/// A call id in a `Location`: the last path segment that is one, less any query or fragment.
 #[must_use]
 pub fn call_id_of(location: &str) -> Option<String> {
     location

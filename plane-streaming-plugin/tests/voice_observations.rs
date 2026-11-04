@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Five retained vision observations. Reported matches are observations, not conformance gates.
+//! Streaming lifecycle and governance regression cases through both plugin origins.
 #[path = "support/voice_abi.rs"]
 pub mod voice_abi;
 use busbar_contract::abi::mechanism::call::Outcome;
@@ -56,7 +56,7 @@ fn observation_v1_barge_in_preemption() {
             }
         }
         let matched = ready && frames == [(false, audio), (false, speech)];
-        eprintln!(
+        assert!(matched,
             "OBSERVATION V1-barge-in-preemption dropped={dropped} matched={matched}: caller receives audio/speech_started; gateway authors no cancel; frames={frames:?}"
         );
     }
@@ -99,7 +99,7 @@ fn observation_v2_turn_budget_enforcement() {
             && owed == (Outcome::Ready, vec![110])
             && done == 1
             && said;
-        eprintln!(
+        assert!(matched,
             "OBSERVATION V2-turn-budget-enforcement dropped={dropped} matched={matched}: first={first:?} second={second:?} owed={owed:?} ends={done} frames={frames:?}"
         );
     }
@@ -160,7 +160,8 @@ fn observation_v3_metering_lease_settled() {
                     "re-call Ready units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=1 8:1=1]",
                     "end Ready done=true units=[0:1=10 1:1=20 2:1=3 3:1=4 4:1=1 8:1=1]",
                 ];
-        eprintln!(
+        assert!(
+            matched,
             "OBSERVATION V3-metering-lease-settled dropped={dropped} matched={matched}: {lines:?}"
         );
     }
@@ -193,15 +194,16 @@ fn observation_v4_dialect_downscope() {
             }
         }
         let matched = ready
-            && matches!(frames.as_slice(),[(true,Some(v))] if v["session"]["model"] == "m-cap" && v["session"].get("instructions").is_none() && v["session"]["turn_detection"]["type"] == "semantic_vad");
-        eprintln!(
+            && matches!(frames.as_slice(),[(true,Some(v))] if v["session"]["model"] == "m-cap" && v["session"].get("instructions").is_none() && v["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad" && v["session"].get("turn_detection").is_none());
+        assert!(
+            matched,
             "OBSERVATION V4-dialect-downscope dropped={dropped} matched={matched}: {frames:?}"
         );
     }
 }
 
 #[test]
-fn observation_d2_hard_close_on_exhaustion() {
+fn closed_session_refuses_late_frames_and_renders_budget_refusal() {
     for dropped in [false, true] {
         let d = Dispatcher::new(DispatchConfig::default());
         let p = load(&d, "observe-close", dropped);
@@ -236,8 +238,8 @@ fn observation_d2_hard_close_on_exhaustion() {
             && (late.outcome, late.emitted.len()) == (Outcome::Refused, 0)
             && cut.outcome == Outcome::Ready
             && body["error"]["type"] == "rate_limit_error";
-        eprintln!(
-            "OBSERVATION D2-hard-close-on-exhaustion dropped={dropped} matched={matched}: ends={done} late={late:?} cut={cut:?}"
+        assert!(matched,
+            "closed-session-and-budget-refusal dropped={dropped} matched={matched}: ends={done} late={late:?} cut={cut:?}"
         );
     }
 }

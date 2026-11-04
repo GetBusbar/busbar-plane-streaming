@@ -19,10 +19,10 @@ fn up(src: &Value) -> Vec<(Option<AudioFormat>, usize)> {
     let bytes = src.to_string().into_bytes();
     let top = Lite::read(&bytes).expect("the frame is JSON");
     let mut counted = Vec::new();
-    match GeminiLiveCodec.uplink_audio(&top, &mut |format, len| counted.push((format, len))) {
-        Ok(()) => counted,
-        Err(_) => Vec::new(),
-    }
+    GeminiLiveCodec
+        .uplink_audio(&top, &mut |format, len| counted.push((format, len)))
+        .expect("valid audio");
+    counted
 }
 
 /// Whether the meter refuses a caller frame's audio as audio it cannot meter.
@@ -132,8 +132,12 @@ fn realtime_input_with_both_audio_spellings_is_refused() {
 #[test]
 fn an_undecodable_or_misplaced_gemini_audio_payload_counts_nothing() {
     let blob = json!({ "mimeType": "audio/pcm;rate=16000", "data": b64(b"x") });
-    assert!(up(&json!({ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": "!!!!" } } })).is_empty());
-    assert!(up(&json!({ "realtimeInput": { "audio": blob }, "setup": {} })).is_empty());
+    assert!(refused(
+        &json!({ "realtimeInput": { "audio": { "mimeType": "audio/pcm;rate=16000", "data": "!!!!" } } })
+    ));
+    assert!(refused(
+        &json!({ "realtimeInput": { "audio": blob }, "setup": {} })
+    ));
     assert!(up(&json!({ "realtimeInput": { "audioStreamEnd": true } })).is_empty());
 }
 
@@ -610,24 +614,71 @@ fn proto_usage_duplicate_aliases_are_ordered_and_invalid_selected_counts_floor()
 }
 
 #[test]
-fn downlink_oneof_aliases_select_the_final_message() {
-    for (frame, opened) in [
-        (
-            r#"{"server_content":{},"tool_call":{"function_calls":[{}]}}"#,
-            1,
-        ),
-        (
-            r#"{"toolCall":{"functionCalls":[{}]},"server_content":{}}"#,
-            0,
-        ),
-        (
-            r#"{"tool_call":{"function_calls":[{},{}]},"toolCall":{"functionCalls":[{}]}}"#,
-            1,
-        ),
+fn downlink_distinct_oneof_members_floor_but_aliases_keep_wire_order() {
+    for frame in [
+        r#"{"server_content":{},"tool_call":{"function_calls":[{}]}}"#,
+        r#"{"toolCall":{"functionCalls":[{}]},"server_content":{}}"#,
     ] {
-        assert_eq!(
-            GeminiLiveCodec.meter_down(frame.as_bytes()),
-            vec![Metered::ToolOpen; opened]
+        assert!(
+            matches!(GeminiLiveCodec.meter_down(frame.as_bytes()).as_slice(), [Metered::Usage(u)] if u.floor)
         );
     }
+    assert_eq!(
+        GeminiLiveCodec.meter_down(
+            br#"{"tool_call":{"function_calls":[{},{}]},"toolCall":{"functionCalls":[{}]}}"#
+        ),
+        vec![Metered::ToolOpen]
+    );
+}
+
+#[test]
+fn audit_mime_and_client_content() {
+    for mime in [
+        "audio/pcmu",
+        "audio/pcma",
+        "audio/pcm;rate=8000;rate=24000",
+        "audio/pcm;rate=16000;rate=8000",
+    ] {
+        assert_eq!(audio_format_from_mime(mime), None);
+    }
+    assert_eq!(
+        audio_format_from_mime("audio/pcm;rate=\"16000\""),
+        Some(AudioFormat::Pcm16At16k)
+    );
+    assert_eq!(
+        up(
+            &json!({"clientContent":{"turns":[{"parts":[{"inlineData":{"mimeType":"audio/pcm;rate=16000","data":"AQID"}}]}]}})
+        ),
+        vec![(Some(AudioFormat::Pcm16At16k), 3)]
+    );
+    let cfg = SessionConfig {
+        model: Some("gemini-live".into()),
+        context_window_tokens: Some(32768),
+        max_output_tokens: Some(MaxOutputTokens::Limit(4096)),
+        ..Default::default()
+    };
+    let setup = setup_from_session_config(&cfg);
+    assert_eq!(setup["setup"]["model"], "models/gemini-live");
+    assert_eq!(
+        setup["setup"]["contextWindowCompression"]["triggerTokens"],
+        28672
+    );
+    assert!(
+        matches!(down(&json!({"toolCall":{"functionCalls":[]},"setupComplete":{}})).as_slice(),[Metered::Usage(u)] if u.floor)
+    );
+}
+
+#[test]
+fn audit_billing_parse_skips_payloads_and_bounds_nodes() {
+    let frame = br#"{"serverContent":{"modelTurn":{"parts":[{"inlineData":{"data":"secret audio"}}]}},"usageMetadata":{"promptTokenCount":3}}"#;
+    let value = meter_value(frame).unwrap();
+    assert!(value.get("serverContent").is_none());
+    assert_eq!(value["usageMetadata"]["promptTokenCount"], 3);
+    let frame = format!(
+        "{{\"toolCall\":{{\"functionCalls\":[{}]}}}}",
+        vec!["0"; super::super::peek::MAX_LITE_NODES].join(",")
+    );
+    assert!(
+        matches!(GeminiLiveCodec.meter_down(frame.as_bytes()).as_slice(), [Metered::Usage(u)] if u.floor)
+    );
 }

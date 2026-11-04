@@ -154,7 +154,7 @@ fn to_twilio_media() {
     }
 }
 #[test]
-fn to_twilio_mark() {
+fn audio_done_does_not_send_an_upstream_frame() {
     let dispatcher = Dispatcher::new(DispatchConfig::default());
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-out-mark", dropped);

@@ -23,18 +23,22 @@ each turn governed and metered as busbar meters a request. It speaks three calle
 - `twilio-media-streams`: Twilio Media Streams telephony (`/twilio/{call_id}`), bridged to OpenAI
   Realtime.
 
-It dials the provider (`openai` as OpenAI Realtime, `gemini` as Gemini Live) of the catalog model
-the session names.
+It dials the catalog model the session names. OpenAI Realtime and Twilio doors require an
+OpenAI Realtime provider; the Gemini door requires Gemini Live. When the model's provider protocol
+is present in the handed settings, an incompatible door is refused before dialing.
 
 ## Config
 
-Off unless the deployment writes a `streams:` section. The plane declares `streams:` and reads the
+Off unless the deployment writes a `streams:` section. The deployment also needs an absolute
+`public_url` for the plane to publish its doors; an absent or invalid URL is logged. The plane declares `streams:` and reads the
 `providers:` and `models:` sections beside it (the session model's provider and wire model); it
 owns no other section.
 
-- `session`: the locked session every live session opens with (the GA realtime `session` object:
+- `session`: the locked session every live session opens with (the plane's flat session configuration:
   model, modalities, instructions, voice, audio formats, `turn_detection`, tools, `tool_choice`).
-  Default: server VAD, 500 ms of silence. A key the plane does not model is refused, naming its path.
+  The plane translates these keys into each provider's wire format; OpenAI GA audio settings
+  become nested `audio.input`/`audio.output` objects. Default: server VAD, 500 ms of silence,
+  including a written session that omits `turn_detection`; explicit `null` disables VAD. A key the plane does not model is refused, naming its path.
 - `session_max_secs`: the wall-clock ceiling of one session, in seconds. Default: none. Zero is
   refused.
 - `context_window_tokens`: the context-window ceiling. Default 32768.
@@ -42,6 +46,18 @@ owns no other section.
   `context_window_tokens`.
 - `media.listen`: the `ip:port` the browser's WebRTC media arrives on. Default: none, and the SDP
   door refuses every offer.
+
+Caller updates cannot replace locked instructions, tools, voice, modality, tool choice, or
+ceilings. Input transcription is refused by removing its configuration because the plane does not
+meter the separate transcription model. Unsupported or malformed uplink audio is dropped with a
+bounded diagnostic. OpenAI response limits are clamped to its supported range, 1–4096 tokens.
+
+A session retains the configuration used for its admission across refreshes. A sideband inherits
+its brokered call's lock and does not bill mirrored provider usage again. Sideband projection exposes
+no new session parameters and cannot rewrite the existing call; ownership is checked when attaching.
+Audio injected directly
+on the sideband still contributes ingress seconds. Capacity limits refuse new calls without
+evicting live calls.
 
 ## Diagnostics
 

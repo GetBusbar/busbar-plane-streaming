@@ -323,7 +323,9 @@ fn a_barge_in_bills_what_the_interrupted_turn_served_on_the_turn_that_takes_over
     assert_eq!((closed.audio_ms_in, closed.tool_calls), (1_000, 1));
 }
 
-/// A caller frame that is not JSON goes nowhere and counts nothing: the lock is judged on what the
+/// A caller frame that is not JSON goes nowhere and counts nothing: the lock is judged on what
+/// the reader reads, and bytes it cannot read never reach a far end that might read them
+/// otherwise.
 #[test]
 fn a_caller_frame_that_is_not_json_goes_nowhere_and_counts_nothing() {
     let mut p = pump();

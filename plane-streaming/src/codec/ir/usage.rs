@@ -26,7 +26,7 @@ pub struct IrDuplexUsage {
     /// Video input tokens consumed this turn (Gemini's VIDEO modality entries): a class of their
     /// own, priced on their own.
     pub video_in: u64,
-    /// Cached tokens billed at the cache rate this turn.
+    /// Cached input attribution; already included in input classes and not billed separately.
     pub cached: u64,
     /// The far end's report could not be read: these counts are the plane's FLOOR over the report's
     /// bytes, never the far end's own (the llm plane's floor).

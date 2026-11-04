@@ -5,7 +5,9 @@
 
 use super::*;
 
-/// An empty `streams: {}` decodes to exactly [`StreamsCfg::default`]: the hand-written `Default`
+/// An empty `streams: {}` decodes to exactly [`StreamsCfg::default`]: the hand-written
+/// `Default` and the serde field defaults agree, so an omitted section and an empty one are the
+/// same posture.
 #[test]
 fn an_empty_section_decodes_to_the_default() {
     let empty: StreamsCfg = serde_json::from_str("{}").expect("an empty section parses");
@@ -43,7 +45,9 @@ fn an_unknown_key_inside_the_locked_session_is_refused_with_its_path() {
     assert_eq!(ok.session.instructions.as_deref(), Some("be terse"));
 }
 
-/// The strict key lists name exactly the members the session object serializes: a field added to
+/// The strict key lists name exactly the members the session object serializes: a field added
+/// to [`SessionConfig`] or [`IrVad`] must be added to them (each literal below names every
+/// field, so a new one fails to compile here first).
 #[test]
 fn the_strict_key_lists_are_the_session_objects_own_members() {
     use crate::codec::ir::config::Eagerness;
@@ -165,4 +169,15 @@ fn the_locked_sessions_modalities_name_one_of_audio_or_text() {
     ] {
         assert!(serde_json::from_str::<StreamsCfg>(blob).is_ok(), "{blob}");
     }
+}
+
+#[test]
+fn audit_partial_session_keeps_default_vad_but_explicit_null_disables_it() {
+    let cfg: StreamsCfg = serde_json::from_str(r#"{"session":{"model":"realtime"}}"#).unwrap();
+    assert_eq!(
+        cfg.session.turn_detection,
+        StreamsCfg::default().session.turn_detection
+    );
+    let cfg: StreamsCfg = serde_json::from_str(r#"{"session":{"turn_detection":null}}"#).unwrap();
+    assert_eq!(cfg.session.turn_detection, Some(None));
 }

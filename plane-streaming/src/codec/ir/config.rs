@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! The GA `session` config object: the typed shape carried by `session.update` (client→server) and
+//! Flat, dialect-neutral session configuration, translated to GA wire objects by `ga_session`.
 
 use crate::codec::ir::media::AudioFormat;
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Deserialize a PRESENT key into `Some(_)`, so an `Option<Option<T>>` field can tell an absent key
+/// Deserialize a PRESENT key into `Some(_)`, so an `Option<Option<T>>` field can tell an absent key from an explicit null.
 fn deserialize_some<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
     d: D,
 ) -> Result<Option<T>, D::Error> {
@@ -22,6 +22,24 @@ pub enum MaxOutputTokens {
     Limit(u32),
     /// The `"inf"` sentinel — no plane-imposed ceiling.
     Inf,
+}
+
+/// The most output tokens OpenAI Realtime's GA socket takes for one response (`1` to `4096`, or
+/// `"inf"`): a higher figure is refused there, with every other key of the update it rides in.
+pub const REALTIME_MAX_OUTPUT_TOKENS: u32 = 4096;
+
+impl MaxOutputTokens {
+    /// The ceiling as OpenAI Realtime takes it: a limit within `1..=`[`REALTIME_MAX_OUTPUT_TOKENS`]
+    /// (a higher one is told as the socket's own maximum, never sent as a refused figure).
+    #[must_use]
+    pub fn realtime(self) -> Self {
+        match self {
+            MaxOutputTokens::Limit(n) => {
+                MaxOutputTokens::Limit(n.clamp(1, REALTIME_MAX_OUTPUT_TOKENS))
+            }
+            MaxOutputTokens::Inf => MaxOutputTokens::Inf,
+        }
+    }
 }
 
 impl Serialize for MaxOutputTokens {
@@ -50,7 +68,7 @@ impl<'de> Deserialize<'de> for MaxOutputTokens {
     }
 }
 
-/// serde glue for the optional negotiated audio formats — the enum carries its own dialect tokens
+/// serde glue for the optional negotiated audio formats — the enum carries its own dialect tokens for serialization.
 mod opt_audio_fmt {
     use super::AudioFormat;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -78,7 +96,7 @@ mod opt_audio_fmt {
     }
 }
 
-/// The GA `session` config object. Every field is optional on the wire (a partial
+/// Flat session configuration IR. Every field is optional (a partial
 /// `session.update` patches only what it names), so absent keys decode to `None`/empty and are
 /// omitted on re-encode — keeping a partial patch JSON-stable. `turn_detection` is the ONE field with
 /// THREE wire states rather than two, because GA gives `null` its own meaning: see the field.
@@ -157,7 +175,7 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
-    /// The locked session in the GA `session` shape, the shape the GA `/v1/realtime` socket reads
+    /// The locked session in the GA `session` shape, the shape the GA `/v1/realtime` socket reads on session updates.
     #[must_use]
     pub fn ga_session(&self) -> serde_json::Map<String, serde_json::Value> {
         use serde_json::{json, Map, Value};
@@ -205,14 +223,15 @@ impl SessionConfig {
         if let Some(choice) = &self.tool_choice {
             s.insert("tool_choice".into(), choice.clone());
         }
-        if let Some(max) = self.max_output_tokens {
+        let max_output = self.max_output_tokens.map(MaxOutputTokens::realtime);
+        if let Some(max) = max_output {
             s.insert(
                 "max_output_tokens".into(),
                 serde_json::to_value(max).unwrap_or(Value::Null),
             );
         }
         if let Some(limit) = self.context_window_tokens {
-            let out = match self.max_output_tokens {
+            let out = match max_output {
                 Some(MaxOutputTokens::Limit(n)) => n,
                 _ => 0,
             };
@@ -250,12 +269,16 @@ fn default_threshold() -> f32 {
 fn default_prefix_padding_ms() -> u32 {
     300
 }
-/// OpenAI's published default (the openai-openapi spec, `turn_detection.silence_duration_ms`:
+/// OpenAI's default trailing-silence window: 500 milliseconds.
 fn default_silence_duration_ms() -> u32 {
     500
 }
 fn default_true() -> bool {
     true
+}
+/// GA's default `semantic_vad` eagerness.
+fn default_eagerness() -> Eagerness {
+    Eagerness::Auto
 }
 
 /// VOICE-ACTIVITY-DETECTION config — the plane's neutral VAD surface. Its serde shape IS the GA
@@ -285,7 +308,12 @@ pub enum IrVad {
     },
     /// Semantic (model-judged) end-of-turn detection with an eagerness knob.
     SemanticVad {
-        /// How eagerly the model closes a turn.
+        /// How eagerly the model closes a turn; GA's default, `auto`, where none is written.
+        #[serde(default = "default_eagerness")]
         eagerness: Eagerness,
     },
 }
+
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod tests;

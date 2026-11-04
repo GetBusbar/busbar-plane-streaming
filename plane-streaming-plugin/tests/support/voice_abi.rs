@@ -282,7 +282,7 @@ pub fn refusal(
     refusal_for(p, unit, dialect, 0, status, words)
 }
 
-/// The kernel refuses unit `unit` on `dialect` for `reason` (its code on the plane ABI) with
+/// Render the kernel refusal for `unit` on `dialect`, using its ABI reason, status and words.
 pub fn refusal_for(
     p: &Plugin<Plane>,
     unit: u64,

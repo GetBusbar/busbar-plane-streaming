@@ -255,3 +255,52 @@ fn a_second_start_does_not_rebind_the_calls_stream() {
         "the stream the call started still is"
     );
 }
+
+#[test]
+fn audit_carrier_diagnostics_escape_and_bound_input() {
+    let error = TwilioError::FormatMismatch {
+        encoding: format!("bad\n{}", "x".repeat(1000)),
+        sample_rate: 1,
+        channels: 1,
+    };
+    let text = error.to_string();
+    assert!(!text.contains('\n'));
+    assert!(text.contains("\\n"));
+    assert!(text.len() < 200);
+}
+
+#[test]
+fn audit_bridge_preserves_base64_without_decode_encode() {
+    use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
+    let mut bridge = TwilioBridge::default();
+    bridge.from_caller(br#"{"event":"start","start":{"streamSid":"MZ1","mediaFormat":{"encoding":"audio/x-mulaw","sampleRate":8000,"channels":1}}}"#);
+    let CallerStep::Audio(wire) =
+        bridge.from_caller(br#"{"event":"media","streamSid":"MZ1","media":{"payload":"AQID"}}"#)
+    else {
+        panic!("audio");
+    };
+    let value: serde_json::Value = serde_json::from_slice(&wire.0).unwrap();
+    assert_eq!(value["audio"], "AQID");
+    let wire = bridge
+        .to_caller(br#"{"type":"response.output_audio.delta","delta":"AQID"}"#)
+        .unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&wire).unwrap();
+    assert_eq!(value["media"]["payload"], "AQID");
+    assert!(bridge
+        .to_caller(br#"{"type":"response.output_audio.delta","delta":"!"}"#)
+        .is_none());
+}
+
+#[test]
+fn audit_twilio_owned_decode_and_item_paths_enforce_node_budget() {
+    use crate::codec::ir::codec::peek::MAX_LITE_NODES;
+    use crate::codec::topology::twilio::{CallerStep, TwilioBridge};
+    let padding = vec![0; MAX_LITE_NODES];
+    let start = serde_json::to_vec(&serde_json::json!({"event":"start","padding":padding,"start":{"streamSid":"MZ1","mediaFormat":{"encoding":"audio/x-mulaw","sampleRate":8000,"channels":1}}})).unwrap();
+    assert!(TwilioEnvelope::decode(&start).is_err());
+    let mut bridge = TwilioBridge::default();
+    assert!(matches!(bridge.from_caller(&start), CallerStep::Refused));
+    assert!(!bridge.started());
+    let item = serde_json::to_vec(&serde_json::json!({"type":"response.output_item.added","item":{"type":"function_call"},"padding":padding})).unwrap();
+    assert!(bridge.to_caller(&item).is_none());
+}

@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! Tests for `crates/busbar-plane-streaming/src/splice.rs`: only the governed object is rebuilt,
+//! Tests for `crates/busbar-plane-streaming/src/splice.rs`: only the governed object is
+//! rebuilt, the caller's members keep their bytes, keys are read as the far end reads them.
 
 use super::*;
 
 fn rule(set: serde_json::Value) -> Rule {
     Rule {
         at: "session",
-        cut: &["instructions", "tools"],
+        cut: vec!["instructions", "tools"],
+        cut_under: Vec::new(),
         set: match set {
             Value::Object(m) => m,
             _ => Map::new(),
@@ -47,7 +49,7 @@ fn an_escaped_or_repeated_key_is_cut_as_the_far_end_reads_it() {
 }
 
 #[test]
-fn a_locked_object_is_merged_into_the_callers_member_by_member() {
+fn a_locked_tagged_union_replaces_the_callers_variant() {
     let frame =
         br#"{"session":{"turn_detection":{"type":"server_vad","threshold":0.9,"extra":true}}}"#;
     let out = splice(
@@ -56,8 +58,8 @@ fn a_locked_object_is_merged_into_the_callers_member_by_member() {
     )
     .expect("spliced");
     let v: Value = serde_json::from_slice(&out).expect("json");
-    assert_eq!(v["session"]["turn_detection"]["type"], "server_vad");
-    assert_eq!(v["session"]["turn_detection"]["extra"], true);
+    assert!(v["session"]["turn_detection"].get("type").is_none());
+    assert!(v["session"]["turn_detection"].get("extra").is_none());
     assert_eq!(v["session"]["turn_detection"]["threshold"], 0.5);
 }
 
@@ -111,7 +113,8 @@ fn a_callers_response_cap_above_the_ceiling_is_lowered_to_it() {
     );
 }
 
-/// A caller's lower `max_output_tokens` stands: the effective value is the lower of the two, and
+/// A caller's lower `max_output_tokens` stands: the effective value is the lower of the two,
+/// and the caller's other members keep their bytes.
 #[test]
 fn a_callers_response_cap_below_the_ceiling_stands() {
     let frame =
@@ -269,4 +272,61 @@ fn the_ceiling_error_event_states_its_error_type() {
     assert_eq!(v["type"], "error");
     assert_eq!(v["error"]["type"], "invalid_request_error", "{v}");
     assert_eq!(v["error"]["code"], "session_expired");
+}
+
+#[test]
+fn audit_response_cannot_override_locked_voice_modality_or_tool_choice() {
+    let locked = SessionConfig {
+        voice: Some("alloy".into()),
+        modalities: vec!["text".into()],
+        tool_choice: Some(serde_json::json!("none")),
+        output_audio_format: Some(AudioFormat::G711Ulaw),
+        max_output_tokens: Some(MaxOutputTokens::Limit(99)),
+        ..SessionConfig::default()
+    };
+    let rule = OpenAiRealtimeCodec.response_rule(&locked).unwrap();
+    let frame = br#"{"type":"response.create","response":{"voice":"verse","modalities":["audio"],"output_modalities":["audio"],"tool_choice":"required","audio":{"output":{"voice":"verse","format":{"type":"audio/pcm","rate":24000}}},"max_output_tokens":999}}"#;
+    let out = splice(frame, &rule).unwrap();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    let response = &value["response"];
+    assert!(response.get("voice").is_none());
+    assert!(response.get("modalities").is_none());
+    assert_eq!(response["audio"]["output"]["voice"], "alloy");
+    assert_eq!(response["audio"]["output"]["format"]["type"], "audio/pcmu");
+    assert_eq!(response["output_modalities"], serde_json::json!(["text"]));
+    assert_eq!(response["tool_choice"], "none");
+    assert_eq!(response["max_output_tokens"], 99);
+}
+
+#[test]
+fn audit_transcription_is_removed_even_without_an_explicit_audio_lock() {
+    let rule = OpenAiRealtimeCodec.configure_rule(&SessionConfig::default());
+    let frame = br#"{"session":{"input_audio_transcription":{"model":"transcribe"},"audio":{"input":{"transcription":{"model":"transcribe"},"noise_reduction":{"type":"near_field"}}}}}"#;
+    let out = splice(frame, &rule).unwrap();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert!(value["session"].get("input_audio_transcription").is_none());
+    assert!(value["session"]["audio"]["input"]
+        .get("transcription")
+        .is_none());
+    assert_eq!(
+        value["session"]["audio"]["input"]["noise_reduction"]["type"],
+        "near_field"
+    );
+}
+
+#[test]
+fn audit_tagged_vad_union_does_not_keep_the_callers_other_variant_fields() {
+    let locked = SessionConfig {
+        turn_detection: Some(Some(crate::codec::ir::config::IrVad::SemanticVad {
+            eagerness: crate::codec::ir::config::Eagerness::Auto,
+        })),
+        ..SessionConfig::default()
+    };
+    let rule = OpenAiRealtimeCodec.configure_rule(&locked);
+    let out = splice(br#"{"session":{"turn_detection":{"type":"server_vad"},"audio":{"input":{"turn_detection":{"type":"server_vad","threshold":0.9}}}}}"#, &rule).unwrap();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert!(value["session"].get("turn_detection").is_none());
+    let vad = &value["session"]["audio"]["input"]["turn_detection"];
+    assert_eq!(vad["type"], "semantic_vad");
+    assert!(vad.get("threshold").is_none());
 }

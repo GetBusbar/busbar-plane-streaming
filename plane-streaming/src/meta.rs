@@ -22,17 +22,15 @@ pub const CLASS_TEXT_TOKENS_IN: MeterClassId = MeterClassId::new("text_tokens_in
 /// The class key the text a turn EMITTED is counted under.
 pub const CLASS_TEXT_TOKENS_OUT: MeterClassId = MeterClassId::new("text_tokens_out");
 
-/// The key that names a cache-read token count: NOT a billable class (it is a subset of the input
-#[cfg(test)]
-pub const CLASS_CACHED_TOKENS: MeterClassId = MeterClassId::new("cached_tokens");
-
 /// The class key the seconds of inbound audio a turn consumed are counted under.
 pub const CLASS_AUDIO_SECONDS_IN: MeterClassId = MeterClassId::new("audio_seconds_in");
 
 /// The class key the image input tokens of a turn are counted under (OpenAI Realtime's
+/// `input_token_details.image_tokens`, Gemini Live's IMAGE modality entries).
 pub const CLASS_IMAGE_TOKENS_IN: MeterClassId = MeterClassId::new("image_tokens_in");
 
-/// The class key the video input tokens of a turn are counted under (Gemini Live's VIDEO modality
+/// The class key the video input tokens of a turn are counted under (Gemini Live's VIDEO
+/// modality entries).
 pub const CLASS_VIDEO_TOKENS_IN: MeterClassId = MeterClassId::new("video_tokens_in");
 
 /// The class key a tool call is counted under.

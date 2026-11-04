@@ -29,7 +29,7 @@ pub struct Outbound {
     pub usage_unreadable: bool,
 }
 
-/// Where a closed turn goes: its usage and its counters. The answer is whether the session may
+/// Where a closed turn goes: its usage and its counters.
 pub trait TurnSink {
     /// One turn closed.
     fn turn_closed(&mut self, usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> bool;
@@ -49,6 +49,8 @@ pub struct SessionPump<C> {
     rules: Vec<Rule>,
     /// Whether the session already said, once, that it refused a caller's audio it cannot meter.
     told_unmeterable: bool,
+    /// Whether the session already said, once, that it did not relay a caller's frame.
+    told_dropped: bool,
 }
 
 impl<C> SessionPump<C>
@@ -74,10 +76,12 @@ where
             locked_config,
             audio_in,
             told_unmeterable: false,
+            told_dropped: false,
         }
     }
 
-    /// The error frame a session past its `ceiling_secs` ceiling is told before it closes, in its
+    /// The error frame a session past its `ceiling_secs` ceiling is told before it closes, in
+    /// its dialect; `None` when the dialect has no place to say so.
     pub fn ceiling_error(&mut self, ceiling_secs: u64) -> Option<WireEvent> {
         self.codec
             .ceiling_frame(
@@ -90,12 +94,14 @@ where
     }
 
     /// The locked session as a frame that configures the far end, in the shape its socket reads
+    /// ([`LockedKeys::locked_frame`]): what a caller-side envelope that configures nothing
+    /// itself (the telephony carrier) is translated into.
     pub fn locked_update(&mut self) -> Option<WireEvent> {
         let frame = self.codec.locked_frame(self.locked_config.as_ref()?)?;
         Some(WireEvent(frame.into()))
     }
 
-    /// A frame from the far end. It reaches the caller as the far end sent it: a tool call is part
+    /// A frame from the far end.
     pub fn on_server_frame(&mut self, frame: WireEvent, sink: &mut dyn TurnSink) -> Outbound {
         let mut out = Outbound::default();
         if frame.0.is_empty() {
@@ -115,35 +121,39 @@ where
         out
     }
 
-    /// A FRAME FROM THE CALLER. It reaches the far end as the caller sent it; uplink audio is
+    /// A FRAME FROM THE CALLER.
     pub fn on_client_frame(&mut self, frame: WireEvent) -> Outbound {
         let mut out = Outbound::default();
 
         let mut switch = None;
 
-        let read = Lite::read(&frame.0);
-        let plain = read
-            .as_ref()
-            .and_then(Lite::keys)
-            .is_some_and(|mut keys| !keys.any(|k| C::GOVERNED.contains(&k)));
+        // A frame the meter cannot read (not JSON, or more values than it reads) is never
+        // relayed: whatever audio it carries could not be counted.
+        let Some(read) = Lite::read(&frame.0) else {
+            self.dropped("it is not a JSON frame the meter reads");
+            return out;
+        };
+        let plain =
+            Lite::keys(&read).is_some_and(|mut keys| !keys.any(|k| C::GOVERNED.contains(&k)));
         if !plain {
-            if read.is_none() && serde_json::from_slice::<serde::de::IgnoredAny>(&frame.0).is_err()
-            {
-                return out;
-            }
             let locked_format = self
                 .locked_config
                 .as_ref()
                 .and_then(|c| c.input_audio_format);
             let Ok(named) = self.codec.uplink_format(&frame.0) else {
+                self.dropped("it names an uplink audio format the plane cannot meter");
                 return out;
             };
             match (locked_format, named) {
-                (Some(locked), Some(named)) if locked != named => return out,
+                (Some(locked), Some(named)) if locked != named => {
+                    self.dropped("it names an uplink audio format other than the locked one");
+                    return out;
+                }
                 (None, Some(named)) => switch = Some(named),
                 _ => {}
             }
             if self.locked_config.is_some() && self.codec.authors_instructions(&frame.0) {
+                self.dropped("it authors an instruction the locked session holds");
                 return out;
             }
         }
@@ -154,7 +164,10 @@ where
             for rule in &self.rules {
                 match splice(&bytes, rule) {
                     Some(edited) => bytes = Cow::Owned(edited),
-                    None => return out,
+                    None => {
+                        self.dropped("its governed object cannot be read as one JSON object");
+                        return out;
+                    }
                 }
             }
 
@@ -164,29 +177,30 @@ where
             }
         }
 
-        if let Some(top) = &read {
-            if self.codec.uplink_audio(top, &mut |_, _| {}).is_err() {
-                if !std::mem::replace(&mut self.told_unmeterable, true) {
-                    tracing::warn!(
-                        "a caller frame carries audio the streaming plane cannot meter (a format \
-                         other than the PCM rates it counts, or data that does not decode); the \
-                         frame is not relayed, and nor is any like it on this session"
-                    );
-                }
-                return out;
+        // One read of the frame's audio: counted only once all of it is known to be countable.
+        let mut counted = self.turn;
+        let audio_in = switch.unwrap_or(self.audio_in);
+        if self
+            .codec
+            .uplink_audio(&read, &mut |format, len| {
+                counted.admit_audio(format.unwrap_or(audio_in), len)
+            })
+            .is_err()
+        {
+            if !std::mem::replace(&mut self.told_unmeterable, true) {
+                tracing::warn!(
+                    "a caller frame carries audio the streaming plane cannot meter (a format \
+                     other than the PCM rates it counts, or data that does not decode); the \
+                     frame is not relayed, and nor is any like it on this session"
+                );
             }
+            return out;
         }
 
         if let Some(named) = switch {
             self.audio_in = named;
         }
-        if let Some(top) = &read {
-            let (turn, audio_in) = (&mut self.turn, self.audio_in);
-
-            let _ = self.codec.uplink_audio(top, &mut |format, len| {
-                turn.admit_audio(format.unwrap_or(audio_in), len);
-            });
-        }
+        self.turn = counted;
         out.upstream.push(match spliced {
             Some(bytes) => WireEvent(bytes.into()),
             None => frame,
@@ -194,7 +208,18 @@ where
         out
     }
 
-    /// Close the open turn: its usage and counters go to `sink`; a sink that refuses to continue
+    /// A caller frame is not relayed because `why`: said once per session (a caller cannot fill
+    /// the log), the frame dropped.
+    fn dropped(&mut self, why: &str) {
+        if !std::mem::replace(&mut self.told_dropped, true) {
+            tracing::warn!(
+                "a caller frame is not relayed: {why}; no later frame this session drops is said"
+            );
+        }
+    }
+
+    /// Close the open turn: its usage and counters go to `sink`; a sink that refuses to
+    /// continue closes the session.
     fn settle_turn(
         &mut self,
         sink: &mut dyn TurnSink,
@@ -213,7 +238,7 @@ where
         self.turn
     }
 
-    /// The session ends with a turn open: the turn's counters settle, once. A turn with nothing
+    /// The session ends with a turn open: the turn's counters settle, once.
     pub fn settle_open_turn(&mut self, sink: &mut dyn TurnSink) {
         if self.turn.is_empty() {
             return;

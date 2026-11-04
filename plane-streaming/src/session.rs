@@ -1,4 +1,5 @@
 //! The plane's per-turn bookkeeping: the counters a turn keeps that no usage report carries, and a
+//! closed turn's counts per declared class.
 
 use crate::codec::ir::{AudioFormat, IrDuplexUsage};
 use busbar_contract::ids::MeterClassId;
@@ -41,7 +42,8 @@ pub struct TurnCounters {
     audio_seconds_before: u64,
 }
 
-/// The ticks a millisecond of audio divides into: the least common multiple of every format's bytes
+/// The ticks a millisecond of audio divides into: the least common multiple of every format's
+/// bytes per millisecond (48, 32 and 8), so one byte of any format is a whole number of ticks.
 const TICKS_PER_MS: u64 = 96;
 
 const _: () = {
@@ -52,6 +54,7 @@ const _: () = {
 
 impl TurnCounters {
     /// Count `bytes` of admitted uplink audio, read under `format`. The part of a millisecond the
+    /// bytes leave over is carried onto the next frame, never floored away.
     pub fn admit_audio(&mut self, format: AudioFormat, bytes: usize) {
         let ticks = (bytes as u64).saturating_mul(TICKS_PER_MS / format.bytes_per_ms());
         let total = self.audio_ticks_rem.saturating_add(ticks);
@@ -72,7 +75,9 @@ impl TurnCounters {
             && self.tool_calls == 0
     }
 
-    /// Close the turn: answer its counters as they stood, and leave in their place the next turn's,
+    /// Close the turn: answer its counters as they stood, and leave in their place the next
+    /// turn's, zero apart from the session's carried audio position (the settled milliseconds
+    /// now include this turn's, and the sub-millisecond remainder rides on).
     pub fn close(&mut self) -> TurnCounters {
         let closed = *self;
         *self = TurnCounters {
@@ -85,7 +90,10 @@ impl TurnCounters {
         closed
     }
 
-    /// The `audio_seconds_in` this turn bills: the session's cumulative seconds after it less the
+    /// The `audio_seconds_in` this turn bills: the session's cumulative seconds after it less
+    /// the cumulative seconds before it, each converted through [`meta::audio_seconds_in`] — so
+    /// a session's turns sum to its exact admitted duration rounded up once, including
+    /// fractions.
     #[must_use]
     pub fn audio_seconds_in(&self) -> u64 {
         self.cumulative_audio_seconds()
@@ -101,77 +109,37 @@ impl TurnCounters {
     }
 }
 
-/// A CLOSED TURN'S RAW COUNTS PER DECLARED CLASS — the lines this plane's `meter` emits for a turn
+/// A CLOSED TURN'S RAW COUNTS PER DECLARED CLASS — the lines this plane's `meter` emits for a
+/// turn whose answer reported `usage` (`None` for an ending that reported none: an upstream
+/// error, a carrier stop, a session torn down mid-turn) and whose own bookkeeping is
+/// `counters`.
 #[must_use]
 pub fn class_counts(
     usage: Option<&IrDuplexUsage>,
     counters: TurnCounters,
 ) -> Vec<(MeterClassId, u64)> {
-    let reported = usage.copied().unwrap_or_default();
+    crate::session_unit::CLASSES
+        .into_iter()
+        .zip(class_amounts(usage, counters))
+        .filter(|(_, n)| *n != 0)
+        .collect()
+}
 
+/// Counts in the one declared class order, without allocating an intermediate vector.
+pub fn class_amounts(usage: Option<&IrDuplexUsage>, counters: TurnCounters) -> [u64; 8] {
+    let reported = usage.copied().unwrap_or_default();
     [
-        (meta::CLASS_AUDIO_TOKENS_IN, reported.audio_in),
-        (meta::CLASS_AUDIO_TOKENS_OUT, reported.audio_out),
-        (meta::CLASS_TEXT_TOKENS_IN, reported.text_in),
-        (meta::CLASS_TEXT_TOKENS_OUT, reported.text_out),
-        (meta::CLASS_AUDIO_SECONDS_IN, counters.audio_seconds_in()),
-        (meta::CLASS_TOOL_CALLS, counters.tool_calls),
-        (meta::CLASS_IMAGE_TOKENS_IN, reported.image_in),
-        (meta::CLASS_VIDEO_TOKENS_IN, reported.video_in),
+        reported.audio_in,
+        reported.audio_out,
+        reported.text_in,
+        reported.text_out,
+        counters.audio_seconds_in(),
+        counters.tool_calls,
+        reported.image_in,
+        reported.video_in,
     ]
-    .into_iter()
-    .filter(|(_, n)| *n != 0)
-    .collect()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fractional_audio_is_nonempty_and_rounded_once_across_turns() {
-        let mut counters = TurnCounters::default();
-        counters.admit_audio(AudioFormat::Pcm16, 2);
-        assert!(!counters.is_empty());
-        assert_eq!(counters.audio_seconds_in(), 1);
-        assert_eq!(counters.close().audio_seconds_in(), 1);
-        assert!(
-            counters.is_empty(),
-            "a carried remainder is not a second admission"
-        );
-        assert_eq!(counters.audio_seconds_in(), 0);
-        counters.admit_audio(AudioFormat::Pcm16, 47_998);
-        assert_eq!(
-            counters.close().audio_seconds_in(),
-            0,
-            "the first exact second is already settled"
-        );
-        counters.admit_audio(AudioFormat::Pcm16At16k, 2);
-        assert_eq!(
-            counters.close().audio_seconds_in(),
-            1,
-            "a sample after an exact second enters the next one"
-        );
-        assert!(counters.is_empty());
-        assert_eq!(
-            counters.close().audio_seconds_in(),
-            0,
-            "close is idempotent"
-        );
-    }
-
-    #[test]
-    fn fractional_audio_after_one_second_survives_frame_splitting() {
-        for parts in [vec![48_002], vec![48_000, 2], vec![2; 24_001]] {
-            let mut counters = TurnCounters::default();
-            for bytes in parts {
-                counters.admit_audio(AudioFormat::Pcm16, bytes);
-            }
-            assert_eq!(counters.audio_seconds_in(), 2);
-            assert_eq!(
-                class_counts(None, counters),
-                vec![(meta::CLASS_AUDIO_SECONDS_IN, 2)]
-            );
-        }
-    }
-}
+#[path = "tests/session_tests.rs"]
+mod tests;

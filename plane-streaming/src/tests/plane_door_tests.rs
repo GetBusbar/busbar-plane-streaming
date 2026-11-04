@@ -1,9 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! Tests for `plane-streaming/src/plane_door.rs`: the P-item pins the door holds (spec
+//! Tests for `plane-streaming/src/plane_door.rs`: the P-item pins the door holds (spec DONE
+//! item 2, "All P-item behaviours match 1.5.5"), each written against the door as it serves.
 
 use super::*;
+
+impl Brokered {
+    fn owns(&mut self, call: &str, caller: &str, now_ms: u64) -> bool {
+        self.expire(now_ms);
+        self.owners.get(call).is_some_and(|row| row.owner == caller)
+    }
+
+    fn upstream_of(&mut self, call: &str, caller: &str, now_ms: u64) -> Option<String> {
+        self.attach(call, caller, now_ms)
+            .map(|(upstream, _)| upstream)
+    }
+}
 
 /// The Statement's version is the crate's, as each sibling plane's literal is pinned to its own.
 #[test]
@@ -118,7 +131,7 @@ fn p_item_refusal_reason_collapse_only_the_kernels_class_picks_the_answer_and_no
                 .expect("the error names its type");
             assert_eq!(
                 kind == "server_error",
-                status >= 500,
+                status >= 500 && class != RefusalClass::QuotaExhausted,
                 "{code:?} (class {class:?}) at {status} renders {kind:?}"
             );
             let (message, error_code) = if class == RefusalClass::Unauthenticated {
@@ -126,6 +139,9 @@ fn p_item_refusal_reason_collapse_only_the_kernels_class_picks_the_answer_and_no
                     AUTH_FAILURE_MESSAGE,
                     serde_json::Value::from(AUTH_FAILURE_CODE),
                 )
+            } else if class == RefusalClass::QuotaExhausted {
+                assert_eq!(kind, QUOTA_EXHAUSTED_TYPE);
+                (WORDS, serde_json::Value::from(QUOTA_EXHAUSTED_TYPE))
             } else {
                 (WORDS, serde_json::Value::Null)
             };
@@ -142,7 +158,9 @@ fn p_item_refusal_reason_collapse_only_the_kernels_class_picks_the_answer_and_no
     }
 }
 
-/// (Moved from `plane-streaming-plugin/tests/both_ways.rs`, which reaches only the door.)
+/// (Moved from `plane-streaming-plugin/tests/both_ways.rs`, which reaches only the door.) A
+/// refused open (a hook's veto, an admission's refusal) is answered in the dialects' error
+/// shape: the kernel's status read as the error's type, its words as the message.
 #[test]
 fn a_refusal_is_rendered_in_the_dialects_error_shape() {
     for (status, kind) in [
@@ -161,6 +179,8 @@ fn a_refusal_is_rendered_in_the_dialects_error_shape() {
 }
 
 /// The vendor's own words for a bad or missing credential (moved from the cdylib crate's
+/// `both_ways.rs`, whose `an_authentication_refusal_reads_in_the_dialects_vendor_terms` drives
+/// the door against these same words).
 #[test]
 fn the_bad_key_answer_is_the_vendors_own_copy() {
     assert_eq!(AUTH_FAILURE_MESSAGE, "Incorrect API key provided.");
@@ -172,11 +192,12 @@ fn held_mint() -> Held {
     Held {
         unit: RequestUnit::open(
             Door::Mint,
-            crate::codec::ir::config::SessionConfig::default(),
+            Arc::new(crate::codec::ir::config::SessionConfig::default()),
         )
         .expect("a one-request door"),
         owed: Owed::default(),
         short: None,
+        tickets: Vec::new(),
     }
 }
 
@@ -220,6 +241,7 @@ fn plane() -> Plane {
         sessions: Mutex::new(Sessions::default()),
         wake: None,
         driver: Mutex::new((Ticket::NONE, 0)),
+        arrived: Mutex::new(HashMap::new()),
     }
 }
 
@@ -339,30 +361,19 @@ fn another_callers_offers_never_drop_a_live_call() {
     let mut brokered = Brokered::default();
     assert!(brokered.admits(0));
     brokered.record("rtc_a".to_string(), "tenant-a".to_string(), 0);
-    for i in 0..MAX_BROKERED_CALLS {
-        assert!(brokered.admits(0), "offer {i} proceeds");
-        brokered.record(format!("rtc_b{i}"), "tenant-b".to_string(), 0);
+    for i in 0..MAX_CALLS_PER_CALLER {
+        assert!(brokered.record(format!("rtc_b{i}"), "tenant-b".to_string(), 0));
     }
-    assert!(
-        brokered.owns("rtc_a", "tenant-a", 0),
-        "tenant A's live call is kept"
-    );
-    assert_eq!(
-        brokered.per_caller["tenant-b"].len(),
-        MAX_CALLS_PER_CALLER,
-        "tenant B holds its own allowance"
-    );
-    let newest = format!("rtc_b{}", MAX_BROKERED_CALLS - 1);
-    assert!(
-        brokered.owns(&newest, "tenant-b", 0),
-        "B's newest call is kept"
-    );
+    assert!(!brokered.record("rtc_late".into(), "tenant-b".into(), 0));
+    assert!(brokered.owns("rtc_a", "tenant-a", 0));
+    assert!(brokered.owns("rtc_b0", "tenant-b", 0));
+    assert_eq!(brokered.per_caller["tenant-b"].len(), MAX_CALLS_PER_CALLER);
     assert!(brokered.admits(0), "the instance still admits");
 }
 
-/// A caller at its cap displaces only its own oldest settled row.
+/// A caller at its cap cannot evict any still-live call.
 #[test]
-fn a_caller_at_its_cap_displaces_only_its_own_oldest_row() {
+fn a_caller_at_its_cap_refuses_without_evicting_live_rows() {
     let mut brokered = Brokered::default();
     brokered.record("rtc_b_first".to_string(), "tenant-b".to_string(), 0);
     for i in 0..MAX_CALLS_PER_CALLER {
@@ -370,15 +381,9 @@ fn a_caller_at_its_cap_displaces_only_its_own_oldest_row() {
     }
     brokered.record("rtc_b_second".to_string(), "tenant-b".to_string(), 0);
     assert!(brokered.admits(0), "the caller at its cap is not refused");
-    brokered.record("rtc_a_next".to_string(), "tenant-a".to_string(), 0);
-    assert!(
-        brokered.owns("rtc_a_next", "tenant-a", 0),
-        "the offer proceeds"
-    );
-    assert!(
-        !brokered.owns("rtc_a0", "tenant-a", 0),
-        "the caller's own oldest row is gone"
-    );
+    assert!(!brokered.record("rtc_a_next".to_string(), "tenant-a".to_string(), 0));
+    assert!(!brokered.owns("rtc_a_next", "tenant-a", 0));
+    assert!(brokered.owns("rtc_a0", "tenant-a", 0));
     for i in 1..MAX_CALLS_PER_CALLER {
         assert!(
             brokered.owns(&format!("rtc_a{i}"), "tenant-a", 0),
@@ -393,7 +398,8 @@ fn a_caller_at_its_cap_displaces_only_its_own_oldest_row() {
     assert_eq!(brokered.owners.len(), MAX_CALLS_PER_CALLER + 2);
 }
 
-/// An instance holding [`MAX_BROKERED_CALLS`] rows recorded at the tick clock's reading 0, across
+/// An instance holding [`MAX_BROKERED_CALLS`] rows recorded at the tick clock's reading 0,
+/// across as many callers as hold them at their cap.
 fn full_instance() -> Brokered {
     let mut brokered = Brokered::default();
     for i in 0..MAX_BROKERED_CALLS {
@@ -421,7 +427,7 @@ fn the_instance_429_clears_once_rows_expire() {
     assert!(!brokered.admits(1), "inside the lifetime the rows are live");
     assert!(
         !brokered.admits(REALTIME_CALL_MAX_MS),
-        "one millisecond short of the lifetime they are live"
+        "the lifetime starts at the first tick after recording"
     );
     assert!(
         brokered.admits(1 + REALTIME_CALL_MAX_MS),
@@ -540,6 +546,8 @@ fn an_ended_sdp_session_frees_its_call() {
 }
 
 /// A far end accepts a session's upgrade with a switch or a success, or, from a transport that
+/// states a class and no number, the success class; any other status (a refusal), or a piece
+/// with no status, is no acceptance (audit S1: only an acceptance incurs the session's fee).
 #[test]
 fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
     use busbar_contract::abi::transport::{STATUS_CALLER_FAULT, STATUS_SUCCESS};
@@ -563,6 +571,7 @@ fn an_upgrade_is_accepted_by_a_switch_or_a_success_and_by_nothing_else() {
 }
 
 /// A success answering busbar's call that names no provider call is said in one log line (audit
+/// S45): the call is billed, but no sideband can attach to it and nothing frees its row.
 #[test]
 fn a_success_naming_no_provider_call_is_said_in_one_log_line() {
     struct Log(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -600,4 +609,73 @@ fn a_success_naming_no_provider_call_is_said_in_one_log_line() {
         2,
         "{lines}"
     );
+}
+
+#[test]
+fn audit_arrival_config_survives_refresh_and_capacity_refuses() {
+    let p = plane();
+    let first = Arc::new(read_settings(br#"{"session":{"model":"first"}}"#).unwrap());
+    assert!(p.arrive_under(7, Arc::clone(&first)));
+    p.publish(
+        2,
+        read_settings(br#"{"session":{"model":"second"}}"#).unwrap(),
+    );
+    assert_eq!(
+        p.cfg_for(7).unwrap().session.model.as_deref(),
+        Some("first")
+    );
+    assert_eq!(
+        p.cfg_for(8).unwrap().session.model.as_deref(),
+        Some("second")
+    );
+    for unit in 10..10 + MAX_SESSIONS as u64 {
+        let accepted = p.arrive_under(unit, Arc::clone(&first));
+        assert_eq!(accepted, unit < 9 + MAX_SESSIONS as u64);
+    }
+    assert!(p.arrive_under(7, Arc::new(StreamsCfg::default())));
+    assert_eq!(
+        p.cfg_for(7).unwrap().session.model.as_deref(),
+        Some("first")
+    );
+    p.end_unit(7);
+    assert!(!lock(&p.arrived).contains_key(&7));
+}
+
+#[test]
+fn audit_brokered_record_enforces_capacity_at_insert() {
+    let mut calls = full_instance();
+    assert!(!calls.record("rtc_overflow".into(), "other".into(), 0));
+    assert_eq!(calls.owners.len(), MAX_BROKERED_CALLS);
+    assert!(calls.holds("rtc_0"));
+}
+
+#[test]
+fn audit_brokered_attachment_keeps_original_config_and_lock() {
+    let mut calls = Brokered::default();
+    let cfg = Arc::new(
+        read_settings(br#"{"session":{"model":"old","voice":"alloy"},"max_output_tokens":99}"#)
+            .unwrap(),
+    );
+    assert!(calls.record("ours".into(), "caller".into(), 0));
+    calls.lock_session(
+        "ours",
+        Arc::new(browser_lock(cfg.session.clone(), &cfg)),
+        Arc::clone(&cfg),
+    );
+    calls.named("ours", "provider_id".into());
+    let (_, locked) = calls.attach("ours", "caller", 0).unwrap();
+    assert_eq!(locked.unwrap().voice.as_deref(), Some("alloy"));
+    assert_eq!(
+        calls.owners["ours"].cfg.as_ref().unwrap().max_output_tokens,
+        99
+    );
+    assert!(calls.attach("ours", "other", 0).is_none());
+}
+
+#[test]
+fn audit_dealt_provider_protocol_refuses_mismatched_doors() {
+    let cfg = read_dealt(br#"{"streams":{"session":{"model":"live"}},"models":{"live":{"provider":"custom"}},"providers":{"custom":{"protocol":"gemini"}}}"#).unwrap();
+    assert!(cfg.supports(Door::Gemini));
+    assert!(!cfg.supports(Door::Realtime));
+    assert!(!cfg.supports(Door::Twilio));
 }

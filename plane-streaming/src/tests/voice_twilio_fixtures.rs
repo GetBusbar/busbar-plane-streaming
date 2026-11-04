@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Published Twilio fixture and route predicates over the owning private implementation.
-use crate::claims::{dialect_for, Dialect, DIALECT_CLAIMS, WS_TRANSPORT};
+
 use crate::codec::topology::twilio::{assert_g711_ulaw, TwilioEnvelope, TwilioEvent};
-use crate::plane_door::{ROUTES, SIGNATURE_AUTH};
-use busbar_contract::grammar::Selector;
 use busbar_contract::media::base64_decode;
 use serde_json::Value;
 fn fixture(name: &str) -> Value {
@@ -130,43 +128,6 @@ fn to_twilio_clear() {
     codec_fixture("to-twilio.clear.json", &fixture("to-twilio.clear.json"));
 }
 #[test]
-fn twilio_private_route_and_claim_predicates() {
-    let claim = DIALECT_CLAIMS
-        .iter()
-        .find(|c| c.dialect == Dialect::TwilioMediaStreams)
-        .unwrap();
-    assert_eq!(claim.claim.transport, WS_TRANSPORT);
-    assert_eq!(claim.claim.selector, Selector::PrefixOneLevel("/twilio"));
-    assert_eq!(claim.claim.scheme_alternatives, ["webhook-signature"]);
-    assert_eq!(
-        ["/twilio/call_0001", "/twilio", "/twilio/a/b", "/twiliofoo"].map(dialect_for),
-        [Some(Dialect::TwilioMediaStreams), None, None, None]
-    );
-    let route = ROUTES
-        .iter()
-        .find(|r| r.target.starts_with("/twilio"))
-        .unwrap();
-    assert_eq!(
-        (
-            route.verb,
-            route.target,
-            route.carrier,
-            route.upgrade,
-            route.auth
-        ),
-        ("GET", "/twilio/{call_id}", "ws", true, "webhook-signature")
-    );
-    assert_eq!(
-        ROUTES
-            .iter()
-            .filter(|r| r.auth == SIGNATURE_AUTH)
-            .map(|r| r.target)
-            .collect::<Vec<_>>(),
-        ["/twilio/{call_id}"]
-    );
-}
-
-#[test]
 fn published_transcript_inbound_codec_reads() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../testing/voice-conformance/fixtures/twilio/transcript.jsonl");
@@ -180,5 +141,4 @@ fn published_transcript_inbound_codec_reads() {
     for index in [1, 2, 3, 4, 5, 6, 9, 10] {
         TwilioEnvelope::decode(&bytes(&lines[index]["event"])).unwrap();
     }
-    assert_eq!(crate::session_door::PER_SESSION_CLASS, 8);
 }

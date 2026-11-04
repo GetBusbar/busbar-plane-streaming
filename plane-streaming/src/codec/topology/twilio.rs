@@ -7,7 +7,25 @@ use serde::Serialize;
 
 use busbar_contract::media::{base64_decode, base64_encode};
 
-use crate::codec::ir::codec::WireEvent;
+use crate::codec::ir::codec::peek::{base64_len, Head, Lite};
+use crate::codec::ir::codec::{wire, WireEvent};
+
+/// The most characters of a carrier-chosen string a log line repeats.
+const LOGGED_CHARS: usize = 64;
+
+/// `text` as a log line may carry it: escaped (no line break or control character the carrier
+/// wrote reaches the log as itself) and cut at [`LOGGED_CHARS`] characters.
+fn loggable(text: &str) -> String {
+    let mut out: String = text
+        .chars()
+        .take(LOGGED_CHARS)
+        .flat_map(char::escape_debug)
+        .collect();
+    if text.chars().nth(LOGGED_CHARS).is_some() {
+        out.push_str("...");
+    }
+    out
+}
 
 /// Twilio's negotiated µ-law encoding string on the `start` event's media format.
 pub const TWILIO_MULAW_ENCODING: &str = "audio/x-mulaw";
@@ -42,7 +60,7 @@ impl std::fmt::Display for TwilioError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TwilioError::Malformed => write!(f, "malformed Twilio Media Streams frame"),
-            TwilioError::UnknownEvent(e) => write!(f, "unknown Twilio event: {e}"),
+            TwilioError::UnknownEvent(e) => write!(f, "unknown Twilio event: {}", loggable(e)),
             TwilioError::BadPayload => write!(f, "Twilio media payload is not valid base64"),
             TwilioError::FormatMismatch {
                 encoding,
@@ -50,7 +68,8 @@ impl std::fmt::Display for TwilioError {
                 channels,
             } => write!(
                 f,
-                "Twilio media format refused: {encoding} {sample_rate}Hz {channels}ch is not g711_ulaw/8000Hz/mono"
+                "Twilio media format refused: {} {sample_rate}Hz {channels}ch is not g711_ulaw/8000Hz/mono",
+                loggable(encoding)
             ),
         }
     }
@@ -117,12 +136,13 @@ pub enum TwilioEvent {
     Stop,
 }
 
-/// The Twilio envelope codec: stateless decode/encode between Twilio's JSON Media Streams frames and
+/// The Twilio envelope codec: stateless decode/encode between Twilio's JSON Media Streams frames and the realtime audio envelope.
 pub struct TwilioEnvelope;
 
 impl TwilioEnvelope {
-    /// DECODE one inbound Twilio WS frame into a [`TwilioEvent`]. A `media` event's base64 payload is
+    /// DECODE one inbound Twilio WS frame into a [`TwilioEvent`]. A `media` event's base64 payload is decoded into raw audio bytes.
     pub fn decode(frame: &[u8]) -> Result<TwilioEvent, TwilioError> {
+        Lite::read(frame).ok_or(TwilioError::Malformed)?;
         let v: serde_json::Value =
             serde_json::from_slice(frame).map_err(|_| TwilioError::Malformed)?;
         let event = v
@@ -218,7 +238,7 @@ impl TwilioEnvelope {
         }
     }
 
-    /// ENCODE raw µ-law bytes into a Twilio outbound `media` envelope for a given `stream_sid`. The
+    /// ENCODE raw µ-law bytes into a Twilio outbound `media` envelope for a given `stream_sid`. The audio payload is standard base64.
     #[must_use]
     pub fn encode_media(stream_sid: &str, mulaw: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
@@ -256,13 +276,13 @@ impl TwilioEnvelope {
     }
 }
 
-/// Whether a string is its own JSON body: printable ASCII with neither character a JSON string
+/// Whether a string is its own JSON body: printable ASCII with neither character a JSON string must escape.
 fn is_bare_json_string(s: &str) -> bool {
     s.bytes()
         .all(|b| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\')
 }
 
-/// Standard base64 (RFC 4648) with padding, appended to a buffer the caller holds: the same bytes
+/// Standard base64 (RFC 4648) with padding, appended to a buffer the caller holds: the same bytes as the contract encoder, without a temporary allocation.
 fn base64_encode_into(data: &[u8], out: &mut Vec<u8>) {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     for chunk in data.chunks(3) {
@@ -298,7 +318,7 @@ struct OutboundPayload {
     payload: String,
 }
 
-/// ASSERT the negotiated media format is the locked `g711_ulaw` / 8000 Hz / mono carrier, refusing
+/// ASSERT the negotiated media format is the locked `g711_ulaw` / 8000 Hz / mono carrier, refusing every other format.
 pub fn assert_g711_ulaw(fmt: &MediaFormat) -> Result<(), TwilioError> {
     if fmt.encoding == TWILIO_MULAW_ENCODING
         && fmt.sample_rate == TWILIO_SAMPLE_RATE
@@ -320,6 +340,8 @@ pub fn assert_g711_ulaw(fmt: &MediaFormat) -> Result<(), TwilioError> {
 #[derive(Debug, Default)]
 pub struct TwilioBridge {
     stream_sid: Option<String>,
+    /// Whether the bridge already said, once, that it dropped model audio it could not read.
+    told_unreadable: std::cell::Cell<bool>,
 }
 
 /// What one caller frame on the telephony leg is.
@@ -337,7 +359,7 @@ pub enum CallerStep {
     Nothing,
 }
 
-/// A carrier frame that ends the call, said in one log line naming why: the call drops, and the
+/// A carrier frame that ends the call, said in one log line naming why: the call drops, and the caller receives no further audio.
 fn refused(why: &TwilioError) -> CallerStep {
     tracing::warn!("the telephony carrier's frame ends the call: {why}");
     CallerStep::Refused
@@ -350,9 +372,33 @@ impl TwilioBridge {
         self.stream_sid.is_some()
     }
 
-    /// Read one caller frame. A start with no stream id, or in another media format, is refused; so
+    /// Read one caller frame. A start with no stream id, or in another media format, is refused; so is malformed media.
     #[allow(clippy::wrong_self_convention)]
     pub fn from_caller(&mut self, frame: &[u8]) -> CallerStep {
+        let Some(top) = Lite::read(frame) else {
+            return refused(&TwilioError::Malformed);
+        };
+        {
+            if top.str_at("event") == "media" {
+                let sid = top.str_at("streamSid");
+                let payload = top.get("media").and_then(|m| m.get("payload"));
+                let Some(Lite::Str(payload)) = payload else {
+                    return refused(&TwilioError::Malformed);
+                };
+                if base64_len(payload).is_none() {
+                    return refused(&TwilioError::BadPayload);
+                }
+                if sid.is_empty() || self.stream_sid.as_deref() != Some(sid) {
+                    return CallerStep::Nothing;
+                }
+                let append = format!(
+                    r#"{{"type":"{}","audio":"{}"}}"#,
+                    wire::INPUT_AUDIO_APPEND,
+                    payload
+                );
+                return CallerStep::Audio(WireEvent(bytes::Bytes::from(append)));
+            }
+        }
         match TwilioEnvelope::decode(frame) {
             Ok(TwilioEvent::Start(_)) if self.stream_sid.is_some() => CallerStep::Nothing,
             Ok(TwilioEvent::Start(start)) => {
@@ -373,13 +419,13 @@ impl TwilioBridge {
                 {
                     return CallerStep::Nothing;
                 }
-                let append = serde_json::json!({
-                    "type": "input_audio_buffer.append",
-                    "audio": base64_encode(&payload),
-                });
-                CallerStep::Audio(WireEvent(bytes::Bytes::from(
-                    serde_json::to_vec(&append).unwrap_or_default(),
-                )))
+                // Base64 holds no character a JSON string escapes, so the frame is written whole.
+                let append = format!(
+                    r#"{{"type":"{}","audio":"{}"}}"#,
+                    wire::INPUT_AUDIO_APPEND,
+                    base64_encode(&payload)
+                );
+                CallerStep::Audio(WireEvent(bytes::Bytes::from(append.into_bytes())))
             }
             Ok(TwilioEvent::Stop) => CallerStep::Stop,
             Ok(_) | Err(TwilioError::UnknownEvent(_)) => CallerStep::Nothing,
@@ -387,19 +433,43 @@ impl TwilioBridge {
         }
     }
 
-    /// Rewrite one frame bound for the caller into the carrier's envelope: model audio becomes a
+    /// Rewrite one frame bound for the caller into the carrier's envelope: model audio becomes a Twilio media event.
     #[must_use]
     pub fn to_caller(&self, frame: &[u8]) -> Option<Vec<u8>> {
-        let v: serde_json::Value = serde_json::from_slice(frame).ok()?;
-        let kind = v.get("type").and_then(serde_json::Value::as_str)?;
-        if is_tool_call(kind, &v) {
+        // The frame's type is read first, borrowing it: only a frame the carrier is told of is
+        // read whole.
+        let head = Head::read(frame)?;
+        let kind = head.ty.as_deref()?;
+        if kind.starts_with(FUNCTION_CALL_ARGUMENTS) {
             return Some(frame.to_vec());
+        }
+        if ITEM_EVENTS.contains(&kind) {
+            let top = Lite::read(frame)?;
+            let item_type = top.get("item").map(|item| item.str_at("type"));
+            return (item_type == Some(wire::ITEM_FN_CALL)).then(|| frame.to_vec());
         }
         let sid = self.stream_sid.as_deref()?;
         match kind {
             "response.output_audio.delta" | "response.audio.delta" => {
-                let audio = base64_decode(v.get("delta")?.as_str()?)?;
-                Some(TwilioEnvelope::encode_media(sid, &audio))
+                let top = Lite::read(frame)?;
+                let audio = match top.get("delta") {
+                    Some(Lite::Str(audio)) if base64_len(audio).is_some() => Some(audio.as_ref()),
+                    _ => None,
+                };
+                if audio.is_none() && !self.told_unreadable.replace(true) {
+                    tracing::warn!(
+                        "the far end sent model audio that is not base64; the carrier hears a \
+                         gap, and no later such frame on this call is said"
+                    );
+                }
+                let sid = serde_json::to_string(sid).expect("a string serializes");
+                Some(
+                    format!(
+                        r#"{{"event":"media","streamSid":{sid},"media":{{"payload":"{}"}}}}"#,
+                        audio?
+                    )
+                    .into_bytes(),
+                )
             }
             "input_audio_buffer.speech_started" => serde_json::to_vec(&serde_json::json!({
                 "event": "clear",
@@ -411,24 +481,17 @@ impl TwilioBridge {
     }
 }
 
-/// Whether the far end's event `kind` (the frame `v`) carries a tool call the model made: its
-fn is_tool_call(kind: &str, v: &serde_json::Value) -> bool {
-    if kind.starts_with("response.function_call_arguments.") {
-        return true;
-    }
-    matches!(
-        kind,
-        "response.output_item.added"
-            | "response.output_item.done"
-            | "conversation.item.created"
-            | "conversation.item.added"
-            | "conversation.item.done"
-    ) && v
-        .get("item")
-        .and_then(|i| i.get("type"))
-        .and_then(serde_json::Value::as_str)
-        == Some("function_call")
-}
+/// The far end's events streaming a tool call's arguments, by their type's prefix.
+const FUNCTION_CALL_ARGUMENTS: &str = "response.function_call_arguments.";
+
+/// The far end's item events: a tool call the model made is one whose item is a function call.
+const ITEM_EVENTS: &[&str] = &[
+    wire::OUTPUT_ITEM_ADDED,
+    "response.output_item.done",
+    "conversation.item.created",
+    "conversation.item.added",
+    "conversation.item.done",
+];
 
 #[cfg(test)]
 #[path = "tests/twilio_tests.rs"]

@@ -3,7 +3,7 @@
 
 //! THE `streams:` SECTION — the voice plane's config grammar, and the one place its values are read.
 
-use crate::codec::ir::config::{IrVad, SessionConfig};
+use crate::codec::ir::config::{IrVad, MaxOutputTokens, SessionConfig};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Context-window ceiling default — 32768 tokens.
@@ -29,7 +29,7 @@ fn default_session() -> SessionConfig {
     }
 }
 
-/// The keys `streams.session` may name: the members of the GA `session` object the plane models
+/// The flat session keys the plane models and translates into provider wire settings.
 pub(crate) const SESSION_KEYS: &[&str] = &[
     "model",
     "modalities",
@@ -59,7 +59,8 @@ pub(crate) const VAD_KEYS: &[(&str, &[&str])] = &[
     ("semantic_vad", &["type", "eagerness"]),
 ];
 
-/// The first key under `streams.session` the plane does not model, as its path; `None` when every
+/// The first key under `streams.session` the plane does not model, as its path; `None` when
+/// every key is one it models.
 fn unknown_session_key(session: &serde_json::Value) -> Option<String> {
     let session = session.as_object()?;
     if let Some(key) = session.keys().find(|k| !SESSION_KEYS.contains(&k.as_str())) {
@@ -74,6 +75,7 @@ fn unknown_session_key(session: &serde_json::Value) -> Option<String> {
 }
 
 /// `streams.session`, read strictly: a key the plane does not model is refused with its path,
+/// never dropped.
 fn strict_session<'de, D: Deserializer<'de>>(d: D) -> Result<SessionConfig, D::Error> {
     use serde::de::Error as _;
     let value = serde_json::Value::deserialize(d)?;
@@ -82,8 +84,20 @@ fn strict_session<'de, D: Deserializer<'de>>(d: D) -> Result<SessionConfig, D::E
             "streams.{path}: not a key of the locked session"
         )));
     }
-    let session = SessionConfig::deserialize(value).map_err(D::Error::custom)?;
+    let default_vad = value
+        .as_object()
+        .is_some_and(|v| !v.contains_key("turn_detection"));
+    let mut session = SessionConfig::deserialize(value).map_err(D::Error::custom)?;
+    if default_vad {
+        session.turn_detection = default_session().turn_detection;
+    }
 
+    if session.max_output_tokens == Some(MaxOutputTokens::Limit(0)) {
+        return Err(D::Error::custom(
+            "streams.session.max_output_tokens: 0 is refused (a response capped at no token \
+             cannot answer)",
+        ));
+    }
     let one = matches!(session.modalities.as_slice(), [m] if m == "audio" || m == "text");
     if !session.modalities.is_empty() && !one {
         return Err(D::Error::custom(format!(
@@ -95,8 +109,8 @@ fn strict_session<'de, D: Deserializer<'de>>(d: D) -> Result<SessionConfig, D::E
     Ok(session)
 }
 
-/// THE `streams:` SECTION — the voice plane's owned config. Its VAD/session/media shape IS the GA
-/// `session` object ([`SessionConfig`]); the three limits are the only plane-imposed ceilings.
+/// The `streams:` section: flat session settings translated into each provider wire format,
+/// together with the plane's resource ceilings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamsCfg {
@@ -122,6 +136,9 @@ pub struct StreamsCfg {
     /// key of `streams:`.
     #[serde(skip)]
     pub upstream_model: Option<String>,
+    /// The configured model's provider protocol, used to reject incompatible session doors.
+    #[serde(skip)]
+    pub provider_protocol: Option<String>,
     /// The browser media listener where the SDP door's media associations arrive.
     /// Absent ⇒ no media is served, and the SDP door refuses every offer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,9 +155,31 @@ pub struct MediaCfg {
 }
 
 impl StreamsCfg {
+    /// Whether this door can speak the configured provider's protocol; unknown catalog metadata
+    /// is left to the host's provider resolution.
+    pub fn supports(&self, door: crate::driven::Door) -> bool {
+        use crate::driven::Door;
+        match (door, self.provider_protocol.as_deref()) {
+            (Door::Mint, _) | (_, None) => true,
+            (Door::Gemini, Some("gemini")) => true,
+            (Door::Sdp | Door::Sideband | Door::Twilio | Door::Realtime, Some("openai")) => true,
+            _ => false,
+        }
+    }
+
     /// Why the section's two token ceilings cannot both hold, if they cannot: a per-response output
+    /// cap at or above the context window leaves no room for the conversation (the locked session's
+    /// context limit after its output, `context_window_tokens - max_output_tokens`, would be 0), so
+    /// such a section is refused at load, naming both settings and their values.
     #[must_use]
     pub fn ceilings_conflict(&self) -> Option<String> {
+        if self.max_output_tokens == 0 {
+            return Some(
+                "streams.max_output_tokens: 0 is refused (a response capped at no token cannot \
+                 answer)"
+                    .to_string(),
+            );
+        }
         (self.max_output_tokens >= self.context_window_tokens).then(|| {
             format!(
                 "streams.max_output_tokens ({}) must be below streams.context_window_tokens ({}): \
@@ -159,6 +198,7 @@ impl Default for StreamsCfg {
             context_window_tokens: default_context_window_tokens(),
             max_output_tokens: default_max_output_tokens(),
             upstream_model: None,
+            provider_protocol: None,
             media: None,
         }
     }
@@ -166,6 +206,8 @@ impl Default for StreamsCfg {
 
 impl StreamsCfg {
     /// `session` as a provider is told it: a `model` that is the session model this section names
+    /// carries that model's provider wire name (`upstream_model`; a catalog alias never
+    /// reaches a provider). Any other session is unchanged.
     #[must_use]
     pub fn wire_session(&self, mut session: SessionConfig) -> SessionConfig {
         if let (Some(wire), Some(model)) = (&self.upstream_model, &self.session.model) {

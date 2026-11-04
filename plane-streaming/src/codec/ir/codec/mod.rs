@@ -11,9 +11,10 @@ pub mod peek;
 use peek::{base64_len, Head, Lite};
 
 /// The dialect wire `type` tokens the meter reads — named once here.
-mod wire {
+pub(crate) mod wire {
     pub const INPUT_AUDIO_APPEND: &str = "input_audio_buffer.append";
     pub const ITEM_CREATE: &str = "conversation.item.create";
+    pub const RESPONSE_CREATE: &str = "response.create";
     pub const INPUT_AUDIO_PART: &str = "input_audio";
     pub const OUTPUT_ITEM_ADDED: &str = "response.output_item.added";
     pub const RESPONSE_DONE: &str = "response.done";
@@ -41,10 +42,10 @@ fn str_at<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or_default()
 }
 
-/// One output token per this many bytes of an unreadable usage report: the llm plane's floor
+/// One output token per this many bytes of an unreadable usage report: the llm plane's floor conversion.
 const FLOOR_BYTES_PER_TOKEN: u64 = 4;
 
-/// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity
+/// Read one BILLED count: an absent object, an absent field or a JSON `null` is 0 (no such quantity was reported).
 fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     match o.and_then(|x| x.get(key)) {
         None => Ok(0),
@@ -56,7 +57,7 @@ fn billed_count(o: Option<&Value>, key: &str) -> Result<u64, String> {
     }
 }
 
-/// A present usage report `u` that is not an object: unreadable, never an all-zero report. The error
+/// A present usage report `u` that is not an object: unreadable, never an all-zero report. The error is handled by the caller through the billing floor.
 pub(crate) fn usage_object(u: &Value, member: &str) -> Result<(), String> {
     if u.is_object() {
         return Ok(());
@@ -67,7 +68,7 @@ pub(crate) fn usage_object(u: &Value, member: &str) -> Result<(), String> {
     ))
 }
 
-/// What an unreadable usage report bills (spend is always attributed and nothing is silent): the
+/// What an unreadable usage report bills (spend is always attributed and nothing is silent): the byte-derived floor is attributed to output text.
 pub(crate) fn usage_floor(report_len: usize, message: &str) -> IrDuplexUsage {
     busbar_contract::diag_warn!(
         busbar_contract::diagnostic::USAGE_TAP_DECODE_FAILED,
@@ -81,9 +82,9 @@ pub(crate) fn usage_floor(report_len: usize, message: &str) -> IrDuplexUsage {
     }
 }
 
-/// THE METER'S READS of one dialect, both directions. Stateless: nothing a frame says changes how
+/// THE METER'S READS of one dialect, both directions. Stateless: nothing a frame says changes how another frame is interpreted.
 pub trait DuplexReader {
-    /// What a far-end frame says that a session meters; empty for a frame that says none of it
+    /// What a far-end frame says that a session meters; empty for a frame that says none of it .
     fn meter_down(&self, frame: &[u8]) -> Vec<Metered>;
 
     /// The uplink audio of a caller frame read whole as `top`: each blob's stated format (`None`:
@@ -99,7 +100,7 @@ pub trait DuplexReader {
 pub struct OpenAiRealtimeCodec;
 
 impl DuplexReader for OpenAiRealtimeCodec {
-    /// A `response.done` (its usage), an `error`, and a `response.output_item.added` that adds a
+    /// A `response.done` (its usage), an `error`, and a `response.output_item.added` that adds a function call are the billable events.
     fn meter_down(&self, frame: &[u8]) -> Vec<Metered> {
         let metered = Head::read(frame).is_none_or(|h| {
             matches!(
@@ -109,6 +110,18 @@ impl DuplexReader for OpenAiRealtimeCodec {
         });
         if !metered {
             return Vec::new();
+        }
+        if Lite::read(frame).is_none() {
+            return if Head::read(frame)
+                .is_some_and(|h| h.ty.as_deref() == Some(wire::RESPONSE_DONE))
+            {
+                vec![Metered::Usage(usage_floor(
+                    frame.len(),
+                    "the response exceeds the bounded JSON reader",
+                ))]
+            } else {
+                Vec::new()
+            };
         }
         let Ok(v) = serde_json::from_slice::<Value>(frame) else {
             return Vec::new();
@@ -137,27 +150,26 @@ impl DuplexReader for OpenAiRealtimeCodec {
         }
     }
 
-    /// An `input_audio_buffer.append`'s `audio`, and each `input_audio` content part of a
+    /// An `input_audio_buffer.append`'s `audio`, each `input_audio` content part of a
+    /// `conversation.item.create`'s item, and of every item a `response.create` carries in its
+    /// `response.input`. Audio that cannot be counted (not a string, not base64, or a member the
+    /// frame names twice) is `Err`: the frame is refused, never relayed uncounted.
     fn uplink_audio(
         &self,
         top: &Lite<'_>,
         admit: &mut dyn FnMut(Option<AudioFormat>, usize),
     ) -> Result<(), crate::splice::Unmeterable> {
-        match top.str_at("type") {
-            wire::INPUT_AUDIO_APPEND => {
-                if let Some(len) = base64_len(top.str_at("audio")) {
-                    admit(None, len);
-                }
-            }
-            wire::ITEM_CREATE => {
-                let parts = top.get("item").and_then(|item| item.get("content"));
-                if let Some(Lite::Arr(parts)) = parts {
-                    for part in parts {
-                        if part.str_at("type") == wire::INPUT_AUDIO_PART {
-                            if let Some(len) = base64_len(part.str_at("audio")) {
-                                admit(None, len);
-                            }
-                        }
+        match frame_type(top)? {
+            wire::INPUT_AUDIO_APPEND => admit(None, audio_len(top)?),
+            wire::ITEM_CREATE => item_audio(only(top, "item")?, admit)?,
+            wire::RESPONSE_CREATE => {
+                let input = only(top, "response")?
+                    .map(|response| only(response, "input"))
+                    .transpose()?
+                    .flatten();
+                if let Some(Lite::Arr(items)) = input {
+                    for item in items {
+                        item_audio(Some(item), admit)?;
                     }
                 }
             }
@@ -167,7 +179,57 @@ impl DuplexReader for OpenAiRealtimeCodec {
     }
 }
 
-/// Extract the split token classes from a `response.done.usage` object (audio vs text are
+/// The member `key` of `holder`, named at most once.
+fn only<'l, 'a>(
+    holder: &'l Lite<'a>,
+    key: &str,
+) -> Result<Option<&'l Lite<'a>>, crate::splice::Unmeterable> {
+    holder.only(key).map_err(|_| crate::splice::Unmeterable)
+}
+
+/// The frame's `type`, the last one written. A frame naming more than one `type` where any of
+/// them carries uplink audio is `Err`: a far end that reads the first would read another frame.
+fn frame_type<'l>(top: &'l Lite<'_>) -> Result<&'l str, crate::splice::Unmeterable> {
+    let Lite::Obj(members) = top else {
+        return Ok("");
+    };
+    let mut types = members.iter().filter(|(k, _)| k == "type").map(|(_, v)| v);
+    let audio_bearing = |v: &Lite<'_>| matches!(v, Lite::Str(t) if matches!(t.as_ref(), wire::INPUT_AUDIO_APPEND | wire::ITEM_CREATE | wire::RESPONSE_CREATE | wire::INPUT_AUDIO_PART));
+    if types.clone().nth(1).is_some() && types.any(audio_bearing) {
+        return Err(crate::splice::Unmeterable);
+    }
+    Ok(top.str_at("type"))
+}
+
+/// The decoded length of `holder`'s `audio`: `0` where it names none, `Err` where it is not one
+/// base64 string.
+fn audio_len(holder: &Lite<'_>) -> Result<usize, crate::splice::Unmeterable> {
+    match only(holder, "audio")? {
+        None | Some(Lite::Null) => Ok(0),
+        Some(Lite::Str(audio)) => base64_len(audio).ok_or(crate::splice::Unmeterable),
+        Some(_) => Err(crate::splice::Unmeterable),
+    }
+}
+
+/// Each `input_audio` content part of `item`.
+fn item_audio(
+    item: Option<&Lite<'_>>,
+    admit: &mut dyn FnMut(Option<AudioFormat>, usize),
+) -> Result<(), crate::splice::Unmeterable> {
+    let Some(item) = item else {
+        return Ok(());
+    };
+    if let Some(Lite::Arr(parts)) = only(item, "content")? {
+        for part in parts {
+            if frame_type(part)? == wire::INPUT_AUDIO_PART {
+                admit(None, audio_len(part)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extract the split token classes from a `response.done.usage` object (audio vs text are attributed separately).
 fn extract_usage(u: &Value) -> Result<IrDuplexUsage, String> {
     usage_object(u, "usage")?;
     let ind = u.get("input_token_details");

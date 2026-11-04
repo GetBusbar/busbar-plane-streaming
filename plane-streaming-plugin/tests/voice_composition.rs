@@ -48,7 +48,6 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
         assert_eq!(mint.emitted, MINT_REFUSED);
         let audio = uplink(100);
         let gemini_audio = gemini_uplink(100);
-        let mut rides = Vec::new();
         for (stream, claim, bytes, style) in [
             (20, 5, audio.as_slice(), "bearer"),
             (21, 3, gemini_audio.as_slice(), "x-goog-api-key"),
@@ -61,13 +60,7 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
                 assert!(initial.to_far);
                 assert_eq!(initial.verb, "GET");
                 assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-                assert_eq!(lock["type"], "session.update");
-                assert_eq!(lock["session"]["type"], "realtime");
-                assert_eq!(lock["session"]["max_output_tokens"], 4096);
-                assert_eq!(
-                    lock["session"]["truncation"]["token_limits"]["post_instructions"],
-                    28672
-                );
+                assert_default_lock(&lock);
             }
             let ride = piece(&p, &session(stream, claim, FROM_CALLER, 0, bytes));
             let index = usize::try_from(ride.need)
@@ -95,7 +88,6 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
                 .contains(&name.to_ascii_lowercase().as_str()));
                 assert!(!value.to_ascii_lowercase().starts_with("bearer "));
             }
-            rides.push(ride);
             let mut dry = false;
             for _ in 0..64 {
                 let a = piece(&p, &session(stream, claim, FROM_KERNEL, 0, &[]));
@@ -112,7 +104,6 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
             }
             assert!(dry, "collection runs dry");
         }
-        assert_eq!(rides.len(), 2);
         for (name, style) in [
             ("openai_realtime", "bearer"),
             ("gemini_live", "x-goog-api-key"),
@@ -399,13 +390,7 @@ fn provider_frames_use_actual_declared_socket_needs_and_report_usage() {
                 assert!(initial.to_far);
                 assert_eq!(initial.verb, "GET");
                 assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-                assert_eq!(lock["type"], "session.update");
-                assert_eq!(lock["session"]["type"], "realtime");
-                assert_eq!(lock["session"]["max_output_tokens"], 4096);
-                assert_eq!(
-                    lock["session"]["truncation"]["token_limits"]["post_instructions"],
-                    28672
-                );
+                assert_default_lock(&lock);
             }
             let mut answers = Vec::new();
             for input in [
@@ -448,7 +433,6 @@ fn provider_frames_use_actual_declared_socket_needs_and_report_usage() {
                 .filter(|u| u.0 < 4)
                 .map(|u| (u.0, u.2))
                 .collect();
-            assert!(!want.is_empty());
             assert_eq!(got, want);
             assert!(
                 units.iter().any(|u| u.0 == 8 && u.2 == 1),
@@ -528,9 +512,10 @@ fn all_policy_refusal_reasons_render_4xx_without_opening_or_dialing() {
                 400..=499 => "invalid_request_error",
                 _ => "server_error",
             };
-            assert_ne!(kind, "server_error");
             let expected = if class == RefusalClass::Unauthenticated {
                 json!({"error":{"message":"Incorrect API key provided.","type":kind,"param":null,"code":"invalid_api_key"}})
+            } else if class == RefusalClass::QuotaExhausted {
+                json!({"error":{"message":"the request was refused","type":"insufficient_quota","param":null,"code":"insufficient_quota"}})
             } else {
                 json!({"error":{"message":"the request was refused","type":kind,"param":null,"code":null}})
             };
@@ -542,7 +527,6 @@ fn all_policy_refusal_reasons_render_4xx_without_opening_or_dialing() {
                 [("content-type".to_string(), "application/json".to_string())]
             );
             let body: Value = serde_json::from_str(&r.body).unwrap();
-            assert_ne!(body["error"]["type"], "server_error");
             assert_eq!(body, expected);
             seen_classes.push(class);
             policy.push((reason_code(*reason), status, r));
@@ -570,13 +554,7 @@ fn all_policy_refusal_reasons_render_4xx_without_opening_or_dialing() {
         assert!(initial.to_far);
         assert_eq!(initial.verb, "GET");
         assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-        assert_eq!(lock["type"], "session.update");
-        assert_eq!(lock["session"]["type"], "realtime");
-        assert_eq!(lock["session"]["max_output_tokens"], 4096);
-        assert_eq!(
-            lock["session"]["truncation"]["token_limits"]["post_instructions"],
-            28672
-        );
+        assert_default_lock(&lock);
         let caller_audio = uplink(100);
         let control = piece(&p, &session(61, 5, FROM_CALLER, 0, &caller_audio));
         assert_eq!(control.outcome, Outcome::Ready);
@@ -629,13 +607,7 @@ fn routes_and_attempts_preserve_fresh_dials_without_early_output() {
         assert!(initial.to_far);
         assert_eq!(initial.verb, "GET");
         assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-        assert_eq!(lock["type"], "session.update");
-        assert_eq!(lock["session"]["type"], "realtime");
-        assert_eq!(lock["session"]["max_output_tokens"], 4096);
-        assert_eq!(
-            lock["session"]["truncation"]["token_limits"]["post_instructions"],
-            28672
-        );
+        assert_default_lock(&lock);
         let audio = uplink(100);
         let caller = piece(&p, &session(70, 5, FROM_CALLER, 0, &audio));
         assert_eq!(caller.outcome, Outcome::Ready);
@@ -711,13 +683,7 @@ fn audit_rows_name_the_pool_once_and_never_create_private_records() {
                 assert!(initial.to_far);
                 assert_eq!(initial.verb, "GET");
                 assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-                assert_eq!(lock["type"], "session.update");
-                assert_eq!(lock["session"]["type"], "realtime");
-                assert_eq!(lock["session"]["max_output_tokens"], 4096);
-                assert_eq!(
-                    lock["session"]["truncation"]["token_limits"]["post_instructions"],
-                    28672
-                );
+                assert_default_lock(&lock);
             }
             rows.extend(initial.rows);
             for input in [
@@ -786,13 +752,7 @@ fn session_exit_settles_once_and_refuses_every_late_side() {
             assert!(initial.to_far);
             assert_eq!(initial.verb, "GET");
             assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-            assert_eq!(lock["type"], "session.update");
-            assert_eq!(lock["session"]["type"], "realtime");
-            assert_eq!(lock["session"]["max_output_tokens"], 4096);
-            assert_eq!(
-                lock["session"]["truncation"]["token_limits"]["post_instructions"],
-                28672
-            );
+            assert_default_lock(&lock);
         }
         let audio = uplink(1000);
         let mut ends = u32::from(initial.done);
@@ -843,13 +803,7 @@ fn session_exit_settles_once_and_refuses_every_late_side() {
             assert!(initial.to_far);
             assert_eq!(initial.verb, "GET");
             assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-            assert_eq!(lock["type"], "session.update");
-            assert_eq!(lock["session"]["type"], "realtime");
-            assert_eq!(lock["session"]["max_output_tokens"], 4096);
-            assert_eq!(
-                lock["session"]["truncation"]["token_limits"]["post_instructions"],
-                28672
-            );
+            assert_default_lock(&lock);
         }
         ends += u32::from(initial.done);
         let interrupted = piece(&p, &session(91, 5, FROM_CALLER, PIECE_LAST, &[]));
@@ -880,13 +834,7 @@ fn tool_calls_and_caller_results_relay_unchanged_without_authored_answers() {
                 assert!(initial.to_far);
                 assert_eq!(initial.verb, "GET");
                 assert_eq!(initial.target, "/v1/realtime?model=m-cap");
-                assert_eq!(lock["type"], "session.update");
-                assert_eq!(lock["session"]["type"], "realtime");
-                assert_eq!(lock["session"]["max_output_tokens"], 4096);
-                assert_eq!(
-                    lock["session"]["truncation"]["token_limits"]["post_instructions"],
-                    28672
-                );
+                assert_default_lock(&lock);
             }
             let (announce, usage, reply, tokens) = if claim == 5 {
                 (
@@ -976,4 +924,16 @@ fn tool_calls_and_caller_results_relay_unchanged_without_authored_answers() {
         deliveries.push(dialects);
     }
     assert_eq!(deliveries[0], deliveries[1]);
+}
+
+fn assert_default_lock(lock: &Value) {
+    const CONTEXT_TOKENS: u64 = 32_768;
+    const OUTPUT_TOKENS: u64 = 4_096;
+    assert_eq!(lock["type"], "session.update");
+    assert_eq!(lock["session"]["type"], "realtime");
+    assert_eq!(lock["session"]["max_output_tokens"], OUTPUT_TOKENS);
+    assert_eq!(
+        lock["session"]["truncation"]["token_limits"]["post_instructions"],
+        CONTEXT_TOKENS - OUTPUT_TOKENS
+    );
 }

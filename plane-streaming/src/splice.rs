@@ -17,7 +17,10 @@ pub struct Rule {
     /// The top-level member holding the governed object.
     pub at: &'static str,
     /// The keys a caller never authors there.
-    pub cut: &'static [&'static str],
+    pub cut: Vec<&'static str>,
+    /// The keys a caller never authors deeper down, each by its path from the governed object
+    /// (`["audio", "input", "transcription"]`: two objects down, then the key).
+    pub cut_under: Vec<&'static [&'static str]>,
     /// The locked members put in, each over the caller's own (an object over an object is merged
     /// member by member).
     pub set: Map<String, Value>,
@@ -47,21 +50,32 @@ pub struct Cap {
     pub when_absent: bool,
 }
 
-/// The dialect's governed keys: which caller frames a session's lock splices, and how. Every rule
+/// The dialect's governed keys: which caller frames a session's lock splices, and how.
 pub trait LockedKeys {
     /// Every top-level member a rule governs or a check below reads: a JSON object naming none of
+    /// them passes every rule and every check as it came.
     const GOVERNED: &'static [&'static str];
     /// The rule for the object that configures the session (`session.update`'s `session`, `setup`),
+    /// locked to `locked`.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule;
     /// The rule for the object that asks for one response under its own settings, capped at the
+    /// output ceiling `locked` states; `None` for a dialect with no such object.
     fn response_rule(&self, locked: &SessionConfig) -> Option<Rule>;
     /// The frame that tells the far end the session is locked to `locked`, in the shape its
+    /// socket reads, for a caller-side envelope that configures nothing itself (the telephony
+    /// carrier).
     fn locked_frame(&self, locked: &SessionConfig) -> Option<Vec<u8>>;
     /// The error frame that tells the caller why the plane ends the session (`code`, `message`);
+    /// `None` for a dialect with no in-band error.
     fn ceiling_frame(&self, code: &str, message: &str) -> Option<Vec<u8>>;
     /// Whether `frame` carries an item the caller may never author: a conversation item, or a
+    /// per-response input item, in a role that instructs the model (`system`, `developer`). Such a
+    /// frame goes nowhere. A frame whose bytes cannot be read here is answered `true`.
     fn authors_instructions(&self, frame: &[u8]) -> bool;
     /// The uplink audio format `frame` configures the session to (`Ok(None)`: it names none), read
+    /// from every key the dialect's far end reads one from. `Err` when it names one the plane
+    /// cannot meter, or names two that disagree: such a frame goes nowhere, because the far end
+    /// would read audio at a rate the plane does not count it at.
     fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable>;
 }
 
@@ -85,8 +99,25 @@ fn output_ceiling(locked: &SessionConfig) -> Option<u64> {
     }
 }
 
+/// [`output_ceiling`] as OpenAI Realtime takes it: within the range its GA socket accepts.
+fn realtime_ceiling(locked: &SessionConfig) -> Option<u64> {
+    match locked.max_output_tokens.map(MaxOutputTokens::realtime) {
+        Some(MaxOutputTokens::Limit(n)) => Some(u64::from(n)),
+        _ => None,
+    }
+}
+
 /// OpenAI Realtime: `session.update`'s `session`, and `response.create`'s `response`. A stored
+/// prompt (`prompt`) carries its own instructions and tools, so it is cut with them.
 const REALTIME_CUT: &[&str] = &["instructions", "tools", "prompt"];
+/// The input transcription a caller may not switch on: the locked session models none, and the
+/// provider bills a transcription model the plane does not meter (the GA spelling, by its path).
+const TRANSCRIPTION_PATH: &[&str] = &["audio", "input", "transcription"];
+/// The pre-GA spelling of the input transcription.
+const LEGACY_TRANSCRIPTION: &str = "input_audio_transcription";
+/// The members the lock writes whole: a tagged union (`turn_detection`) merged member by member
+/// would mix two variants' members.
+const WHOLE: &[&str] = &["turn_detection"];
 /// Gemini Live: `setup`'s system instruction and tools.
 const LIVE_CUT: &[&str] = &["systemInstruction", "tools"];
 /// The roles an item instructs the model in: never the caller's to author.
@@ -95,11 +126,25 @@ const INSTRUCTING_ROLES: &[&str] = &["system", "developer"];
 impl LockedKeys for OpenAiRealtimeCodec {
     const GOVERNED: &'static [&'static str] = &["session", "response", "item"];
 
-    /// The locked keys in the GA `session` shape the GA socket reads
+    /// The locked keys in the GA `session` shape the GA socket reads; each locked key's pre-GA
+    /// spelling is cut, so neither spelling of it is the caller's, and so is input transcription.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
         let mut set = locked.ga_session();
         set.remove(MAX_OUTPUT_TOKENS);
-        let caps = output_ceiling(locked)
+        let mut cut = REALTIME_CUT.to_vec();
+        cut.push(LEGACY_TRANSCRIPTION);
+        for (key, is_locked) in [
+            ("voice", locked.voice.is_some()),
+            ("modalities", !locked.modalities.is_empty()),
+            ("turn_detection", locked.turn_detection.is_some()),
+            ("input_audio_format", locked.input_audio_format.is_some()),
+            ("output_audio_format", locked.output_audio_format.is_some()),
+        ] {
+            if is_locked {
+                cut.push(key);
+            }
+        }
+        let caps = realtime_ceiling(locked)
             .map(|ceiling| {
                 vec![
                     Cap {
@@ -119,7 +164,8 @@ impl LockedKeys for OpenAiRealtimeCodec {
             .unwrap_or_default();
         Rule {
             at: "session",
-            cut: REALTIME_CUT,
+            cut,
+            cut_under: vec![TRANSCRIPTION_PATH],
             set,
             proto_names: false,
             caps,
@@ -127,13 +173,41 @@ impl LockedKeys for OpenAiRealtimeCodec {
     }
 
     /// `response.create`'s `response`: a caller's own `max_output_tokens` never lifts the
+    /// ceiling, and a response is spoken in the locked voice and output format (each spelling).
     fn response_rule(&self, locked: &SessionConfig) -> Option<Rule> {
+        let mut cut = REALTIME_CUT.to_vec();
+        let mut output = Map::new();
+        if let Some(voice) = &locked.voice {
+            cut.push("voice");
+            output.insert("voice".into(), Value::from(voice.as_str()));
+        }
+        if let Some(format) = locked.output_audio_format {
+            cut.push("output_audio_format");
+            output.insert("format".into(), format.ga_format());
+        }
+        let mut set = Map::new();
+        if !locked.modalities.is_empty() {
+            cut.push("modalities");
+            set.insert(
+                "output_modalities".into(),
+                serde_json::json!(locked.modalities),
+            );
+        }
+        if let Some(choice) = &locked.tool_choice {
+            set.insert("tool_choice".into(), choice.clone());
+        }
+        if !output.is_empty() {
+            let mut audio = Map::new();
+            audio.insert("output".into(), Value::Object(output));
+            set.insert("audio".into(), Value::Object(audio));
+        }
         Some(Rule {
             at: "response",
-            cut: REALTIME_CUT,
-            set: Map::new(),
+            cut,
+            cut_under: Vec::new(),
+            set,
             proto_names: false,
-            caps: output_ceiling(locked)
+            caps: realtime_ceiling(locked)
                 .map(|ceiling| Cap {
                     path: &[],
                     key: MAX_OUTPUT_TOKENS,
@@ -165,7 +239,8 @@ impl LockedKeys for OpenAiRealtimeCodec {
         .ok()
     }
 
-    /// `conversation.item.create`'s `item`, and `response.create`'s `response.input` items, read
+    /// `conversation.item.create`'s `item`, and `response.create`'s `response.input` items,
+    /// read wherever they sit at the top level.
     fn authors_instructions(&self, frame: &[u8]) -> bool {
         let Some((top, _)) = members(frame, ws(frame, 0)) else {
             return true;
@@ -184,6 +259,7 @@ impl LockedKeys for OpenAiRealtimeCodec {
     }
 
     /// The legacy `session.input_audio_format` and the GA `session.audio.input.format`, every
+    /// spelling of each the frame carries.
     fn uplink_format(&self, frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
         let (top, _) = members(frame, ws(frame, 0)).ok_or(Unmeterable)?;
         let mut named = Named::default();
@@ -235,6 +311,7 @@ impl Named {
 }
 
 /// The objects at every `key` member of the object at `b[open]` (none when `b[open]` is not an
+/// object: the far end refuses that shape itself).
 fn nested(b: &[u8], open: usize, key: &str) -> Result<Vec<usize>, Unmeterable> {
     if b.get(open) != Some(&b'{') {
         return Ok(Vec::new());
@@ -255,7 +332,8 @@ fn legacy_format(value: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
     }
 }
 
-/// A GA format object (`{"type":"audio/pcm","rate":24000}`, `{"type":"audio/pcmu"}`), or a legacy
+/// A GA format object (`{"type":"audio/pcm","rate":24000}`, `{"type":"audio/pcmu"}`), or a
+/// legacy token where one is written in its place; `null` names none.
 fn ga_format(b: &[u8], at: usize) -> Result<Option<AudioFormat>, Unmeterable> {
     let end = value_end(b, at).ok_or(Unmeterable)?;
     if b.get(at) != Some(&b'{') {
@@ -290,7 +368,9 @@ fn ga_format(b: &[u8], at: usize) -> Result<Option<AudioFormat>, Unmeterable> {
     }
 }
 
-/// Whether the item at `b[at]` is in an instructing role: `Some(true)` when any `role` it carries
+/// Whether the item at `b[at]` is in an instructing role: `Some(true)` when any `role` it
+/// carries is one, `Some(false)` when none is (or it is not an object), `None` when it cannot
+/// be read.
 fn instructs(b: &[u8], at: usize) -> Option<bool> {
     if b.get(at) != Some(&b'{') {
         return Some(false);
@@ -310,6 +390,7 @@ fn instructs(b: &[u8], at: usize) -> Option<bool> {
 }
 
 /// Whether the response object at `b[at]` carries, in any `input` array, an item in an
+/// instructing role.
 fn input_instructs(b: &[u8], at: usize) -> Option<bool> {
     if b.get(at) != Some(&b'{') {
         return Some(false);
@@ -350,7 +431,7 @@ fn elements(b: &[u8], open: usize) -> Option<Vec<usize>> {
 impl LockedKeys for GeminiLiveCodec {
     const GOVERNED: &'static [&'static str] = &["setup"];
 
-    /// `setup`, locked to `locked`. The output ceiling is not set over the caller's: the
+    /// `setup`, locked to `locked`.
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
         let mut set = setup_locked(locked);
         let emptied = match set.get_mut(GENERATION_CONFIG) {
@@ -365,7 +446,8 @@ impl LockedKeys for GeminiLiveCodec {
         }
         Rule {
             at: "setup",
-            cut: LIVE_CUT,
+            cut: LIVE_CUT.to_vec(),
+            cut_under: Vec::new(),
             set,
             proto_names: true,
             caps: output_ceiling(locked)
@@ -399,13 +481,15 @@ impl LockedKeys for GeminiLiveCodec {
         false
     }
 
-    /// Gemini Live states each uplink blob's format on the blob itself (its `mimeType`), and each
+    /// Gemini Live states each uplink blob's format on the blob itself (its `mimeType`), and
+    /// each blob is metered at the format it states: `setup` configures none.
     fn uplink_format(&self, _frame: &[u8]) -> Result<Option<AudioFormat>, Unmeterable> {
         Ok(None)
     }
 }
 
 /// `frame` with `rule` applied to every top-level `rule.at` object; the frame unchanged when it
+/// holds none.
 #[must_use]
 pub fn splice(frame: &[u8], rule: &Rule) -> Option<Vec<u8>> {
     let open = ws(frame, 0);
@@ -425,7 +509,10 @@ pub fn splice(frame: &[u8], rule: &Rule) -> Option<Vec<u8>> {
         let edited = object(
             frame,
             m.value.0,
-            rule.cut,
+            Cuts {
+                here: &rule.cut,
+                under: &rule.cut_under,
+            },
             &rule.set,
             rule.proto_names,
             &rule.caps,
@@ -446,6 +533,7 @@ struct JsonMember {
 }
 
 /// `key` as a protobuf JSON reader resolves it when `proto` (its lowerCamelCase JSON name: an
+/// underscore is dropped and the letter after it raised), else as written.
 fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
     if !proto || !key.contains('_') {
         return std::borrow::Cow::Borrowed(key);
@@ -465,11 +553,44 @@ fn field_name(key: &str, proto: bool) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
-/// The object at `b[open]`, rebuilt: the caller's members not cut, not set and not capped, in order
+/// The keys cut from one object: its own (`here`), and those deeper down, by their paths.
+#[derive(Clone, Copy)]
+struct Cuts<'c> {
+    here: &'c [&'static str],
+    under: &'c [&'static [&'static str]],
+}
+
+impl Cuts<'_> {
+    /// Whether a key under the member `name` is cut.
+    fn reaches(&self, name: &str) -> bool {
+        self.under.iter().any(|p| p.first() == Some(&name))
+    }
+
+    /// The cuts of the object under the member `name`: `(its own keys, those deeper down)`.
+    fn below(&self, name: &str) -> (Vec<&'static str>, Vec<&'static [&'static str]>) {
+        let mut here = Vec::new();
+        let mut under = Vec::new();
+        for &path in self.under.iter().filter(|p| p.first() == Some(&name)) {
+            match &path[1..] {
+                [key] => here.push(*key),
+                [] => {}
+                deeper => under.push(deeper),
+            }
+        }
+        (here, under)
+    }
+}
+
+/// The object at `b[open]`, rebuilt: the caller's members not cut, not set and not capped, in
+/// order and byte for byte; then each `set` member (merged into the caller's when both are
+/// objects); then each object a cap reaches into that no `set` member names (the caller's
+/// object, rebuilt under its caps, or a new one in place of whatever else the caller wrote
+/// there, `null` included, or where a cap is written in the caller's absence); then each cap on
+/// this object's own members ([`Cap`]).
 fn object(
     b: &[u8],
     open: usize,
-    cut: &[&str],
+    cut: Cuts<'_>,
     set: &Map<String, Value>,
     proto: bool,
     caps: &[Cap],
@@ -506,11 +627,23 @@ fn object(
     };
     for m in &members {
         let name = field_name(&m.key, proto);
-        if cut.contains(&&*name) || set.contains_key(&*name) || capped(&name) || reaches(&name) {
+        if cut.here.contains(&&*name) || set.contains_key(&*name) || capped(&name) || reaches(&name)
+        {
             continue;
         }
         sep(&mut out);
-        out.extend_from_slice(&b[m.start..m.value.1]);
+        if cut.reaches(&name) && is_object(m) {
+            // A key is cut deeper down: the member is rebuilt where the caller wrote it.
+            let (sub_here, sub_under) = cut.below(&name);
+            let sub = Cuts {
+                here: &sub_here,
+                under: &sub_under,
+            };
+            out.extend_from_slice(&b[m.start..m.value.0]);
+            out.extend_from_slice(&object(b, m.value.0, sub, &Map::new(), proto, &[])?);
+        } else {
+            out.extend_from_slice(&b[m.start..m.value.1]);
+        }
     }
 
     let theirs = |key: &str| {
@@ -524,11 +657,16 @@ fn object(
         out.extend_from_slice(&serde_json::to_vec(key).ok()?);
         out.push(b':');
         let sub = below(key);
+        let (sub_here, sub_under) = cut.below(key);
+        let sub_cut = Cuts {
+            here: &sub_here,
+            under: &sub_under,
+        };
         match (value, theirs(key)) {
-            (Value::Object(locked), Some(m)) => {
-                out.extend_from_slice(&object(b, m.value.0, &[], locked, proto, &sub)?);
+            (Value::Object(locked), Some(m)) if !WHOLE.contains(&key.as_str()) => {
+                out.extend_from_slice(&object(b, m.value.0, sub_cut, locked, proto, &sub)?);
             }
-            (Value::Object(locked), None) => {
+            (Value::Object(locked), _) => {
                 out.extend_from_slice(&serde_json::to_vec(&fresh(locked, &sub)).ok()?);
             }
             _ => out.extend_from_slice(&serde_json::to_vec(value).ok()?),
@@ -536,8 +674,13 @@ fn object(
     }
     for parent in under.iter().copied().filter(|p| !set.contains_key(*p)) {
         let sub = below(parent);
+        let (sub_here, sub_under) = cut.below(parent);
+        let sub_cut = Cuts {
+            here: &sub_here,
+            under: &sub_under,
+        };
         let rebuilt = match theirs(parent) {
-            Some(m) => object(b, m.value.0, &[], &Map::new(), proto, &sub)?,
+            Some(m) => object(b, m.value.0, sub_cut, &Map::new(), proto, &sub)?,
 
             None if sub.iter().any(|c| c.when_absent)
                 || members.iter().any(|m| field_name(&m.key, proto) == parent) =>
@@ -578,6 +721,7 @@ fn object(
 }
 
 /// `locked` as a new object where the caller wrote none, with each cap that is written in the
+/// caller's absence ([`Cap::when_absent`]) at its ceiling.
 fn fresh(locked: &Map<String, Value>, caps: &[Cap]) -> Value {
     let mut m = locked.clone();
     'caps: for c in caps.iter().filter(|c| c.when_absent) {
@@ -604,7 +748,8 @@ fn ws(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-/// The members of the object at `b[open]` (the contract's scanner, each key read as JSON), and the
+/// The members of the object at `b[open]` (the contract's scanner, each key read as JSON), and
+/// the index past its closing brace.
 fn members(b: &[u8], open: usize) -> Option<(Vec<JsonMember>, usize)> {
     if b.get(open) != Some(&b'{') {
         return None;

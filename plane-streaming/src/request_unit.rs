@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! One request unit as the kernel's route pump drives it: the mint door's one request, and what
+//! the plane answers it with.
 
 use std::sync::Arc;
 
@@ -70,6 +71,8 @@ pub struct RequestUnit {
 
 impl RequestUnit {
     /// Open the plane's state for one kernel unit on `door` (the unit's identity is the kernel's;
+    /// the door keys this state by it), minting over the `locked` session params. `None` for a door
+    /// that opens a live session.
     #[must_use]
     pub fn open(door: Door, locked: impl Into<Arc<SessionConfig>>) -> Option<Self> {
         if door.is_session() {
@@ -95,16 +98,10 @@ impl RequestUnit {
     }
 
     /// `true` once the far end has begun its answer: never, for a unit that dials nothing, so a
+    /// cancel of one is ABORTED (owner billing rule R21).
     #[must_use]
     pub const fn far_answered(&self) -> bool {
         false
-    }
-
-    /// `true` once the caller's answer has been given.
-    #[cfg(test)]
-    #[must_use]
-    pub const fn answered(&self) -> bool {
-        self.answered
     }
 
     fn answer(&mut self, reply: Reply) -> Answer {
@@ -112,7 +109,7 @@ impl RequestUnit {
         Answer::ToCaller(reply)
     }
 
-    /// The plane's answer to `piece`. The caller's last piece asks for the ticket, once; a far
+    /// The plane's answer to `piece`.
     pub fn on_piece(&mut self, piece: Piece) -> Answer {
         if self.answered || self.asked {
             return Answer::Nothing;
@@ -144,7 +141,8 @@ impl RequestUnit {
         }
     }
 
-    /// The key's grant does not reach `entry`, the model the ticket's call would be routed to: the
+    /// The key's grant does not reach `entry`, the model the ticket's call would be routed to:
+    /// the caller is refused, explained, and no ticket is asked for (R10 grant ruling).
     pub fn not_granted(&mut self, entry: &str) -> Answer {
         self.answered = true;
         Answer::Rejected(

@@ -5,6 +5,16 @@
 
 use super::*;
 
+impl Body {
+    /// The public bytes; `None` for a sealed answer, which the plane never reads.
+    pub(crate) fn public(&self) -> Option<&[u8]> {
+        match self {
+            Self::Public(b) => Some(b),
+            Self::Sealed(_) => None,
+        }
+    }
+}
+
 #[test]
 fn every_published_claim_arrives_at_its_door_in_its_dialect() {
     let doors: Vec<_> = (0..6)
@@ -74,6 +84,7 @@ fn the_mint_dials_nothing_and_busbars_call_names_the_caller() {
 }
 
 /// The mint door's answer is the ticket and its expiry in the OpenAI-compatible shape; a failed
+/// mint keeps the served plane's text.
 #[test]
 fn a_minted_ticket_is_answered_and_a_failure_keeps_the_served_text() {
     let ok = minted(&crate::tests::sealed_minted("ek_1", 9).ticket, 9);
@@ -88,12 +99,14 @@ fn a_minted_ticket_is_answered_and_a_failure_keeps_the_served_text() {
     assert_eq!(refused.status, 502);
     assert_eq!(
         String::from_utf8(crate::tests::body_bytes(refused.body)).expect("utf-8"),
-        "streaming ephemeral-secret mint failed: ephemeral token mint failed: the host minted no \
+        "streaming ephemeral-secret mint failed: the host minted no \
          ticket"
     );
 }
 
 /// The sideband door's `{call_id}` is read off the arrival's target, and only an id made of the
+/// call ids' characters is taken: nothing that could carry another parameter into a dialled
+/// query.
 #[test]
 fn a_sideband_arrival_names_its_call() {
     assert_eq!(
@@ -128,15 +141,19 @@ fn each_door_routes_and_meters_as_the_plane_answers() {
         !sock.target.contains("key="),
         "the credential is never in the target"
     );
+    let call = Door::Sdp.route(Some("vk-1")).expect("an SDP session dials");
+    assert_eq!((call.verb, call.target), ("POST", CALLS_PATH));
     assert_eq!(
-        Door::Sdp.route(Some("vk-1")),
-        Some(call_attempt(Some("vk-1")))
+        call.fields,
+        vec![
+            (FIELD_CONTENT_TYPE, CALL_FORM_TYPE.to_string()),
+            (SAFETY_IDENTIFIER_HEADER, "vk-1".to_string())
+        ]
     );
     let mut units = crate::session_unit::CumulativeUnits::default();
     units.0[1] = 20;
     units.0[4] = 2;
     assert_eq!(units.reported(), vec![(1, 20), (4, 2)]);
-    assert_eq!(SESSION_OPEN_ACTION, crate::meta::OP_SESSION_OPEN.as_str());
 }
 
 #[test]
@@ -161,7 +178,9 @@ fn plain_openai_realtime_over_ws_is_its_own_session_door() {
     );
 }
 
-/// `Debug` of the reply that carries a minted ticket to the caller prints no byte of the live `ek_`
+/// `Debug` of the reply that carries a minted ticket to the caller prints no byte of the live
+/// `ek_` ticket, as text or as the body's byte list: a `{:?}` in a log line holds no
+/// credential.
 #[test]
 fn debug_of_a_minted_tickets_reply_prints_no_ticket() {
     const CANARY: &str = "ek_CANARY7c1f9e";

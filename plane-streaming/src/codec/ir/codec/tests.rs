@@ -53,7 +53,10 @@ fn uplink_audio_append_counts_its_decoded_bytes() {
 /// AUDIO THAT DOES NOT DECODE IS NOT SILENCE: an uplink payload that is not base64 counts nothing,
 #[test]
 fn an_undecodable_audio_payload_counts_nothing() {
-    assert!(up(&json!({ "type": "input_audio_buffer.append", "audio": "!!!!" })).is_empty());
+    let frame = br#"{"type":"input_audio_buffer.append","audio":"!!!!"}"#;
+    assert!(OpenAiRealtimeCodec
+        .uplink_audio(&peek::Lite::read(frame).unwrap(), &mut |_, _| {})
+        .is_err());
     assert_eq!(
         up(&json!({ "type": "input_audio_buffer.append", "audio": b64(&[1, 2, 3, 4]) })),
         vec![(None, 4)],
@@ -279,4 +282,34 @@ fn a_saturated_input_total_leaves_no_text_slice_and_never_wraps() {
     assert_eq!(u.text_in, 0, "{u:?}");
     assert_eq!(u.audio_in, u64::MAX - 2, "{u:?}");
     assert_eq!(u.image_in, 5, "{u:?}");
+}
+
+#[test]
+fn audit_openai_audio_paths_and_duplicates() {
+    assert_eq!(
+        up(
+            &json!({"type":"response.create", "response":{"input":[{"content":[{"type":"input_audio","audio":"AQID"}]}]}})
+        ),
+        vec![(None, 3)]
+    );
+    for frame in [
+        r#"{"type":"input_audio_buffer.append","audio":"AQID","audio":""}"#,
+        r#"{"type":"input_audio_buffer.append","audio":5}"#,
+        r#"{"type":"input_audio_buffer.append","type":"ignored","audio":"AQID"}"#,
+        r#"{"type":"conversation.item.create","item":{"content":[{"type":"input_audio","audio":"!"}]}}"#,
+    ] {
+        assert!(
+            OpenAiRealtimeCodec
+                .uplink_audio(&peek::Lite::read(frame.as_bytes()).unwrap(), &mut |_, _| {})
+                .is_err(),
+            "{frame}"
+        );
+    }
+}
+
+#[test]
+fn audit_openai_owned_meter_parse_enforces_node_budget() {
+    let frame = serde_json::to_vec(&serde_json::json!({"type":"response.done","response":{"usage":{"input_tokens":1},"output":vec![0; super::peek::MAX_LITE_NODES]}})).unwrap();
+    let events = OpenAiRealtimeCodec.meter_down(&frame);
+    assert!(matches!(events.as_slice(), [Metered::Usage(usage)] if usage.floor));
 }

@@ -2,10 +2,18 @@
 // Copyright (C) 2026 Busbar Inc and contributors
 
 //! Tests for `crates/busbar-plane-streaming/src/request_unit.rs`: the mint door, answered by a
+//! ticket busbar mints (row 132).
 
 use super::*;
 
-/// A piece from `from`, `last` or not. The mint reads no body: `_bytes` names what the caller
+impl RequestUnit {
+    /// `true` once the caller's answer has been given.
+    pub(crate) const fn answered(&self) -> bool {
+        self.answered
+    }
+}
+
+/// A piece from `from`, `last` or not.
 fn piece(from: From, _bytes: &[u8], last: bool) -> Piece {
     Piece { from, last }
 }
@@ -43,6 +51,7 @@ fn the_mint_door_asks_for_a_ticket_locking_its_session_once() {
 }
 
 /// The mint door's answer: the OpenAI-compatible `{value, expires_at_unix}` shape, the ticket
+/// sealed through the SDK (R7).
 #[test]
 fn a_minted_ticket_is_answered_in_the_shape_sdks_read() {
     let mut unit = RequestUnit::open(Door::Mint, locked()).expect("a request door");
@@ -89,14 +98,12 @@ fn a_refused_mint_keeps_the_served_text() {
     assert_eq!(reply.status, 502);
     assert_eq!(
         reply.body.public(),
-        Some(
-            &b"streaming ephemeral-secret mint failed: ephemeral token mint failed: no principal"[..]
-        ),
+        Some(&b"streaming ephemeral-secret mint failed: no principal"[..]),
         "a refusal's text is public"
     );
     assert_eq!(
         String::from_utf8(crate::tests::body_bytes(reply.body)).expect("utf-8"),
-        "streaming ephemeral-secret mint failed: ephemeral token mint failed: no principal"
+        "streaming ephemeral-secret mint failed: no principal"
     );
 }
 
