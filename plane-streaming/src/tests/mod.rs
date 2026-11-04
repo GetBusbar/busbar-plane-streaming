@@ -1,8 +1,6 @@
 //! Test-only wiring: the selector and style checks.
 
 /// What a request path matches, decided the same way the boot's overlap check decides it.
-
-/// What a request path matches, decided the same way the boot's overlap check decides it.
 mod selectors {
     /// Twilio Media Streams is a streaming DIALECT carried by the WebSocket transport, not a
     /// transport of its own (the design lists five transports and no telephony one).

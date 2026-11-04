@@ -3,6 +3,7 @@
 
 //! The Twilio Media Streams envelope for the telephony topology.
 
+#[cfg(test)]
 use serde::Serialize;
 
 use busbar_contract::media::{base64_decode, base64_encode};
@@ -240,6 +241,7 @@ impl TwilioEnvelope {
 
     /// ENCODE raw µ-law bytes into a Twilio outbound `media` envelope for a given `stream_sid`. The audio payload is standard base64.
     #[must_use]
+    #[cfg(test)]
     pub fn encode_media(stream_sid: &str, mulaw: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         Self::encode_media_into(&mut out, stream_sid, mulaw);
@@ -247,6 +249,7 @@ impl TwilioEnvelope {
     }
 
     /// The same envelope, rendered into a buffer the caller already holds.
+    #[cfg(test)]
     pub fn encode_media_into(out: &mut Vec<u8>, stream_sid: &str, mulaw: &[u8]) {
         out.clear();
         if !is_bare_json_string(stream_sid) {
@@ -277,12 +280,14 @@ impl TwilioEnvelope {
 }
 
 /// Whether a string is its own JSON body: printable ASCII with neither character a JSON string must escape.
+#[cfg(test)]
 fn is_bare_json_string(s: &str) -> bool {
     s.bytes()
         .all(|b| (0x20..0x7f).contains(&b) && b != b'"' && b != b'\\')
 }
 
 /// Standard base64 (RFC 4648) with padding, appended to a buffer the caller holds: the same bytes as the contract encoder, without a temporary allocation.
+#[cfg(test)]
 fn base64_encode_into(data: &[u8], out: &mut Vec<u8>) {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     for chunk in data.chunks(3) {
@@ -305,6 +310,7 @@ fn base64_encode_into(data: &[u8], out: &mut Vec<u8>) {
     }
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 struct OutboundMedia<'a> {
     event: &'static str,
@@ -313,6 +319,7 @@ struct OutboundMedia<'a> {
     media: OutboundPayload,
 }
 
+#[cfg(test)]
 #[derive(Serialize)]
 struct OutboundPayload {
     payload: String,

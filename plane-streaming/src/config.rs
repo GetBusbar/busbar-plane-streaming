@@ -159,12 +159,16 @@ impl StreamsCfg {
     /// is left to the host's provider resolution.
     pub fn supports(&self, door: crate::driven::Door) -> bool {
         use crate::driven::Door;
-        match (door, self.provider_protocol.as_deref()) {
-            (Door::Mint, _) | (_, None) => true,
-            (Door::Gemini, Some("gemini")) => true,
-            (Door::Sdp | Door::Sideband | Door::Twilio | Door::Realtime, Some("openai")) => true,
-            _ => false,
-        }
+        matches!(
+            (door, self.provider_protocol.as_deref()),
+            (Door::Mint, _)
+                | (_, None)
+                | (Door::Gemini, Some("gemini"))
+                | (
+                    Door::Sdp | Door::Sideband | Door::Twilio | Door::Realtime,
+                    Some("openai")
+                )
+        )
     }
 
     /// Why the section's two token ceilings cannot both hold, if they cannot: a per-response output

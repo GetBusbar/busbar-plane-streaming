@@ -2,6 +2,7 @@
 //! closed turn's counts per declared class.
 
 use crate::codec::ir::{AudioFormat, IrDuplexUsage};
+#[cfg(test)]
 use busbar_contract::ids::MeterClassId;
 
 use crate::meta;
@@ -20,7 +21,7 @@ use crate::meta;
 /// admitted audio short of a whole millisecond (a frame's bytes do not divide into milliseconds
 /// evenly, and flooring each frame lost the remainder every frame), and the milliseconds the
 /// session's earlier turns already settled. A closed turn bills the DIFFERENCE of the session's
-/// cumulative seconds figure ([`class_counts`]), so the sum over every turn is the session's total
+/// cumulative seconds figure ([`class_amounts`]), so the sum over every turn is the session's total
 /// milliseconds converted once — rounding each turn up on its own billed 20 turns of 1050 ms as 40 s
 /// of audio rather than 21 s. Each frame is counted at its own format, and a session may carry more
 /// than one (a Gemini caller may send 16 kHz and 24 kHz blobs), so the remainder is kept in
@@ -113,6 +114,7 @@ impl TurnCounters {
 /// turn whose answer reported `usage` (`None` for an ending that reported none: an upstream
 /// error, a carrier stop, a session torn down mid-turn) and whose own bookkeeping is
 /// `counters`.
+#[cfg(test)]
 #[must_use]
 pub fn class_counts(
     usage: Option<&IrDuplexUsage>,

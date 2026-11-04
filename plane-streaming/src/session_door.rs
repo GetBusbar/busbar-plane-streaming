@@ -475,6 +475,16 @@ pub struct Sessions {
 }
 
 impl Sessions {
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.live.len()
+    }
+
+    #[cfg(test)]
+    pub fn ready_count(&self) -> usize {
+        self.ready(usize::MAX).len()
+    }
+
     /// Stream `stream`'s session, opened on `door` under `cfg` at its first piece. `None` for a
     /// door that answers one request, a stream past [`MAX_SESSIONS`], or a stream whose session
     /// ended: a caller's piece after its call ended (a second Twilio `stop`) is refused,

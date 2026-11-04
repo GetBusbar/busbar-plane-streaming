@@ -392,9 +392,7 @@ fn cached_content_tokens_are_not_billed_twice() {
 
     let billed = crate::session::class_counts(Some(u), crate::session::TurnCounters::default());
     assert!(
-        billed
-            .iter()
-            .all(|(c, _)| c.as_str() != crate::meta::CLASS_CACHED_TOKENS.as_str()),
+        billed.iter().all(|(c, _)| c.as_str() != "cached_tokens"),
         "the cached subset is never a class of its own: {billed:?}"
     );
     assert_eq!(
