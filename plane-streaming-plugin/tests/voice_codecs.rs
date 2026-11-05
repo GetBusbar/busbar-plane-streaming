@@ -550,10 +550,26 @@ fn gemini_server_content_turn_complete() {
     );
 }
 
+// Preserve the captured oracle and all its fields; the current session lock now
+// explicitly states the default interruption policy instead of relying on omission.
+fn gemini_setup_with_locked_activity(captured: &[u8]) -> Vec<u8> {
+    let mut expected: Value = serde_json::from_slice(captured).unwrap();
+    let realtime = expected["setup"]["realtimeInputConfig"]
+        .as_object_mut()
+        .unwrap();
+    assert!(!realtime.contains_key("activityHandling"));
+    realtime.insert(
+        "activityHandling".into(),
+        Value::String("START_OF_ACTIVITY_INTERRUPTS".into()),
+    );
+    serde_json::to_vec(&expected).unwrap()
+}
+
 #[test]
 fn gemini_setup() {
     let bytes = include_bytes!("../../testing/voice-conformance/fixtures/gemini/setup.json");
-    fixture(3, bytes, FROM_CALLER, oracles::GEMINI_SETUP, &[]);
+    let expected = gemini_setup_with_locked_activity(oracles::GEMINI_SETUP);
+    fixture(3, bytes, FROM_CALLER, &expected, &[]);
 }
 
 #[test]
@@ -812,7 +828,7 @@ fn gemini_captured_transcript_preserves_order_and_semantics() {
             let first_far = from == FROM_FAR_END && !std::mem::replace(&mut far_seen, true);
             let bytes = serde_json::to_vec(&frame["event"]).unwrap();
             let expected = match index {
-                0 => oracles::GEMINI_TRANSCRIPT_0.to_vec(),
+                0 => gemini_setup_with_locked_activity(oracles::GEMINI_TRANSCRIPT_0),
                 _ => bytes.clone(),
             };
             let mut answer = abi::piece(

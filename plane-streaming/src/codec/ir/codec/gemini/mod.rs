@@ -147,19 +147,23 @@ pub(crate) fn setup_from_session_config(cfg: &SessionConfig) -> Value {
             ..
         })) => {
             let mut config = json!({ "automaticActivityDetection": {
+                "disabled": false,
                 "prefixPaddingMs": prefix_padding_ms,
                 "silenceDurationMs": silence_duration_ms,
             }});
-
-            if !interrupt_response {
-                config["activityHandling"] = json!("NO_INTERRUPTION");
-            }
+            // These defaults must be explicit: setup is merged over the caller's object,
+            // so omission would preserve a conflicting caller policy.
+            config["activityHandling"] = json!(if *interrupt_response {
+                "START_OF_ACTIVITY_INTERRUPTS"
+            } else {
+                "NO_INTERRUPTION"
+            });
             setup.insert("realtimeInputConfig".into(), config);
         }
         Some(Some(IrVad::SemanticVad { .. })) => {
             setup.insert(
                 "realtimeInputConfig".into(),
-                json!({ "automaticActivityDetection": {} }),
+                json!({ "automaticActivityDetection": { "disabled": false } }),
             );
         }
     }

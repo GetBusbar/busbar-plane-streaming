@@ -509,6 +509,9 @@ pub fn read_dealt(settings: &[u8]) -> Result<StreamsCfg, String> {
                 .or_else(|| matches!(provider, "openai" | "gemini").then_some(provider))
         })
         .map(str::to_owned);
+    if cfg.provider_protocol.as_deref() == Some(GEMINI_PROVIDER) {
+        cfg.session.validate_gemini().map_err(str::to_owned)?;
+    }
     Ok(cfg)
 }
 
@@ -1468,6 +1471,14 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         out.error("the session door does not speak the configured model's provider protocol");
         return Outcome::Refused;
     }
+    if a.door == Door::Gemini {
+        if let Err(why) = cfg.session.validate_gemini() {
+            out.set(|o| &o.refusal, REFUSAL_NO_DOOR);
+            out.set(|o| &o.refusal_status, 400);
+            out.error(why);
+            return Outcome::Refused;
+        }
+    }
     if !p.arrive_under(input.unit(), Arc::clone(&cfg)) {
         lock(&p.calls).forget(input.unit());
         out.set(|o| &o.refusal, REFUSAL_SESSIONS_FULL);
@@ -2187,6 +2198,12 @@ slot!(Project, ProjectIn, ProjectOut, |instance, input, out| {
         let rewritten = applied.is_some();
         let params = match applied {
             Some(params) => {
+                if door == Door::Gemini {
+                    if let Err(why) = params.validate_gemini() {
+                        out.error(why);
+                        return Outcome::Refused;
+                    }
+                }
                 if !lock(&p.sessions).rewrite(given.unit(), params.clone()) {
                     out.error(CALLS_FULL_TEXT);
                     return Outcome::Refused;

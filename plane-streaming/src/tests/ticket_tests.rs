@@ -37,6 +37,18 @@ fn a_tickets_record_locks_its_session_and_reads_back() {
     assert!(locked_by(b"[1,2]").is_err());
 }
 
+/// The ordinary browser ticket carries the default ServerVad threshold. This must also work
+/// when the linked host enables serde_json/arbitrary_precision.
+#[test]
+fn a_ticket_with_default_vad_roundtrips_under_the_hosts_json_features() {
+    let mut locked = crate::config::StreamsCfg::default().session;
+    locked.model = Some("m-cap".into());
+    locked.max_output_tokens = Some(crate::codec::ir::config::MaxOutputTokens::Limit(4096));
+    let record = ticket_record(&locked).expect("serializes");
+    assert_eq!(locked_by(&record).expect("full ticket reads"), locked);
+    assert!(locked_by(br#"{"turn_detection":{"type":"server_vad","threshold":"bad"}}"#).is_err());
+}
+
 /// The upstream form: the locked session first, then the opened part the description fills.
 #[test]
 fn the_upstream_form_carries_the_session_and_opens_the_description_part() {

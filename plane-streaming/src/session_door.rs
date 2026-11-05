@@ -148,6 +148,9 @@ impl Live {
             cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg))),
             cfg,
         );
+        if door == Door::Gemini && locked.validate_gemini().is_err() {
+            return None;
+        }
         let mut unit = match door {
             Door::Sideband | Door::Realtime | Door::Sdp => {
                 Unit::Realtime(SessionUnit::open(OpenAiRealtimeCodec, locked, false))

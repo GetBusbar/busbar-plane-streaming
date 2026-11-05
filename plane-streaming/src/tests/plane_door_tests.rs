@@ -683,6 +683,27 @@ fn audit_dealt_provider_protocol_refuses_mismatched_doors() {
     assert!(!cfg.supports(Door::Twilio));
 }
 
+#[test]
+fn gemini_tool_choice_is_refused_when_the_provider_is_known() {
+    for choice in [
+        serde_json::json!("none"),
+        serde_json::json!("required"),
+        serde_json::json!("auto"),
+        serde_json::json!({"type":"function","name":"lookup"}),
+    ] {
+        let mut dealt = serde_json::json!({
+            "streams":{"session":{"model":"live", "tool_choice":choice}},
+            "models":{"live":{"provider":"custom"}},
+            "providers":{"custom":{"protocol":"gemini"}}
+        });
+        let error = read_dealt(&serde_json::to_vec(&dealt).unwrap()).unwrap_err();
+        assert!(error.contains("streams.session.tool_choice"), "{error}");
+        assert!(error.contains("Gemini Live"), "{error}");
+        dealt["providers"]["custom"]["protocol"] = serde_json::json!("openai");
+        assert!(read_dealt(&serde_json::to_vec(&dealt).unwrap()).is_ok());
+    }
+}
+
 /// Published settings must match the lifecycle's own grammar, including nested refusals.
 #[test]
 fn settings_schema_matches_lifecycle_grammar() {

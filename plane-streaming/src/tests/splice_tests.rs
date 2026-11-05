@@ -6,6 +6,57 @@
 
 use super::*;
 
+#[test]
+fn gemini_caller_setup_cannot_disable_locked_vad_or_barge_in() {
+    let locked = crate::config::StreamsCfg::default().session;
+    let rule = GeminiLiveCodec.configure_rule(&locked);
+    for caller in [
+        br#"{"setup":{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true},"activityHandling":"NO_INTERRUPTION"}}}"#.as_slice(),
+        br#"{"setup":{"realtime_input_config":{"automatic_activity_detection":{"disabled":true},"activity_handling":"NO_INTERRUPTION"}}}"#.as_slice(),
+    ] {
+        let out = splice(caller, &rule).expect("spliced");
+        let value: Value = serde_json::from_slice(&out).expect("json");
+        let realtime = &value["setup"]["realtimeInputConfig"];
+        assert_eq!(realtime["automaticActivityDetection"]["disabled"], false);
+        assert_eq!(realtime["activityHandling"], "START_OF_ACTIVITY_INTERRUPTS");
+        assert_eq!(realtime["automaticActivityDetection"]["silenceDurationMs"], 500);
+        assert!(value["setup"].get("realtime_input_config").is_none());
+        assert!(realtime.get("activity_handling").is_none());
+    }
+}
+
+#[test]
+fn gemini_vad_disabled_and_barge_in_disabled_remain_locked() {
+    let mut locked = crate::config::StreamsCfg::default().session;
+    if let Some(Some(crate::codec::ir::config::IrVad::ServerVad {
+        interrupt_response, ..
+    })) = &mut locked.turn_detection
+    {
+        *interrupt_response = false;
+    }
+    let caller = br#"{"setup":{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":true},"activityHandling":"START_OF_ACTIVITY_INTERRUPTS"}}}"#;
+    let out = splice(caller, &GeminiLiveCodec.configure_rule(&locked)).unwrap();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(
+        value["setup"]["realtimeInputConfig"]["activityHandling"],
+        "NO_INTERRUPTION"
+    );
+    assert_eq!(
+        value["setup"]["realtimeInputConfig"]["automaticActivityDetection"]["disabled"],
+        false
+    );
+
+    locked.turn_detection = Some(None);
+    let caller =
+        br#"{"setup":{"realtimeInputConfig":{"automaticActivityDetection":{"disabled":false}}}}"#;
+    let out = splice(caller, &GeminiLiveCodec.configure_rule(&locked)).unwrap();
+    let value: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(
+        value["setup"]["realtimeInputConfig"]["automaticActivityDetection"]["disabled"],
+        true
+    );
+}
+
 fn rule(set: serde_json::Value) -> Rule {
     Rule {
         at: "session",

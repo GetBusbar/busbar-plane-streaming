@@ -174,7 +174,7 @@
               "default": []
             },
             "tool_choice": {
-              "description": "Opaque provider tool-choice JSON, retained verbatim."
+              "description": "Opaque OpenAI Realtime tool-choice JSON, retained verbatim. Gemini Live refuses an explicit tool_choice policy; omit this field for Gemini."
             },
             "max_output_tokens": {
               "anyOf": [

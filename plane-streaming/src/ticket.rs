@@ -54,7 +54,12 @@ pub fn ticket_record(locked: &SessionConfig) -> Result<Vec<u8>, String> {
 
 /// The session config a ticket's record locks.
 pub fn locked_by(record: &[u8]) -> Result<SessionConfig, String> {
-    serde_json::from_slice(record).map_err(|_| "the ticket's record is not a session config".into())
+    // Decode through Value, as the lifecycle reader does. With the host's arbitrary_precision
+    // feature, direct decoding buffers an internally tagged VAD's floating threshold as a
+    // private number map, which serde cannot deserialize as f32.
+    serde_json::from_slice::<serde_json::Value>(record)
+        .and_then(serde_json::from_value)
+        .map_err(|_| "the ticket's record is not a session config".into())
 }
 
 /// The upstream call's form ([`CALL_FORM_TYPE`]): its body up to the opened part busbar's own

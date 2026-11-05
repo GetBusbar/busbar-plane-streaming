@@ -39,6 +39,8 @@ owns no other section.
   The plane translates these keys into each provider's wire format; OpenAI GA audio settings
   become nested `audio.input`/`audio.output` objects. Default: server VAD, 500 ms of silence,
   including a written session that omits `turn_detection`; explicit `null` disables VAD. A key the plane does not model is refused, naming its path.
+  Gemini Live has no tool-choice policy field: omit `tool_choice` for a Gemini model. An explicit
+  policy is refused instead of being silently ignored; OpenAI Realtime supports this setting.
 - `session_max_secs`: the wall-clock ceiling of one session, in seconds. Default: none. Zero is
   refused.
 - `context_window_tokens`: the context-window ceiling. Default 32768.

@@ -9,6 +9,18 @@ use std::num::NonZeroU32;
 
 use super::*;
 
+#[test]
+fn gemini_tool_choice_is_refused_without_catalog_metadata_and_after_rewrite() {
+    let mut cfg = StreamsCfg::default();
+    cfg.session.tool_choice = Some(serde_json::json!("none"));
+    assert!(Live::open_locked(Door::Gemini, &cfg, None).is_none());
+    assert!(Live::open_locked(Door::Realtime, &cfg, None).is_some());
+    let rewritten = cfg.session.clone();
+    cfg.session.tool_choice = None;
+    assert!(Live::open_locked(Door::Gemini, &cfg, None).is_some());
+    assert!(Live::open_locked(Door::Gemini, &cfg, Some(rewritten)).is_none());
+}
+
 impl Live {
     pub(crate) fn open(door: Door, cfg: &StreamsCfg) -> Option<Self> {
         Self::open_locked(door, cfg, None)

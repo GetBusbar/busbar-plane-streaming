@@ -459,10 +459,8 @@ fn a_lock_that_turns_barge_in_off_is_told_to_gemini() {
         500
     );
     let on = setup_from_session_config(&vad(true));
-    assert!(
-        on["setup"]["realtimeInputConfig"]
-            .get("activityHandling")
-            .is_none(),
+    assert_eq!(
+        on["setup"]["realtimeInputConfig"]["activityHandling"], "START_OF_ACTIVITY_INTERRUPTS",
         "{on}"
     );
 }

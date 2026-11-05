@@ -175,6 +175,16 @@ pub struct SessionConfig {
 }
 
 impl SessionConfig {
+    /// Refuse policies Gemini Live cannot express rather than silently dropping the lock.
+    /// Its setup has a tool list but no tool-choice policy field.
+    pub fn validate_gemini(&self) -> Result<(), &'static str> {
+        if self.tool_choice.is_some() {
+            Err("streams.session.tool_choice is not supported by Gemini Live; omit it")
+        } else {
+            Ok(())
+        }
+    }
+
     /// The locked session in the GA `session` shape, the shape the GA `/v1/realtime` socket reads on session updates.
     #[must_use]
     pub fn ga_session(&self) -> serde_json::Map<String, serde_json::Value> {
