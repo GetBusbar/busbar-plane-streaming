@@ -2277,10 +2277,14 @@ busbar_contract::statement_extensions!(
 /// The most calls the kernel keeps in flight on one instance.
 const MAX_INFLIGHT: u32 = 64;
 
+/// JSON Schema for the settings accepted by this plane's lifecycle readers.
+const SETTINGS_SCHEMA: &[u8] = include_bytes!("settings.schema.json");
+
 /// The Statement: the plane's name and version, its sections, its needs, its tail, its
 /// extensions and the mark words its issued ids carry.
 pub const STATEMENT: busbar_contract::abi::mechanism::door::Statement =
     busbar_contract::abi::mechanism::door::Statement {
+        settings_schema: busbar_contract::abi::mechanism::call::Blob::json(SETTINGS_SCHEMA),
         extensions: EXTENSIONS,
         mark_words: MARK_WORDS.as_ptr(),
         mark_words_len: MARK_WORDS.len(),

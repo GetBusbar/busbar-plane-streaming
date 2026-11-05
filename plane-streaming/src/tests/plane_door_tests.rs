@@ -4,6 +4,9 @@
 //! Tests for `plane-streaming/src/plane_door.rs`: the P-item pins the door holds (spec DONE
 //! item 2, "All P-item behaviours match 1.5.5"), each written against the door as it serves.
 
+#[path = "../../../testing/settings/integer_token.rs"]
+mod settings_profile;
+
 use super::*;
 
 impl Brokered {
@@ -678,4 +681,168 @@ fn audit_dealt_provider_protocol_refuses_mismatched_doors() {
     assert!(cfg.supports(Door::Gemini));
     assert!(!cfg.supports(Door::Realtime));
     assert!(!cfg.supports(Door::Twilio));
+}
+
+/// Published settings must match the lifecycle's own grammar, including nested refusals.
+#[test]
+fn settings_schema_matches_lifecycle_grammar() {
+    assert_eq!(STATEMENT.settings_schema.ptr, SETTINGS_SCHEMA.as_ptr());
+    assert_eq!(STATEMENT.settings_schema.len, SETTINGS_SCHEMA.len());
+    assert_eq!(
+        STATEMENT.settings_schema.fmt,
+        busbar_contract::abi::mechanism::call::BLOB_JSON
+    );
+    let schema: serde_json::Value = serde_json::from_slice(SETTINGS_SCHEMA).unwrap();
+    let validator = settings_profile::validator(&schema).unwrap();
+    for (source, accepted) in [
+        (r#"{}"#, true),
+        (r#"{"streams":null}"#, true),
+        (
+            r#"{"session":{"turn_detection":null,"modalities":["text"],"max_output_tokens":"inf"}}"#,
+            true,
+        ),
+        (
+            r#"{"session":{"turn_detection":{"type":"semantic_vad"}}}"#,
+            true,
+        ),
+        (
+            r#"{"media":{"listen":"127.0.0.1:4000"},"session_max_secs":10}"#,
+            true,
+        ),
+        (r#"{"session_max_secs":0}"#, false),
+        (r#"{"session":{"modalities":["audio","text"]}}"#, false),
+        (r#"{"session":{"input_audio_format":"g711_alaw"}}"#, false),
+        (
+            r#"{"session":{"turn_detection":{"type":"server_vad","bogus":true}}}"#,
+            false,
+        ),
+        (r#"{"session":{"max_output_tokens":0}}"#, false),
+        (r#"{"media":{}}"#, false),
+        (r#"{"max_output_tokens":0}"#, false),
+        (r#"{"typo":1}"#, false),
+    ] {
+        let value: serde_json::Value = serde_json::from_str(source).unwrap();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert_eq!(read_dealt(&bytes).is_ok(), accepted, "lifecycle: {source}");
+        assert_eq!(validator.is_valid(&value), accepted, "schema: {source}");
+    }
+}
+
+#[test]
+fn settings_schema_matches_locked_session_keys_and_defaults() {
+    let schema: serde_json::Value = serde_json::from_slice(SETTINGS_SCHEMA).unwrap();
+    let section = &schema["$defs"]["section"]["properties"];
+    let session = &section["session"];
+    let mut actual: Vec<_> = session["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let mut expected = crate::config::SESSION_KEYS.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+    let defaults = read_settings(b"").unwrap();
+    assert_eq!(
+        section["context_window_tokens"]["default"],
+        defaults.context_window_tokens
+    );
+    assert_eq!(
+        section["max_output_tokens"]["default"],
+        defaults.max_output_tokens
+    );
+    assert_eq!(
+        session["default"],
+        serde_json::to_value(&defaults.session).unwrap()
+    );
+}
+
+#[test]
+fn settings_schema_integer_tokens_match_native_parser() {
+    let schema: serde_json::Value = serde_json::from_slice(SETTINGS_SCHEMA).unwrap();
+    let profile = settings_profile::validator(&schema).unwrap();
+    let standard = jsonschema::validator_for(&schema).unwrap();
+    assert_eq!(schema["x-busbar-settings-profile"], "integer-token-v1");
+    for (pointer, template, integer, kind) in [
+        (
+            r#"/$defs/section/properties/session/properties/turn_detection/anyOf/1/properties/prefix_padding_ms"#,
+            r#"{"session":{"turn_detection":{"type":"server_vad","prefix_padding_ms":TOKEN}}}"#,
+            "1",
+            "signed",
+        ),
+        (
+            r#"/$defs/section/properties/session/properties/turn_detection/anyOf/1/properties/silence_duration_ms"#,
+            r#"{"session":{"turn_detection":{"type":"server_vad","silence_duration_ms":TOKEN}}}"#,
+            "1",
+            "signed",
+        ),
+        (
+            r#"/$defs/section/properties/session/properties/max_output_tokens/anyOf/0"#,
+            r#"{"session":{"max_output_tokens":TOKEN}}"#,
+            "1",
+            "unsigned",
+        ),
+        (
+            r#"/$defs/section/properties/session_max_secs/anyOf/0"#,
+            r#"{"session_max_secs":TOKEN}"#,
+            "1",
+            "unsigned",
+        ),
+        (
+            r#"/$defs/section/properties/context_window_tokens"#,
+            r#"{"context_window_tokens":TOKEN}"#,
+            "8192",
+            "unsigned",
+        ),
+        (
+            r#"/$defs/section/properties/max_output_tokens"#,
+            r#"{"max_output_tokens":TOKEN}"#,
+            "1",
+            "unsigned",
+        ),
+    ] {
+        assert_eq!(
+            schema.pointer(pointer).unwrap()["x-busbar-integer-token"],
+            kind
+        );
+        for (token, accepted) in [
+            (integer.to_string(), true),
+            (format!("{integer}.0"), false),
+            (format!("{integer}e0"), false),
+            (format!("{integer}E+0"), false),
+        ] {
+            let text = template.replace("TOKEN", &token);
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert!(
+                standard.is_valid(&value),
+                "standard mathematical integer: {text}"
+            );
+            assert_eq!(profile.is_valid(&value), accepted, "profile: {text}");
+            assert_eq!(
+                read_dealt(text.as_bytes()).is_ok(),
+                accepted,
+                "native: {text}"
+            );
+        }
+        // Do not infer signed negative-zero behavior from a regular expression:
+        // the profile must agree with the actual lifecycle parser.
+        for token in [
+            "null",
+            "0",
+            "-0",
+            "-0.0",
+            "0e0",
+            "-1",
+            "18446744073709551616",
+        ] {
+            let text = template.replace("TOKEN", token);
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                profile.is_valid(&value),
+                read_dealt(text.as_bytes()).is_ok(),
+                "native sign/range: {text}"
+            );
+        }
+    }
 }
