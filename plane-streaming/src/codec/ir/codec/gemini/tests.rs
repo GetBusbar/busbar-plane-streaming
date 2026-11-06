@@ -501,14 +501,6 @@ fn proto_audio_duplicates_follow_wire_order_and_malformed_values_refuse() {
             r#"{"realtime_input":{"audio":{"mime_type":"audio/pcm;rate=16000","mimeType":"audio/pcm;rate=24000","data":"AAAA"}}}"#,
             Some(AudioFormat::Pcm16),
         ),
-        (
-            r#"{"client_content":{},"realtime_input":{"audio":{"mime_type":"audio/pcm","data":"AAAA"}}}"#,
-            Some(AudioFormat::Pcm16At16k),
-        ),
-        (
-            r#"{"realtime_input":{"audio":{"mime_type":"audio/pcm","data":"AAAA"}},"client_content":{}}"#,
-            None,
-        ),
     ] {
         let top = Lite::read(frame.as_bytes()).unwrap();
         let mut got = Vec::new();
@@ -538,6 +530,33 @@ fn proto_audio_duplicates_follow_wire_order_and_malformed_values_refuse() {
             GeminiLiveCodec.uplink_audio(&top, &mut |_, _| {}).is_err(),
             "{frame}"
         );
+    }
+}
+
+/// Competing message kinds are ambiguous even when every individual field is valid.
+/// Neither wire order nor protobuf spelling may turn one into an admitted audio frame.
+#[test]
+fn competing_client_kinds_refuse_before_admitting_audio() {
+    for content in ["clientContent", "client_content"] {
+        for realtime in ["realtimeInput", "realtime_input"] {
+            let audio =
+                format!(r#""{realtime}":{{"audio":{{"mimeType":"audio/pcm","data":"AAAA"}}}}"#);
+            let content = format!(r#""{content}":{{}}"#);
+            for frame in [
+                format!("{{{audio},{content}}}"),
+                format!("{{{content},{audio}}}"),
+            ] {
+                let top = Lite::read(frame.as_bytes()).unwrap();
+                let mut got = Vec::new();
+                assert!(
+                    GeminiLiveCodec
+                        .uplink_audio(&top, &mut |f, n| got.push((f, n)))
+                        .is_err(),
+                    "{frame}"
+                );
+                assert!(got.is_empty(), "no ambiguous audio is admitted: {frame}");
+            }
+        }
     }
 }
 

@@ -712,8 +712,33 @@ fn unit_expected() -> Vec<String> {
 
 #[test]
 fn the_one_request_doors_answer_their_pieces_through_the_door() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let (d, host) = ticket_host_granting(&[]);
     assert_eq!(unit_script(&linked(&d)), unit_expected());
+    assert!(host
+        .minted
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .is_empty());
+}
+
+/// An unavailable grant service must never be reported as a known policy denial.
+#[test]
+fn an_unavailable_mint_grant_service_fails_closed_without_a_ticket() {
+    let d = Dispatcher::new(DispatchConfig::default());
+    for p in [linked(&d), dropped(&d)] {
+        assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
+        let mut b = Bufs::new(512);
+        let answer = b.call(&p, &push(71, 0, FROM_CALLER, PIECE_LAST, &[]));
+        assert!(answer.contains("status=502"), "{answer}");
+        assert!(
+            answer.contains("the host could not check the key's grant"),
+            "{answer}"
+        );
+        assert!(!answer.contains("not_granted"), "{answer}");
+        assert!(!answer.contains(TICKET), "{answer}");
+        assert_eq!(b.last_units, "", "a failed mint bills nothing");
+        assert_eq!(b.last_need, 0, "and dials nothing");
+    }
 }
 
 #[test]
@@ -1789,8 +1814,15 @@ fn a_budget_cut_of_a_live_session_is_told_in_the_dialects_stream() {
         assert_eq!(outcome, Outcome::Ready, "{body}");
         assert_eq!(
             body.as_bytes(),
-            refusal_body(429, "the budget is exhausted").as_slice(),
-            "a refusal before the upgrade keeps the REST envelope"
+            br#"{"error":{"code":"insufficient_quota","message":"the budget is exhausted","param":null,"type":"insufficient_quota"}}"#,
+            "before upgrade the REST envelope identifies exhausted quota, not retryable throttling"
+        );
+        let (outcome, body) = refused_unit(p, 1000, 0, ReasonCode::RateLimited, "slow down");
+        assert_eq!(outcome, Outcome::Ready, "{body}");
+        assert_eq!(
+            body.as_bytes(),
+            refusal_body(429, "slow down").as_slice(),
+            "a throttle remains distinguishable from exhausted quota at the same HTTP status"
         );
     }
 }

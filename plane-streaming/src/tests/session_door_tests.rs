@@ -616,10 +616,18 @@ fn the_sections_token_ceilings_reach_the_far_end() {
         "the session's own lower cap stands: {v}"
     );
     assert_eq!(v["setup"]["generationConfig"]["temperature"], 0.3, "{v}");
+    let trigger = v["setup"]["contextWindowCompression"]["triggerTokens"]
+        .as_u64()
+        .expect("a numeric compression trigger");
+    let output = v["setup"]["generationConfig"]["maxOutputTokens"]
+        .as_u64()
+        .expect("a numeric output cap");
     assert_eq!(
-        v["setup"]["contextWindowCompression"]["triggerTokens"], 16_384,
-        "{v}"
+        trigger + output,
+        u64::from(lower.context_window_tokens),
+        "compression must reserve the locked output cap inside the total context budget: {v}"
     );
+    assert!(trigger < u64::from(lower.context_window_tokens));
 }
 
 /// A caller's `response.create` cannot lift the configured output ceiling.
