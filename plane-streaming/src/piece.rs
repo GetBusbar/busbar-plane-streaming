@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (C) 2026 Busbar Inc and contributors
 
-//! THIS PLANE'S PIECE ANSWER: what an `on_piece` answer owes the host's reply buffer, and the
-//! one settle of the answer's field, unit and arena buffers.
+//! THIS PLANE'S PIECE ANSWER: what an `on_piece` answer owes the host's reply buffer.
+//! Metadata buffers settle through `busbar_contract::abi::sdk::plane::settle_piece`.
 
 use busbar_contract::abi::plane::{
-    OnPieceIn, OnPieceOut, OutField, RecordWrite, UnitCount, EMIT_DONE, EMIT_TO_FAR_END,
-    PIECE_OUT_TEXT,
+    OnPieceIn, OnPieceOut, EMIT_DONE, EMIT_TO_FAR_END, PIECE_OUT_TEXT,
 };
 use busbar_contract::abi::sdk::cred::SealedWrite;
-use busbar_contract::abi::sdk::{HostBuf, Lent, Out};
+use busbar_contract::abi::sdk::{Lent, Out};
 
 use crate::driven::Body;
 
@@ -139,32 +138,4 @@ impl Owed {
         *self = Owed::default();
         Ok(done)
     }
-}
-
-/// Settle an answer's field, unit and arena buffers: `(written, needed)` of each, short as a
-/// whole when any one is short.
-pub fn settle(
-    out: &mut Out<'_, OnPieceOut>,
-    fields: &HostBuf<'_, OutField>,
-    units: &HostBuf<'_, UnitCount>,
-    arena: &HostBuf<'_, u8>,
-    records: Option<&HostBuf<'_, RecordWrite>>,
-) -> bool {
-    let short =
-        !(fields.fits() && units.fits() && arena.fits() && records.is_none_or(HostBuf::fits));
-    if let Some(records) = records {
-        let (rw, rnd) = records.settle(short);
-        out.set(|o| &o.records_written, rw as u32);
-        out.set(|o| &o.records_needed, rnd as u32);
-    }
-    let (fw, fnd) = fields.settle(short);
-    let (uw, und) = units.settle(short);
-    let (aw, and) = arena.settle(short);
-    out.set(|o| &o.fields_written, fw as u32);
-    out.set(|o| &o.fields_needed, fnd as u32);
-    out.set(|o| &o.units_written, uw as u32);
-    out.set(|o| &o.units_needed, und as u32);
-    out.set(|o| &o.arena_written, aw as u64);
-    out.set(|o| &o.arena_needed, and as u64);
-    short
 }

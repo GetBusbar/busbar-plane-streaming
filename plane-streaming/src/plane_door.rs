@@ -1584,7 +1584,8 @@ fn to_caller(
             value: arena.span(row.resource.as_bytes()),
         });
     }
-    if piece::settle(out, &fields, &units, &arena, Some(&records)) {
+    if busbar_contract::abi::sdk::plane::settle_piece(out, &fields, &units, &arena, Some(&records))
+    {
         held.short = Some(match row {
             Some(row) => Answer::Rejected(reply, row),
             None => Answer::ToCaller(reply),
@@ -1847,7 +1848,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
         push_fields(&mut fields, &mut arena, pairs);
     }
     drop(target);
-    if piece::settle(out, &fields, &units, &arena, None) {
+    if busbar_contract::abi::sdk::plane::settle_piece(out, &fields, &units, &arena, None) {
         if near {
             live.short_near = Some(emit);
             live.short_head = head;
