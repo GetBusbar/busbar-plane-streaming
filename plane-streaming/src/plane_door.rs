@@ -1616,6 +1616,18 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     let now_ms = p.now_ms();
     let caller = input.caller_ref().as_str().ok().filter(|r| !r.is_empty());
     let mut sessions = lock(&p.sessions);
+    // EMIT_DONE completes the reply, but the two transport directions can report their
+    // terminals in either order. A completed reply accepts only the far side's empty
+    // terminal notification; it emits and bills nothing again. Unknown/cancelled streams
+    // and every late application frame still follow the refusal path below.
+    if given.from() == FROM_FAR_END
+        && given.flags() & !PIECE_CUT == PIECE_LAST
+        && input.bytes().bytes().is_empty()
+        && input.head_fields().is_empty()
+        && sessions.completed(given.stream(), door)
+    {
+        return Outcome::Ready;
+    }
     // A stream whose session already ended opens nothing again: no ticket is taken and no call
     // is resolved for a late piece of it.
     let opening = given.from() == FROM_CALLER
@@ -1886,7 +1898,7 @@ fn session_piece(p: &Plane, input: Lent<'_, OnPieceIn>, out: &mut Out<'_, OnPiec
     }
     let owes = live.ready();
     if done {
-        sessions.close(given.stream());
+        sessions.complete(given.stream(), door);
         p.end_calls(&mut sessions);
     } else if owes || recorded {
         drop(sessions);

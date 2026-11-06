@@ -471,7 +471,9 @@ pub struct Sessions {
     tickets: HashMap<Ticket, u64>,
     /// The streams whose sessions ended most recently, oldest first (at most [`MAX_SESSIONS`]): a
     /// cut ends a session before the kernel asks for the cut's frame.
-    ended: VecDeque<u64>,
+    // Only a completed reply permits a later payload-free far terminal. Cancellation and
+    // refusal retain the stream identity but never grant that permission.
+    ended: VecDeque<(u64, Option<Door>)>,
     /// Busbar's calls placed by sessions that ended, until the door frees them
     /// ([`Sessions::take_ended_calls`]).
     ended_calls: Vec<String>,
@@ -494,7 +496,7 @@ impl Sessions {
     /// never opened as a fresh session that ends and settles a second time.
     pub fn get_or_open(&mut self, stream: u64, door: Door, cfg: &StreamsCfg) -> Option<&mut Live> {
         if !self.live.contains_key(&stream) {
-            if self.live.len() >= MAX_SESSIONS || self.ended.contains(&stream) {
+            if self.live.len() >= MAX_SESSIONS || self.ended(stream) {
                 return None;
             }
             let rewritten = self.rewritten.remove(&stream);
@@ -549,17 +551,31 @@ impl Sessions {
 
     /// Stream `stream`'s session is over: it and its tickets are forgotten.
     pub fn close(&mut self, stream: u64) {
+        self.end(stream, None);
+    }
+
+    /// The reply completed on `door`; the far side may still report its transport terminal.
+    pub fn complete(&mut self, stream: u64, door: Door) {
+        self.end(stream, Some(door));
+    }
+
+    fn end(&mut self, stream: u64, completed: Option<Door>) {
         if let Some(live) = self.live.remove(&stream) {
             while self.ended.len() >= MAX_SESSIONS {
                 self.ended.pop_front();
             }
-            self.ended.push_back(stream);
+            self.ended.push_back((stream, completed));
             for ticket in &live.tickets {
                 if self.tickets.get(ticket) == Some(&stream) {
                     self.tickets.remove(ticket);
                 }
             }
             self.ended_calls.extend(live.placed);
+        } else if completed.is_none() {
+            // Cancellation/refusal ends even the completed reply's cleanup custody.
+            if let Some((_, door)) = self.ended.iter_mut().find(|(id, _)| *id == stream) {
+                *door = None;
+            }
         }
         self.rewritten.remove(&stream);
     }
@@ -567,7 +583,14 @@ impl Sessions {
     /// Whether `stream`'s session already ended: a late piece of it opens nothing.
     #[must_use]
     pub fn ended(&self, stream: u64) -> bool {
-        self.ended.contains(&stream)
+        self.ended.iter().any(|(id, _)| *id == stream)
+    }
+
+    /// Whether this exact stream and door completed their reply. The existing bounded
+    /// recently-ended table retains no live session, tickets or metering state.
+    #[must_use]
+    pub fn completed(&self, stream: u64, door: Door) -> bool {
+        self.ended.contains(&(stream, Some(door)))
     }
 
     /// Whether any live session keeps a wall-clock ceiling: the door's tick must keep running.
@@ -628,7 +651,7 @@ impl Sessions {
     /// the session's stream, never as the answer to an upgrade.
     #[must_use]
     pub fn served(&self, stream: u64) -> bool {
-        self.live.contains_key(&stream) || self.ended.contains(&stream)
+        self.live.contains_key(&stream) || self.ended(stream)
     }
 }
 

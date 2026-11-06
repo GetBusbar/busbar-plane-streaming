@@ -4,7 +4,7 @@
 pub mod voice_abi;
 use busbar_contract::abi::mechanism::call::Outcome;
 use busbar_contract::abi::plane::{
-    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_HAS_STATUS, PIECE_LAST,
+    FROM_CALLER, FROM_FAR_END, FROM_KERNEL, PIECE_CUT, PIECE_HAS_STATUS, PIECE_LAST,
 };
 use busbar_plugin_loader::dispatch::{DispatchConfig, Dispatcher};
 use serde_json::{json, Value};
@@ -241,5 +241,67 @@ fn closed_session_refuses_late_frames_and_renders_budget_refusal() {
         assert!(matched,
             "closed-session-and-budget-refusal dropped={dropped} matched={matched}: ends={done} late={late:?} cut={cut:?}"
         );
+    }
+}
+
+#[test]
+fn completed_session_accepts_only_empty_far_terminal_in_either_order() {
+    for dropped in [false, true] {
+        for far_first in [false, true] {
+            for flags in [PIECE_LAST, PIECE_LAST | PIECE_CUT] {
+                let d = Dispatcher::new(DispatchConfig::default());
+                let p = load(&d, "terminal-order", dropped);
+                assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
+                assert_eq!(
+                    piece(&p, &session(150, 5, FROM_CALLER, 0, &[])).outcome,
+                    Outcome::Ready
+                );
+                let usage = piece(
+                    &p,
+                    &Piece {
+                        status: 101,
+                        ..session(150, 5, FROM_FAR_END, PIECE_HAS_STATUS, USAGE)
+                    },
+                );
+                assert_eq!(usage.outcome, Outcome::Ready);
+                let terminal = session(150, 5, FROM_FAR_END, flags, &[]);
+                if far_first {
+                    let far = piece(&p, &terminal);
+                    assert_eq!(far.outcome, Outcome::Ready);
+                    assert!(!far.done, "far terminal does not complete the caller reply");
+                }
+                let near = piece(&p, &session(150, 5, FROM_CALLER, PIECE_LAST, &[]));
+                assert_eq!(near.outcome, Outcome::Ready);
+                assert!(near.done);
+                assert_eq!(
+                    near.units, usage.units,
+                    "terminal settles cumulative usage once"
+                );
+                for _ in 0..2 {
+                    let far = piece(&p, &terminal);
+                    assert_eq!(
+                        far.outcome,
+                        Outcome::Ready,
+                        "dropped={dropped} far_first={far_first} flags={flags}: {far:?}"
+                    );
+                    assert!(!far.done && !far.to_far && far.more == 0);
+                    assert!(
+                        far.emitted.is_empty() && far.units.is_empty() && far.fields.is_empty()
+                    );
+                    assert_eq!(far.records, 0, "cleanup does not write another audit row");
+                }
+                for late in [
+                    session(999, 5, FROM_FAR_END, flags, &[]),
+                    session(150, 5, FROM_FAR_END, flags, USAGE),
+                    session(150, 5, FROM_FAR_END, 0, USAGE),
+                    session(150, 5, FROM_CALLER, PIECE_LAST, &[]),
+                    session(150, 5, FROM_KERNEL, 0, &[]),
+                    session(150, 3, FROM_FAR_END, flags, &[]),
+                ] {
+                    assert_eq!(piece(&p, &late).outcome, Outcome::Refused, "{late:?}");
+                }
+                assert_eq!(drive(&p), (Outcome::Ready, vec![]));
+            }
+        }
     }
 }

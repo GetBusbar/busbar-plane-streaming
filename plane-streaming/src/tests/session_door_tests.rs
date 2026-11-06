@@ -821,3 +821,37 @@ fn audit_hook_crossing_cannot_replace_locked_tools() {
     );
     assert_eq!(hook_crossing(br#"{"voice":"alloy"}"#), None);
 }
+
+#[test]
+fn completed_terminal_custody_is_bounded_and_revoked_by_close() {
+    let mut sessions = Sessions::default();
+    let cfg = StreamsCfg::default();
+    sessions.complete(99, Door::Realtime);
+    assert!(
+        !sessions.completed(99, Door::Realtime),
+        "unknown streams gain no custody"
+    );
+    for stream in 1..=MAX_SESSIONS as u64 + 1 {
+        sessions.get_or_open(stream, Door::Realtime, &cfg).unwrap();
+        sessions.complete(stream, Door::Realtime);
+        assert!(sessions.completed(stream, Door::Realtime));
+        assert!(!sessions.completed(stream, Door::Gemini));
+        assert_eq!(
+            sessions.len(),
+            0,
+            "completion releases the live-session quota"
+        );
+    }
+    assert_eq!(sessions.ended.len(), MAX_SESSIONS);
+    assert!(
+        !sessions.completed(1, Door::Realtime),
+        "old receipts are bounded"
+    );
+    sessions.close(2);
+    assert!(sessions.ended(2));
+    assert!(
+        !sessions.completed(2, Door::Realtime),
+        "cancellation revokes cleanup custody"
+    );
+    assert!(sessions.get_or_open(2, Door::Realtime, &cfg).is_none());
+}
