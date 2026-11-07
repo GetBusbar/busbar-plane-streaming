@@ -634,8 +634,8 @@ struct Held {
     unit: RequestUnit,
     /// What the unit's answer still owes the reply buffer.
     owed: Owed,
-    /// An answer that did not fit its field or arena buffer: the re-call carries the same piece,
-    /// which is answered from here rather than read twice.
+    /// An answer awaiting host custody or larger output buffers. A re-call uses
+    /// this exact answer rather than reading the unit's piece twice.
     short: Option<Answer>,
     /// The tickets the unit's pieces crossed on, so its end forgets only its own.
     tickets: Vec<Ticket>,
@@ -955,8 +955,8 @@ pub struct Plane {
     arrived: Mutex<HashMap<u64, Arc<StreamsCfg>>>,
 }
 
-/// A ticketless handle: the services the plane calls never pend, so they are called outside any
-/// op's ticket (the host runs a ticketless call fresh every time and stores nothing).
+/// A ticketless handle for immediate query services. Durable ticket minting uses
+/// the current piece's real completion handle.
 const UNTICKETED: CompletionHandle = CompletionHandle {
     ticket: Ticket::NONE,
     ..CompletionHandle::ZERO
@@ -990,17 +990,23 @@ impl Plane {
     /// MINT A TICKET (`ticket.mint`) for the principal of the unit this crossing serves, living
     /// `ttl_secs`, with `record` stored beside it: the ticket, SEALED by the SDK (a bearer
     /// credential this plane never reads: R7), and its expiry, or why not.
-    fn mint_ticket(&self, ttl_secs: u64, record: &[u8]) -> Result<Minted, String> {
+    fn mint_ticket(
+        &self,
+        handle: CompletionHandle,
+        ttl_secs: u64,
+        record: &[u8],
+    ) -> std::task::Poll<Result<Minted, String>> {
         let Some(services) = self.services.as_ref() else {
             tracing::warn!("the host handed the plane no services: no ephemeral secret is minted");
-            return Err(MINTED_NONE.to_string());
+            return std::task::Poll::Ready(Err(MINTED_NONE.to_string()));
         };
-        services
-            .ticket_mint(UNTICKETED, ttl_secs, record)
-            .map_err(|cause| {
+        match services.ticket_mint(handle, ttl_secs, record) {
+            std::task::Poll::Pending => std::task::Poll::Pending,
+            std::task::Poll::Ready(answer) => std::task::Poll::Ready(answer.map_err(|cause| {
                 tracing::warn!(?cause, "the host's ticket mint failed");
                 MINTED_NONE.to_string()
-            })
+            })),
+        }
     }
 
     /// WHETHER THE UNIT'S KEY IS GRANTED `entry` (`entitlement.check` over the pool scope, the
@@ -1548,7 +1554,19 @@ fn answer_piece(
             {
                 Some((Ok(false), entry)) => held.unit.not_granted(&entry),
                 Some((Err(why), _)) => held.unit.minted(Err(why)),
-                _ => held.unit.minted(p.mint_ticket(ttl_secs, &record)),
+                _ => {
+                    let handle = CompletionHandle {
+                        ticket: input.head().ticket(),
+                        seq: 0,
+                        ..CompletionHandle::ZERO
+                    };
+                    let std::task::Poll::Ready(minted) = p.mint_ticket(handle, ttl_secs, &record)
+                    else {
+                        held.short = Some(Answer::Mint { ttl_secs, record });
+                        return (Outcome::Pending, false);
+                    };
+                    held.unit.minted(minted)
+                }
             };
             answer_piece(p, held, answer, input, out)
         }
