@@ -131,7 +131,10 @@ fn provider_credentials_stay_on_declared_needs_and_mint_dials_nothing() {
 fn declared_units_fee_and_short_recall_settle_each_turn_once() {
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "voice-metering", dropped);
         let facts = p.served();
         let classes: Vec<_> = facts
@@ -236,7 +239,10 @@ fn declared_units_fee_and_short_recall_settle_each_turn_once() {
 fn session_and_pool_grants_keep_principals_and_refuse_unpublished_claims() {
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "voice-scope", dropped);
         assert_eq!(p.declared().scope_kinds, ["session", "pool"]);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -283,7 +289,10 @@ fn gemini_claim_arrival_and_handshake_keep_their_dialect() {
     const COMPLETE: &[u8] = br#"{"setupComplete":{}}"#;
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "voice-gemini", dropped);
         let opened = open(&p, SESSION, Some(PUBLIC));
         assert_eq!(opened.outcome, Outcome::Ready);
@@ -362,7 +371,10 @@ fn gemini_claim_arrival_and_handshake_keep_their_dialect() {
 fn provider_frames_use_actual_declared_socket_needs_and_report_usage() {
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "voice-dial", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
         let audio = uplink(100);
@@ -468,7 +480,10 @@ fn all_policy_refusal_reasons_render_4xx_without_opening_or_dialing() {
     ];
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "voice-refusal", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
         let mut rendered = Vec::new();
@@ -586,7 +601,10 @@ fn all_policy_refusal_reasons_render_4xx_without_opening_or_dialing() {
 fn routes_and_attempts_preserve_fresh_dials_without_early_output() {
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "voice-route", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
         let mut arrivals = Vec::new();
@@ -752,7 +770,10 @@ fn audit_rows_name_the_pool_once_and_never_create_private_records() {
 fn session_exit_settles_once_and_refuses_every_late_side() {
     let mut deliveries = Vec::new();
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "voice-exit", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
         let initial = piece(&p, &session(90, 5, FROM_CALLER, 0, &[]));
@@ -834,7 +855,10 @@ fn tool_calls_and_caller_results_relay_unchanged_without_authored_answers() {
     for dropped in [false, true] {
         let mut dialects = Vec::new();
         for claim in [5, 3] {
-            let d = Dispatcher::new(DispatchConfig::default());
+            let d = Dispatcher::new(
+                DispatchConfig::default(),
+                busbar_contract::services::test_caller_binding(),
+            );
             let p = load(&d, "voice-tool", dropped);
             assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
             let initial = piece(&p, &session(95, claim, FROM_CALLER, 0, &[]));
@@ -958,7 +982,13 @@ fn unavailable_entitlement_is_a_service_failure_without_a_policy_audit() {
                 let (dispatcher, host) = mint_entitlement::dispatcher(GrantReply::Failed);
                 (dispatcher, Some(host))
             } else {
-                (Dispatcher::new(DispatchConfig::default()), None)
+                (
+                    Dispatcher::new(
+                        DispatchConfig::default(),
+                        busbar_contract::services::test_caller_binding(),
+                    ),
+                    None,
+                )
             };
             let p = load(&dispatcher, "voice-grant-unavailable", dropped);
             assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);

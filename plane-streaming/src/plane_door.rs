@@ -28,6 +28,8 @@
 //! answer, the session's unsolicited output named on the instance's driver ticket, and the
 //! session's cumulative units on every answer. A request unit on a session door is refused.
 
+type Services = KindServices<busbar_contract::plugin::markers::PlaneKind>;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -59,7 +61,8 @@ use busbar_contract::abi::sdk::plane::{cancel_disposition, UnitCancel};
 use busbar_contract::abi::sdk::plane_life::{self as life, PlaneLife};
 use busbar_contract::abi::sdk::publish::{ClaimSpec, ServedRoute, SnapshotSpec};
 use busbar_contract::abi::sdk::{
-    Generations, HostBuf, Instance, Lent, Minted, Out, Safe, SafeSlot, Services, StaticWake, Wake,
+    Generations, HostBuf, Instance, Lent, Minted, Out, Safe, SafeSlot, Services as KindServices,
+    StaticWake, Wake,
 };
 use busbar_contract::plane::{PER_SESSION, TOKEN_FAMILY};
 
@@ -1229,11 +1232,12 @@ macro_rules! slot {
     ($name:ident, $in:ty, $out:ty, |$inst:pat_param, $input:pat_param, $o:ident| $body:block) => {
         struct $name;
         impl SafeSlot for $name {
+            type Kind = busbar_contract::plugin::markers::PlaneKind;
             type In = $in;
             type Out = $out;
             type State = Plane;
             fn call(
-                $inst: Instance<'_, Plane>,
+                $inst: Instance<'_, Plane, busbar_contract::plugin::markers::PlaneKind>,
                 $input: Lent<'_, $in>,
                 #[allow(unused_mut)] mut $o: Out<'_, $out>,
             ) -> Outcome {
@@ -1254,7 +1258,15 @@ impl PlaneLife for Plane {
         read_dealt(settings).map(|_| ()).map_err(Refusal::refused)
     }
 
-    fn open(input: &Lent<'_, PlaneOpenIn>) -> Result<life::Opened<Self>, Refusal> {
+    fn open(
+        input: &Lent<'_, PlaneOpenIn>,
+        host: Option<
+            busbar_contract::abi::sdk::lent::KindHostLoan<
+                '_,
+                busbar_contract::plugin::markers::PlaneKind,
+            >,
+        >,
+    ) -> Result<life::Opened<Self>, Refusal> {
         let cfg = read_dealt(input.open().settings().bytes()).map_err(Refusal::refused)?;
         let public_url = input
             .public_url()
@@ -1262,8 +1274,8 @@ impl PlaneLife for Plane {
             .ok()
             .filter(|s| !s.is_empty())
             .map(str::to_owned);
-        let wake = input.open().host().and_then(Wake::of);
-        let services = input.open().host().and_then(Services::of);
+        let wake = host.and_then(Wake::of);
+        let services = host.and_then(Services::of);
         let plane = Plane {
             public_url,
             generations: Mutex::new(Vec::new()),
@@ -1291,7 +1303,7 @@ impl PlaneLife for Plane {
     }
 
     fn tick(
-        instance: Instance<'_, Self>,
+        instance: Instance<'_, Self, busbar_contract::plugin::markers::PlaneKind>,
         input: Lent<'_, TickIn>,
         mut out: Out<'_, TickOut>,
     ) -> Outcome {
@@ -1335,7 +1347,7 @@ impl PlaneLife for Plane {
     }
 
     fn drive(
-        instance: Instance<'_, Self>,
+        instance: Instance<'_, Self, busbar_contract::plugin::markers::PlaneKind>,
         input: Lent<'_, PlaneDriveIn>,
         mut out: Out<'_, PlaneDriveOut>,
     ) -> Outcome {
@@ -1356,7 +1368,7 @@ impl PlaneLife for Plane {
     }
 
     fn cancel(
-        instance: Instance<'_, Self>,
+        instance: Instance<'_, Self, busbar_contract::plugin::markers::PlaneKind>,
         input: Lent<'_, PlaneCancelIn>,
         mut out: Out<'_, PlaneCancelOut>,
     ) -> Outcome {

@@ -5,7 +5,10 @@ use super::*;
 #[test]
 fn from_twilio_connected() {
     let v = fixture("from-twilio.connected.json");
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-connected", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -17,7 +20,10 @@ fn from_twilio_connected() {
 #[test]
 fn from_twilio_start() {
     let v = fixture("from-twilio.start.json");
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-start", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -29,7 +35,10 @@ fn from_twilio_start() {
 #[test]
 fn from_twilio_media() {
     let v = fixture("from-twilio.media.json");
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-in-media", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -55,7 +64,10 @@ fn from_twilio_media() {
 #[test]
 fn from_twilio_stop() {
     let v = fixture("from-twilio.stop.json");
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-stop", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -77,7 +89,10 @@ fn from_twilio_stop() {
 #[test]
 fn from_twilio_dtmf() {
     let v = fixture("from-twilio.dtmf.json");
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-dtmf", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -100,7 +115,10 @@ fn from_twilio_dtmf() {
 #[test]
 fn from_twilio_mark() {
     let v = fixture("from-twilio.mark.json");
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-mark", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -123,7 +141,10 @@ fn from_twilio_mark() {
 #[test]
 fn to_twilio_media() {
     let v = fixture("to-twilio.media.json");
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-out-media", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -155,7 +176,10 @@ fn to_twilio_media() {
 }
 #[test]
 fn audio_done_does_not_send_an_upstream_frame() {
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-out-mark", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -189,7 +213,10 @@ fn audio_done_does_not_send_an_upstream_frame() {
 }
 #[test]
 fn to_twilio_clear() {
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-fixture-out-clear", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);

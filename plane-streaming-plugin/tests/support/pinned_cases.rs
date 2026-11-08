@@ -206,8 +206,7 @@ fn submitted_piece(
     )
 }
 fn cases(p: &Plugin<Plane>, d: &Dispatcher) -> Vec<String> {
-    let first =
-        || p.inner.crossings.load(Ordering::SeqCst) - p.inner.resumes.load(Ordering::SeqCst);
+    let first = || p.test_invocations().0 - p.test_invocations().1;
     let mut answers = Vec::new();
     let mut call_answers = Vec::new();
 
@@ -620,15 +619,13 @@ fn cases(p: &Plugin<Plane>, d: &Dispatcher) -> Vec<String> {
 
     {
         let before = first();
-        let seen = p.inner.driven.answers();
-        busbar_plugin_loader::dispatch::ticket::host_wake(p.inner.ctx(), driver);
+        let seen = p.test_driver_answers();
+        busbar_plugin_loader::dispatch::ticket::host_wake(p.test_host_context(), driver);
         let outcome = p
-            .inner
-            .driven
-            .answered_after(seen, std::time::Duration::from_secs(30))
+            .test_driver_answer_after(seen, std::time::Duration::from_secs(30))
             .expect("woken driver answers");
         assert_eq!(outcome, Outcome::Ready);
-        let sessions = p.inner.driven.drain();
+        let sessions = p.test_driver_sessions();
         answers.push(format!("drive {outcome:?} sessions={}", sessions.len()));
         assert_eq!(first() - before, 1, "drive: exact first crossings");
     }
@@ -780,7 +777,10 @@ fn published_streaming_cases_keep_exact_crossings_and_both_actual_deliveries() {
     );
     let mut deliveries = Vec::new();
     for dropped_in in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let log = Arc::new(HostLog::default());
         let bound = Bind {
             sink: log.clone(),
@@ -798,11 +798,11 @@ fn published_streaming_cases_keep_exact_crossings_and_both_actual_deliveries() {
         } else {
             load_linked::<Plane>(&row(), bound).unwrap()
         };
-        let before_resumes = p.inner.resumes.load(Ordering::SeqCst);
+        let before_resumes = p.test_invocations().1;
         deliveries.push(cases(&p, &d));
         eprintln!(
             "actual streaming dropped={dropped_in} resumes={}",
-            p.inner.resumes.load(Ordering::SeqCst) - before_resumes
+            p.test_invocations().1 - before_resumes
         );
         assert!(
             !log.2.load(Ordering::SeqCst),

@@ -32,7 +32,10 @@ fn incompatible_metadata_is_refused_before_any_plane_slot_runs() {
     let (honest, d) = dropped(&lib, &stated);
     drop(honest);
     drop(d);
-    let d = Arc::new(Dispatcher::new(DispatchConfig::default()));
+    let d = Arc::new(Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    ));
     let original = busbar_plane_streaming::door().parts();
     let kind = KindCode::Plane;
     let abi = kind.abi_version();
@@ -186,7 +189,10 @@ fn wrong<K: Kind>() {
     let lib = cdylib();
     let stated = packed_rendering(&lib);
     let row = LinkedRow::of(busbar_plane_streaming::door).unwrap();
-    let d = Arc::new(Dispatcher::new(DispatchConfig::default()));
+    let d = Arc::new(Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    ));
     let want = Some(LoadError::ManifestKind {
         stated: KindCode::Plane,
         want: K::CODE,
@@ -197,7 +203,8 @@ fn wrong<K: Kind>() {
 #[test]
 fn every_other_kind_refuses_the_actual_streaming_plane_in_both_deliveries() {
     use busbar_plugin_loader::dispatch::kinds::{
-        auth::Auth, export::Export, hook::Hook, secret::Secret, store::Store, transport::Transport,
+        auth::Auth, export::Export, hook::Hook, secret::Secret, store_v4::StoreV4 as Store,
+        transport::Transport,
     };
     wrong::<Auth>();
     wrong::<Export>();
@@ -216,7 +223,10 @@ fn networked_plane_requires_a_connection_table_and_can_be_probed() {
         plugin: facts.name.clone(),
         needs: facts.needs.len(),
     };
-    let d = Arc::new(Dispatcher::new(DispatchConfig::default()));
+    let d = Arc::new(Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    ));
     let bind = || Bind {
         conns: ConnTable::NoNeeds,
         ..bind(&d)

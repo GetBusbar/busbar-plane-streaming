@@ -182,7 +182,10 @@ fn audio_done(p: &Plugin<Plane>, stream: u64, first_far: bool) {
 
 #[test]
 fn twilio_route_signature_principal_and_start_binding() {
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-route", dropped);
         let opened = open(&p, SESSION, Some(PUBLIC));

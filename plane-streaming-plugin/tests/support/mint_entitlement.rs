@@ -26,10 +26,9 @@ impl MintHost {
         let checks = self.checks.lock().unwrap();
         assert_eq!(checks.len(), 1, "one entitlement check");
         let (caller, actual_unit, target) = &checks[0];
-        assert_eq!(caller.instance.as_ref(), instance);
-        assert_eq!(caller.plugin.as_ref(), "streaming");
+        assert_eq!(caller.namespace().as_ref(), instance);
         assert_eq!(
-            caller.kind,
+            caller.kind(),
             busbar_contract::abi::mechanism::KindCode::Plane
         );
         assert_eq!(*actual_unit, Some(unit));
@@ -48,7 +47,11 @@ pub fn dispatcher(reply: GrantReply) -> (Dispatcher, Arc<MintHost>) {
         mints: AtomicUsize::new(0),
     });
     (
-        Dispatcher::with_services(DispatchConfig::default(), host.clone()),
+        Dispatcher::with_services(
+            DispatchConfig::default(),
+            host.clone(),
+            busbar_contract::services::test_caller_binding(),
+        ),
         host,
     )
 }
@@ -99,17 +102,20 @@ impl busbar_contract::services::HostServices for MintHost {
         _counterparty: &str,
         _item: &str,
         _digest: &str,
-    ) -> Stored {
-        Stored::refused(busbar_contract::services::UNSERVED)
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
     }
     fn trust_decide(
         &self,
         _caller: &Caller,
+        _ticket: busbar_contract::abi::mechanism::ticket::Ticket,
         _key: TrustKeyRef<'_>,
         _expected: Option<&str>,
         _approve: bool,
-    ) -> Stored {
-        Stored::refused(busbar_contract::services::UNSERVED)
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
     }
     fn trust_state(&self, _caller: &Caller, _counterparty: &str) -> Stored {
         Stored::refused(busbar_contract::services::UNSERVED)
@@ -158,9 +164,12 @@ impl busbar_contract::services::HostServices for MintHost {
         _unit: Option<u64>,
         _ttl_secs: u64,
         _record: &[u8],
-    ) -> Stored {
-        self.mints.fetch_add(1, Ordering::Relaxed);
-        Stored::refused(busbar_contract::services::UNSERVED)
+        _later: Later,
+    ) -> Ran {
+        Ran::Now({
+            self.mints.fetch_add(1, Ordering::Relaxed);
+            Stored::refused(busbar_contract::services::UNSERVED)
+        })
     }
     fn records_secret(&self, _kind: &str, _id: &str, _later: Later) -> Ran {
         Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
@@ -227,8 +236,8 @@ impl busbar_contract::services::HostServices for MintHost {
     fn hook_call(&self, _caller: &Caller, _unit: Option<u64>, _ask: HookAsk, _later: Later) -> Ran {
         Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
     }
-    fn snapshot_read(&self, _caller: &Caller, _scope: u32) -> Snapshot {
-        Snapshot::Refused(busbar_contract::services::UNSERVED)
+    fn snapshot_read(&self, _caller: &Caller, _scope: u32, _later: Later) -> Ran {
+        Ran::Now((Snapshot::Refused(busbar_contract::services::UNSERVED)).stored())
     }
     fn ticket_take(&self, _caller: &Caller, _unit: Option<u64>) -> Stored {
         Stored::refused(busbar_contract::services::UNSERVED)

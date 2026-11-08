@@ -60,4 +60,4 @@ mod ticket;
 mod tests;
 
 /// The door: this plugin's one public item.
-pub use plane_door::door;
+pub use plane_door::{door, MACRO_DOOR};

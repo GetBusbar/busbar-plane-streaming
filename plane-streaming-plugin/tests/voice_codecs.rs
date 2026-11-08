@@ -43,7 +43,10 @@ fn fixture(claim: u32, bytes: &[u8], from: u32, expected: &[u8], tokens: &[(u32,
     let value: Value = serde_json::from_slice(bytes).expect("unchanged fixture is valid JSON");
     let wire = serde_json::to_vec(&value).unwrap();
     for dropped in [false, true] {
-        let dispatcher = Dispatcher::new(DispatchConfig::default());
+        let dispatcher = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let plugin = abi::load(&dispatcher, "voice-codec-fixture", dropped);
         assert_eq!(
             abi::open(&plugin, abi::SESSION, Some(abi::PUBLIC)).outcome,
@@ -654,7 +657,10 @@ fn openai_captured_transcript_preserves_order_and_semantics() {
         .collect();
     assert_eq!(frames.len(), 24);
     for dropped in [false, true] {
-        let dispatcher = Dispatcher::new(DispatchConfig::default());
+        let dispatcher = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let plugin = abi::load(&dispatcher, "openai-transcript", dropped);
         assert_eq!(
             abi::open(&plugin, abi::SESSION, Some(abi::PUBLIC)).outcome,
@@ -807,7 +813,10 @@ fn gemini_captured_transcript_preserves_order_and_semantics() {
         .collect();
     assert_eq!(frames.len(), 14);
     for dropped in [false, true] {
-        let dispatcher = Dispatcher::new(DispatchConfig::default());
+        let dispatcher = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let plugin = abi::load(&dispatcher, "gemini-transcript", dropped);
         assert_eq!(
             abi::open(&plugin, abi::SESSION, Some(abi::PUBLIC)).outcome,
@@ -995,7 +1004,10 @@ fn assert_emissions(actual: &[(bool, Vec<u8>)], to_far: bool, expected: &[u8]) {
 #[test]
 fn intermediate_openai_usage_is_reported_once_before_later_turns() {
     for dropped in [false, true] {
-        let dispatcher = Dispatcher::new(DispatchConfig::default());
+        let dispatcher = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let plugin = abi::load(&dispatcher, "openai-intermediate-usage", dropped);
         assert_eq!(
             abi::open(&plugin, abi::SESSION, Some(abi::PUBLIC)).outcome,

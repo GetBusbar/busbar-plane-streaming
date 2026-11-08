@@ -36,7 +36,10 @@ fn published_transcript_in_exact_order() {
         ]
     );
     let sid = lines[2]["event"]["start"]["streamSid"].as_str().unwrap();
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-transcript", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -92,7 +95,10 @@ fn published_transcript_in_exact_order() {
 
 #[test]
 fn two_calls_preserve_media_sid_barge_in_and_one_terminal() {
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-two-calls", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
@@ -214,7 +220,10 @@ fn twilio_tool_calls_are_opaque_and_never_answered() {
         json!({"event_id": "evt_far_11", "type": "response.function_call_arguments.delta", "response_id": "resp_002", "item_id": "item_fc_001", "output_index": 0, "call_id": "call_tw_1", "delta": "{\"q\":1}"}),
         json!({"event_id": "evt_far_12", "type": "response.function_call_arguments.done", "response_id": "resp_002", "item_id": "item_fc_001", "output_index": 0, "call_id": "call_tw_1", "name": "lookup", "arguments": "{\"q\":1}"}),
     ];
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-tools", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);

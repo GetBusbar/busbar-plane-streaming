@@ -26,9 +26,10 @@ busbar-contract = { workspace = true }
 [dev-dependencies]
 # Ordinary tests (`tests/conformance.rs` and `tests/both_ways.rs`) load the linked door and
 # dlopens the built cdylib over busbar's REAL loader: dev-only, never in the shipped artifact.
-busbar-plugin-loader = { workspace = true }
+busbar-plugin-loader = { workspace = true , features = ["test-support"] }
 busbar-kernel = { workspace = true }
 tracing = { workspace = true }
 # The op-by-op both-ways script (`tests/both_ways.rs`, moved here with the crate from busbar's
 # crates/busbar-plane-streaming) builds the openai-realtime wire frames it pushes as JSON.
 serde_json = { workspace = true }
+busbar-contract = { workspace = true, features = ["test-seal"] }

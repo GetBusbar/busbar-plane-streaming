@@ -365,19 +365,28 @@ fn expected(public: bool) -> Vec<String> {
 
 #[test]
 fn the_linked_door_states_the_planes_doors_under_its_public_url() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     assert_eq!(script(&linked(&d), Some(PUBLIC)), expected(true));
 }
 
 #[test]
 fn a_deployment_with_no_public_url_is_claimed_by_no_door() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     assert_eq!(script(&linked(&d), None), expected(false));
 }
 
 #[test]
 fn the_dropped_door_answers_as_the_linked_door_does() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for url in [Some(PUBLIC), None] {
         let dropped = dropped(&d);
         assert_eq!(
@@ -399,7 +408,10 @@ fn words(error: Option<Vec<u8>>) -> String {
 #[test]
 fn an_open_or_refresh_the_grammar_refuses_says_why() {
     const BAD: &[u8] = br#"{"nonsense_key":1}"#;
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for door in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
         let p = door(&d);
         let mut i: PlaneOpenIn = z();
@@ -724,7 +736,10 @@ fn the_one_request_doors_answer_their_pieces_through_the_door() {
 /// An unavailable grant service must never be reported as a known policy denial.
 #[test]
 fn an_unavailable_mint_grant_service_fails_closed_without_a_ticket() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for p in [linked(&d), dropped(&d)] {
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(512);
@@ -743,7 +758,10 @@ fn an_unavailable_mint_grant_service_fails_closed_without_a_ticket() {
 
 #[test]
 fn the_dropped_door_answers_the_one_request_doors_as_the_linked_door_does() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let dropped = dropped(&d);
     assert_eq!(
         unit_script(&dropped),
@@ -877,17 +895,20 @@ impl busbar_contract::services::HostServices for TicketHost {
         _counterparty: &str,
         _item: &str,
         _digest: &str,
-    ) -> Stored {
-        Stored::refused(busbar_contract::services::UNSERVED)
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
     }
     fn trust_decide(
         &self,
         _caller: &Caller,
+        _ticket: busbar_contract::abi::mechanism::ticket::Ticket,
         _key: TrustKeyRef<'_>,
         _expected: Option<&str>,
         _approve: bool,
-    ) -> Stored {
-        Stored::refused(busbar_contract::services::UNSERVED)
+        _later: Later,
+    ) -> Ran {
+        Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
     }
     fn trust_state(&self, _caller: &Caller, _counterparty: &str) -> Stored {
         Stored::refused(busbar_contract::services::UNSERVED)
@@ -981,8 +1002,8 @@ impl busbar_contract::services::HostServices for TicketHost {
     fn hook_call(&self, _caller: &Caller, _unit: Option<u64>, _ask: HookAsk, _later: Later) -> Ran {
         Ran::Now(Stored::refused(busbar_contract::services::UNSERVED))
     }
-    fn snapshot_read(&self, _caller: &Caller, _scope: u32) -> Snapshot {
-        Snapshot::Refused(busbar_contract::services::UNSERVED)
+    fn snapshot_read(&self, _caller: &Caller, _scope: u32, _later: Later) -> Ran {
+        Ran::Now((Snapshot::Refused(busbar_contract::services::UNSERVED)).stored())
     }
     fn entitlement_check(
         &self,
@@ -1004,14 +1025,17 @@ impl busbar_contract::services::HostServices for TicketHost {
         _unit: Option<u64>,
         _ttl_secs: u64,
         record: &[u8],
-    ) -> busbar_contract::services::Stored {
-        *self
-            .minted
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = record.to_vec();
-        let mut stored = busbar_contract::services::Stored::ready(TICKET_EXPIRES);
-        stored.bytes = TICKET.as_bytes().to_vec();
-        stored
+        _later: Later,
+    ) -> Ran {
+        Ran::Now({
+            *self
+                .minted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = record.to_vec();
+            let mut stored = busbar_contract::services::Stored::ready(TICKET_EXPIRES);
+            stored.bytes = TICKET.as_bytes().to_vec();
+            stored
+        })
     }
 
     fn ticket_take(
@@ -1065,7 +1089,11 @@ fn ticket_host_granting(granted: &'static [&'static str]) -> (Dispatcher, Arc<Ti
         once: false,
         took: std::sync::atomic::AtomicBool::new(false),
     });
-    let d = Dispatcher::with_services(DispatchConfig::default(), host.clone());
+    let d = Dispatcher::with_services(
+        DispatchConfig::default(),
+        host.clone(),
+        busbar_contract::services::test_caller_binding(),
+    );
     (d, host)
 }
 
@@ -1460,7 +1488,10 @@ fn a_door_that_reaches_the_far_end_names_the_session_model_as_its_direct_route()
     use busbar_contract::abi::plane::{
         ROUTE_COUNTED, ROUTE_DIRECT, ROUTE_LOCAL, ROUTE_POOL, ROUTE_SCOPE_LOCAL,
     };
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
@@ -1583,7 +1614,10 @@ fn project_recall_at(
 /// projects no body and takes no rewrite. Both ways.
 #[test]
 fn a_session_open_is_projected_for_the_hooks_and_a_rewrite_patches_it() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
@@ -1693,7 +1727,10 @@ fn an_authentication_refusal_reads_in_the_dialects_vendor_terms() {
         "param": null,
         "code": AUTH_FAILURE_CODE,
     }});
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let doors = vec![linked(&d), dropped(&d)];
     for p in &doors {
         assert_eq!(open(p, 1, b"{}", Some(PUBLIC)).0, Outcome::Ready);
@@ -2058,7 +2095,10 @@ const PLAIN_CLAIM: u32 = 5;
 /// A plain Realtime session opens on its own door without a brokered call.
 #[test]
 fn a_plain_realtime_session_opens_on_its_own_door_with_no_call() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let doors = vec![linked(&d), dropped(&d)];
     let mut transcripts = Vec::new();
     for p in &doors {
@@ -2128,7 +2168,10 @@ fn a_plain_session_dials_the_session_models_upstream_name() {
         ),
         (KEYED_PLAIN, "verb=GET target=/v1/realtime?model=m-cap "),
     ] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let doors = vec![linked(&d), dropped(&d)];
         let mut transcripts = Vec::new();
         for p in &doors {
@@ -2760,7 +2803,11 @@ fn a_short_sdp_projection_re_called_keeps_the_tickets_session() {
             once: true,
             took: std::sync::atomic::AtomicBool::new(false),
         });
-        let d = Dispatcher::with_services(DispatchConfig::default(), host);
+        let d = Dispatcher::with_services(
+            DispatchConfig::default(),
+            host,
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = door(&d);
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let rewrite: &[u8] = br#"{"voice":"marin"}"#;
@@ -2833,7 +2880,10 @@ fn a_session_at_the_session_bound_is_refused_at_its_arrival_in_words() {
 /// An inapplicable session-open rewrite leaves the original open unchanged.
 #[test]
 fn a_session_open_rewrite_that_cannot_be_applied_leaves_the_open_unmodified() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for p in &[linked(&d), dropped(&d)] {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let (_, locked, _) = project(p, 5, b"");
@@ -2850,7 +2900,10 @@ fn a_session_open_rewrite_that_cannot_be_applied_leaves_the_open_unmodified() {
 
 #[test]
 fn an_unapplied_rewrite_is_logged_once_when_projection_needs_more_room() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped_in in [false, true] {
         let log = Arc::new(HostLog::default());
         let bound = Bind {
@@ -2899,7 +2952,10 @@ fn an_unapplied_rewrite_is_logged_once_when_projection_needs_more_room() {
 
 #[test]
 fn a_later_session_rewrite_keeps_prior_patches_through_short_recall_and_refusal() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for make in [linked as fn(&Dispatcher) -> Plugin<Plane>, dropped] {
         let p = make(&d);
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
@@ -2940,7 +2996,10 @@ fn a_later_session_rewrite_keeps_prior_patches_through_short_recall_and_refusal(
 #[test]
 fn native_initialization_survives_short_buffers_before_any_provider_work() {
     const LOCK: &[u8] = br#"{"session":{"model":"m-cap","instructions":"operator lock","input_audio_format":"g711_ulaw"},"max_output_tokens":127,"context_window_tokens":2048}"#;
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let mut transcripts = Vec::new();
     for p in [linked(&d), dropped(&d)] {
         assert_eq!(open(&p, 1, LOCK, Some(PUBLIC)).0, Outcome::Ready);
@@ -3000,7 +3059,10 @@ fn native_initialization_survives_short_buffers_before_any_provider_work() {
 
 #[test]
 fn gemini_original_proto_audio_names_relay_exact_bytes_and_bill_fractional_samples() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let mut transcripts = Vec::new();
     for p in [linked(&d), dropped(&d)] {
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
@@ -3028,7 +3090,10 @@ fn gemini_original_proto_audio_names_relay_exact_bytes_and_bill_fractional_sampl
 
 #[test]
 fn cancelling_a_short_initial_lock_retires_the_unaccepted_session() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for p in [linked(&d), dropped(&d)] {
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         assert_eq!(
@@ -3051,7 +3116,10 @@ fn cancelling_a_short_initial_lock_retires_the_unaccepted_session() {
 
 #[test]
 fn native_initialization_uses_the_completed_session_open_hook_rewrite() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for p in [linked(&d), dropped(&d)] {
         assert_eq!(open(&p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         assert_eq!(
@@ -3128,7 +3196,10 @@ fn caller_bound_text_flags_follow_reply_window_completion() {
 
 #[test]
 fn a_sideband_projects_no_new_session_parameters_and_rejects_session_patches() {
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for p in &[linked(&d), dropped(&d)] {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         assert_eq!(project(p, 2, b""), (Outcome::Ready, String::new(), false));

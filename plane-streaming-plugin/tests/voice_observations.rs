@@ -14,7 +14,10 @@ const USAGE: &[u8] = br#"{"type":"response.done","response":{"usage":{"input_tok
 #[test]
 fn observation_v1_barge_in_preemption() {
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "observe-barge", dropped);
         let opened = open(&p, SESSION, Some(PUBLIC));
         let initial = piece(&p, &session(100, 5, FROM_CALLER, 0, &[]));
@@ -67,7 +70,10 @@ fn observation_v2_turn_budget_enforcement() {
     const CEILING_TICK_NS: u64 = 1_000_000_000;
     const SESSION_CEILING_REASON: &str = "session_expired";
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "observe-ceiling", dropped);
         let opened = open(
             &p,
@@ -108,7 +114,10 @@ fn observation_v2_turn_budget_enforcement() {
 #[test]
 fn observation_v3_metering_lease_settled() {
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "observe-settle", dropped);
         let _ = open(&p, SESSION, Some(PUBLIC));
         let _ = piece(&p, &session(120, 5, FROM_CALLER, 0, &[]));
@@ -170,7 +179,10 @@ fn observation_v3_metering_lease_settled() {
 #[test]
 fn observation_v4_dialect_downscope() {
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "observe-downscope", dropped);
         let _ = open(&p, SESSION, Some(PUBLIC));
         let initial = piece(&p, &session(140, 5, FROM_CALLER, 0, &[]));
@@ -205,7 +217,10 @@ fn observation_v4_dialect_downscope() {
 #[test]
 fn closed_session_refuses_late_frames_and_renders_budget_refusal() {
     for dropped in [false, true] {
-        let d = Dispatcher::new(DispatchConfig::default());
+        let d = Dispatcher::new(
+            DispatchConfig::default(),
+            busbar_contract::services::test_caller_binding(),
+        );
         let p = load(&d, "observe-close", dropped);
         let _ = open(&p, SESSION, Some(PUBLIC));
         let _ = piece(&p, &session(130, 5, FROM_CALLER, 0, &[]));
@@ -249,7 +264,10 @@ fn completed_session_accepts_only_empty_far_terminal_in_either_order() {
     for dropped in [false, true] {
         for far_first in [false, true] {
             for flags in [PIECE_LAST, PIECE_LAST | PIECE_CUT] {
-                let d = Dispatcher::new(DispatchConfig::default());
+                let d = Dispatcher::new(
+                    DispatchConfig::default(),
+                    busbar_contract::services::test_caller_binding(),
+                );
                 let p = load(&d, "terminal-order", dropped);
                 assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);
                 assert_eq!(

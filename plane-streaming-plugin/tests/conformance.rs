@@ -31,13 +31,19 @@ fn packed_rendering(lib: &std::path::Path) -> Vec<u8> {
         .expect("actual artifact exports door")
 }
 fn linked() -> Loaded {
-    let d = Arc::new(Dispatcher::new(DispatchConfig::default()));
+    let d = Arc::new(Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    ));
     let row = LinkedRow::of(busbar_plane_streaming::door).unwrap();
     let p = load_linked::<Plane>(&row, bind(&d)).unwrap();
     (p, d)
 }
 fn dropped(lib: &std::path::Path, stated: &[u8]) -> Loaded {
-    let d = Arc::new(Dispatcher::new(DispatchConfig::default()));
+    let d = Arc::new(Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    ));
     let p = load_dropped::<Plane>(lib, stated, bind(&d)).unwrap();
     (p, d)
 }

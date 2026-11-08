@@ -45,7 +45,10 @@ fn twilio_cumulative_units_short_recall_and_stop_settlement() {
         "settled start Ready units=[]".to_string(),
         format!("settled stop Ready units=[{}] done=true", usage_units(2)),
     ];
-    let dispatcher = Dispatcher::new(DispatchConfig::default());
+    let dispatcher = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     for dropped in [false, true] {
         let p = load(&dispatcher, "twilio-meter", dropped);
         assert_eq!(open(&p, SESSION, Some(PUBLIC)).outcome, Outcome::Ready);

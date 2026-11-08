@@ -38,7 +38,10 @@ fn a_failed_ready_refuses_the_actual_streaming_boot_once() {
         })
     };
     FAILING.store(Box::into_raw(Box::new(door)), Ordering::SeqCst);
-    let d = Dispatcher::new(DispatchConfig::default());
+    let d = Dispatcher::new(
+        DispatchConfig::default(),
+        busbar_contract::services::test_caller_binding(),
+    );
     let row = LinkedRow::of_raw(failing).unwrap();
     let p = load_linked::<Plane>(&row, bind(&d)).unwrap();
     let mut f: busbar_plugin_loader::dispatch::Frame<
@@ -60,8 +63,7 @@ fn a_failed_ready_refuses_the_actual_streaming_boot_once() {
         .outcome,
         Outcome::Ready
     );
-    let first =
-        || p.inner.crossings.load(Ordering::SeqCst) - p.inner.resumes.load(Ordering::SeqCst);
+    let first = || p.test_invocations().0 - p.test_invocations().1;
     let before = first();
     let error = p
         .ready(&d, std::time::Duration::from_secs(30))
