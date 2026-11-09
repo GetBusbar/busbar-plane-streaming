@@ -599,6 +599,15 @@ impl Bufs {
         self.answer(&c, f.out)
     }
 
+    /// A mint may pend, so it needs a live host completion ticket even when this host
+    /// answers immediately. Ordinary ticket-less calls intentionally cannot mint.
+    fn call_ticketed(&mut self, d: &Dispatcher, p: &Plugin<Plane>, push: &Push<'_>) -> String {
+        let ticket = d.inline_ticket().expect("a live host completion ticket");
+        let mut frame = self.frame(push);
+        let called = p.call_inline(ticket.ticket(), false, slot::ON_PIECE, &mut frame);
+        self.answer(&called, frame.out)
+    }
+
     fn answer(&mut self, c: &busbar_plugin_loader::dispatch::Called, o: OnPieceOut) -> String {
         self.last_need = o.need;
         self.last_flags = o.flags;
@@ -771,10 +780,10 @@ fn the_dropped_door_answers_the_one_request_doors_as_the_linked_door_does() {
 }
 
 /// Mint a local ticket through a 16-byte reply buffer and collect the complete answer.
-fn narrow_mint_script(p: &Plugin<Plane>) -> (Vec<u8>, Vec<String>) {
+fn narrow_mint_script(d: &Dispatcher, p: &Plugin<Plane>) -> (Vec<u8>, Vec<String>) {
     let _ = open(p, 1, SESSION, Some(PUBLIC));
     let mut narrow = Bufs::new(16);
-    let mut lines = vec![narrow.call(p, &push(7, 0, FROM_CALLER, PIECE_LAST, &[]))];
+    let mut lines = vec![narrow.call_ticketed(d, p, &push(7, 0, FROM_CALLER, PIECE_LAST, &[]))];
     let mut bytes = Vec::new();
     loop {
         let line = lines.last().expect("a line");
@@ -797,7 +806,7 @@ fn narrow_mint_script(p: &Plugin<Plane>) -> (Vec<u8>, Vec<String>) {
 #[test]
 fn a_mint_answer_streams_through_a_narrow_reply_buffer() {
     let d = host();
-    let (bytes, lines) = narrow_mint_script(&linked(&d));
+    let (bytes, lines) = narrow_mint_script(&d, &linked(&d));
 
     let minted =
         format!(r#"{{"expires_at_unix":{TICKET_EXPIRES},"value":"{TICKET}"}}"#).into_bytes();
@@ -810,7 +819,7 @@ fn a_mint_answer_streams_through_a_narrow_reply_buffer() {
         );
     }
     assert!(lines[lines.len() - 1].contains(" done=true "), "{lines:#?}");
-    assert_eq!(narrow_mint_script(&dropped(&d)), (bytes, lines));
+    assert_eq!(narrow_mint_script(&d, &dropped(&d)), (bytes, lines));
 }
 
 /// A piece of the live session on stream `stream` (claim 2, the sideband socket).
@@ -1390,7 +1399,7 @@ fn a_brokered_browser_session_reports_its_session_fee() {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::with_units(1 << 16, 8);
 
-        let minted = b.call(p, &push(70, 0, FROM_CALLER, PIECE_LAST, &[]));
+        let minted = b.call_ticketed(&d, p, &push(70, 0, FROM_CALLER, PIECE_LAST, &[]));
         assert!(minted.contains("done=true status=200"), "{minted}");
         assert_eq!(b.last_units, "", "a ticket places no call: {minted}");
 
@@ -2214,7 +2223,7 @@ fn every_upstream_facing_model_field_names_the_upstream_model() {
     for p in &doors {
         assert_eq!(open(p, 1, KEYED_UPSTREAM, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::with_units(1 << 18, 8);
-        let ticket = b.call(p, &push(69, 0, FROM_CALLER, PIECE_LAST, &[]));
+        let ticket = b.call_ticketed(&d, p, &push(69, 0, FROM_CALLER, PIECE_LAST, &[]));
         assert!(ticket.contains("status=200"), "{ticket}");
         let record = String::from_utf8(
             host.minted
@@ -2416,7 +2425,7 @@ fn the_mint_door_answers_the_ticket_busbar_minted() {
     for p in &doors {
         assert_eq!(open(p, 1, SESSION, Some(PUBLIC)).0, Outcome::Ready);
         let mut b = Bufs::new(256);
-        let answer = b.call(p, &push(70, 0, FROM_CALLER, PIECE_LAST, &[]));
+        let answer = b.call_ticketed(&d, p, &push(70, 0, FROM_CALLER, PIECE_LAST, &[]));
         let emitted = answer
             .strip_prefix("Ready emitted=")
             .and_then(|rest| rest.split(" more=").next())
