@@ -109,9 +109,10 @@ fn model_audio_and_a_barge_in_reach_the_caller_in_the_carriers_envelope() {
     );
 }
 
-/// A tool call on a telephony session is relayed down that session unchanged.
+/// A tool call on a telephony session is filtered: the carrier speaks only media, mark and clear,
+/// and relaying tool names or arguments would leak data to the telephony transport.
 #[test]
-fn a_tool_call_on_a_telephony_session_is_relayed_down_the_session_as_is() {
+fn a_tool_call_on_a_telephony_session_is_filtered_not_relayed() {
     let mut s = telephony();
     let _ = s.from_caller(&start("audio/x-mulaw"));
     let frames = [
@@ -122,10 +123,9 @@ fn a_tool_call_on_a_telephony_session_is_relayed_down_the_session_as_is() {
     ];
     for frame in frames {
         let plan = s.from_far_end(frame.as_bytes());
-        assert_eq!(
-            plan.to_caller,
-            vec![frame.as_bytes().to_vec()],
-            "relayed as the far end wrote it"
+        assert!(
+            plan.to_caller.is_empty(),
+            "tool call frames are filtered on the telephony path"
         );
         assert!(
             plan.to_far_end.is_empty(),

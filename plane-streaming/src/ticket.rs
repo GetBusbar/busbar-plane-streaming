@@ -42,7 +42,7 @@ const CALL_ID_PREFIX: &str = "rtc_";
 /// order.
 pub fn minted_answer(ticket: &Cred, expires_at_unix: u64) -> Result<SealedWrite, NotJsonText> {
     SealedJson::new()
-        .public("expires_at_unix", expires_at_unix)
+        .public("expires_at", expires_at_unix)
         .sealed("value", ticket)
         .encoded()
 }

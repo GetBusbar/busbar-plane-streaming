@@ -91,16 +91,23 @@ fn a_minted_ticket_is_answered_and_a_failure_keeps_the_served_text() {
     assert_eq!(ok.status, 200);
     let v: serde_json::Value =
         serde_json::from_slice(&crate::tests::body_bytes(ok.body)).expect("json");
-    assert_eq!(
-        v,
-        serde_json::json!({"value": "ek_1", "expires_at_unix": 9})
-    );
+    assert_eq!(v, serde_json::json!({"value": "ek_1", "expires_at": 9}));
     let refused = mint_failed("the host minted no ticket");
     assert_eq!(refused.status, 502);
     assert_eq!(
-        String::from_utf8(crate::tests::body_bytes(refused.body)).expect("utf-8"),
-        "streaming ephemeral-secret mint failed: the host minted no \
-         ticket"
+        refused.fields,
+        vec![("content-type", "application/json".to_string())]
+    );
+    let v: serde_json::Value =
+        serde_json::from_slice(&crate::tests::body_bytes(refused.body)).expect("json");
+    assert_eq!(v["error"]["type"], "server_error");
+    assert_eq!(v["error"]["code"], "mint_failed");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("the host minted no ticket"),
+        "{v}"
     );
 }
 

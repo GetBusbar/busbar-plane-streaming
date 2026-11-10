@@ -501,6 +501,7 @@ impl Sessions {
     pub fn get_or_open(&mut self, stream: u64, door: Door, cfg: &StreamsCfg) -> Option<&mut Live> {
         if !self.live.contains_key(&stream) {
             if self.live.len() >= MAX_SESSIONS || self.ended(stream) {
+                self.rewritten.remove(&stream);
                 return None;
             }
             let rewritten = self.rewritten.remove(&stream);

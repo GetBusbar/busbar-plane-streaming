@@ -50,7 +50,7 @@ fn the_mint_door_asks_for_a_ticket_locking_its_session_once() {
     assert!(!unit.answered());
 }
 
-/// The mint door's answer: the OpenAI-compatible `{value, expires_at_unix}` shape, the ticket
+/// The mint door's answer: the OpenAI-compatible `{value, expires_at}` shape, the ticket
 /// sealed through the SDK (R7).
 #[test]
 fn a_minted_ticket_is_answered_in_the_shape_sdks_read() {
@@ -78,7 +78,7 @@ fn a_minted_ticket_is_answered_in_the_shape_sdks_read() {
         serde_json::from_slice(&crate::tests::body_bytes(reply.body)).expect("json");
     assert_eq!(
         v,
-        serde_json::json!({"value": "ek_abc", "expires_at_unix": 1_700_000_600})
+        serde_json::json!({"value": "ek_abc", "expires_at": 1_700_000_600})
     );
     assert!(unit.answered());
     assert!(matches!(
@@ -87,7 +87,7 @@ fn a_minted_ticket_is_answered_in_the_shape_sdks_read() {
     ));
 }
 
-/// A refused mint preserves the served 502 text without exposing secrets.
+/// A refused mint preserves the served 502 text in the error envelope without exposing secrets.
 #[test]
 fn a_refused_mint_keeps_the_served_text() {
     let mut unit = RequestUnit::open(Door::Mint, locked()).expect("a request door");
@@ -96,14 +96,16 @@ fn a_refused_mint_keeps_the_served_text() {
         panic!("answered");
     };
     assert_eq!(reply.status, 502);
-    assert_eq!(
-        reply.body.public(),
-        Some(&b"streaming ephemeral-secret mint failed: no principal"[..]),
-        "a refusal's text is public"
-    );
-    assert_eq!(
-        String::from_utf8(crate::tests::body_bytes(reply.body)).expect("utf-8"),
-        "streaming ephemeral-secret mint failed: no principal"
+    let body = crate::tests::body_bytes(reply.body);
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("json envelope");
+    assert_eq!(v["error"]["type"], "server_error");
+    assert_eq!(v["error"]["code"], "mint_failed");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no principal"),
+        "{v}"
     );
 }
 

@@ -1480,6 +1480,9 @@ slot!(Arrive, ArriveIn, ArriveOut, |instance, input, out| {
         None
     };
     let Some(cfg) = call_cfg.or_else(|| p.cfg_for(input.unit())) else {
+        lock(&p.calls).forget(input.unit());
+        out.set(|o| &o.refusal, REFUSAL_NO_DOOR);
+        out.set(|o| &o.refusal_status, 404);
         return Outcome::Refused;
     };
     if !cfg.supports(a.door) {

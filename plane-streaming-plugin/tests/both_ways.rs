@@ -808,8 +808,7 @@ fn a_mint_answer_streams_through_a_narrow_reply_buffer() {
     let d = host();
     let (bytes, lines) = narrow_mint_script(&d, &linked(&d));
 
-    let minted =
-        format!(r#"{{"expires_at_unix":{TICKET_EXPIRES},"value":"{TICKET}"}}"#).into_bytes();
+    let minted = format!(r#"{{"expires_at":{TICKET_EXPIRES},"value":"{TICKET}"}}"#).into_bytes();
     assert_eq!(bytes, minted, "{lines:#?}");
     assert_eq!(lines.len(), minted.len().div_ceil(16), "{lines:#?}");
     for line in &lines[..lines.len() - 1] {
@@ -2433,7 +2432,7 @@ fn the_mint_door_answers_the_ticket_busbar_minted() {
         let read: serde_json::Value = serde_json::from_str(emitted).expect("json");
         assert_eq!(
             read,
-            serde_json::json!({"value": TICKET, "expires_at_unix": TICKET_EXPIRES})
+            serde_json::json!({"value": TICKET, "expires_at": TICKET_EXPIRES})
         );
         assert!(
             answer.ends_with(&format!(

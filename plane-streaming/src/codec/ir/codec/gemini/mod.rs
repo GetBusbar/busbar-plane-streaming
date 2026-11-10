@@ -407,7 +407,9 @@ fn realtime_audio(
 
 /// Whether the Blob `b` is audio: its mime type is `audio/...`, ignoring case.
 fn is_audio(b: &Lite<'_>) -> Result<bool, crate::splice::Unmeterable> {
-    Ok(proto_text(b, &["mimeType", "mime_type"])?
+    let mime = proto_text(b, &["mimeType", "mime_type"])?;
+    let trimmed = mime.trim_start();
+    Ok(trimmed
         .get(..AUDIO_MIME_PREFIX.len())
         .is_some_and(|p| p.eq_ignore_ascii_case(AUDIO_MIME_PREFIX)))
 }

@@ -135,6 +135,7 @@ impl LockedKeys for OpenAiRealtimeCodec {
         // caller session.update carry a model the provider rejects (same strip as locked_frame).
         set.remove("model");
         let mut cut = REALTIME_CUT.to_vec();
+        cut.push("model");
         cut.push(LEGACY_TRANSCRIPTION);
         for (key, is_locked) in [
             ("voice", locked.voice.is_some()),

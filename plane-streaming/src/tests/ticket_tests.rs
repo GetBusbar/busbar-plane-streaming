@@ -19,7 +19,7 @@ fn the_caller_is_answered_the_ticket_and_its_expiry_only() {
     let wire = crate::tests::sealed_bytes(&mut answer);
     assert_eq!(
         wire,
-        br#"{"expires_at_unix":1700000600,"value":"ek_abc"}"#.to_vec()
+        br#"{"expires_at":1700000600,"value":"ek_abc"}"#.to_vec()
     );
     assert!(TICKET_PREFIX == "ek_", "SDKs pass the ek_ prefix through");
 }

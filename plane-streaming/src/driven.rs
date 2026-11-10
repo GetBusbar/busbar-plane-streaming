@@ -235,15 +235,20 @@ impl std::fmt::Debug for Reply {
 /// The status the served plane answers a failed mint with.
 pub const MINT_FAILED_STATUS: u16 = 502;
 
-/// The served plane's 502 for a mint that failed for `reason`.
+/// The served plane's 502 for a mint that failed for `reason`: the OpenAI REST error envelope
+/// the realtime SDKs read.
 #[must_use]
 pub fn mint_failed(reason: &str) -> Reply {
+    let body = serde_json::json!({"error": {
+        "message": format!("streaming ephemeral-secret mint failed: {reason}"),
+        "type": "server_error",
+        "param": null,
+        "code": "mint_failed"
+    }});
     Reply {
         status: MINT_FAILED_STATUS,
-        fields: Vec::new(),
-        body: Body::Public(
-            format!("streaming ephemeral-secret mint failed: {reason}").into_bytes(),
-        ),
+        fields: vec![(FIELD_CONTENT_TYPE, JSON_CONTENT_TYPE.to_string())],
+        body: Body::Public(serde_json::to_vec(&body).unwrap_or_default()),
     }
 }
 

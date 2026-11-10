@@ -53,6 +53,14 @@ impl AudioFormat {
         }
     }
 
+    /// Whether this format can be negotiated in a session config: `pcm16` and `g711_ulaw` are
+    /// the formats a session may name; `Pcm16At16k` is a frame-level format only (the Gemini Live
+    /// uplink), never a session-config value.
+    #[must_use]
+    pub const fn session_negotiable(self) -> bool {
+        matches!(self, AudioFormat::Pcm16 | AudioFormat::G711Ulaw)
+    }
+
     /// Bytes of audio per millisecond of playback. pcm16 = 24 samples/ms × 2 bytes = 48; g711 µ-law = 8 bytes/ms; Gemini 16 kHz PCM = 32 bytes/ms.
     #[must_use]
     pub const fn bytes_per_ms(self) -> u64 {

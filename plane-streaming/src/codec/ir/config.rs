@@ -90,6 +90,7 @@ mod opt_audio_fmt {
         match Option::<String>::deserialize(d)? {
             None => Ok(None),
             Some(s) => AudioFormat::from_wire(&s)
+                .filter(|f| f.session_negotiable())
                 .map(Some)
                 .ok_or_else(|| D::Error::custom(format!("unknown audio format: {s}"))),
         }
