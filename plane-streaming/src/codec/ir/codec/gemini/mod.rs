@@ -314,11 +314,19 @@ impl DuplexReader for GeminiLiveCodec {
                     out.resize(calls.len(), Metered::ToolOpen);
                 }
             }
-            if let Some((um_lite, um)) =
-                proto_value(&top, &v, &["usageMetadata", "usage_metadata"])?
-            {
-                let um = canonical_usage(um_lite, um)?;
-                out.push(Metered::Usage(usage_from_metadata(&um)?));
+            // Usage metadata is read separately so a malformed report does not discard tool-open
+            // entries already accumulated above: the floor covers only the usage, not the tools.
+            let usage = proto_value(&top, &v, &["usageMetadata", "usage_metadata"]).and_then(
+                |um| match um {
+                    Some((um_lite, um)) => canonical_usage(um_lite, um)
+                        .and_then(|um| usage_from_metadata(&um).map(Some)),
+                    None => Ok(None),
+                },
+            );
+            match usage {
+                Ok(Some(u)) => out.push(Metered::Usage(u)),
+                Ok(None) => {}
+                Err(message) => out.push(Metered::Usage(usage_floor(frame.len(), &message))),
             }
             Ok(out)
         };

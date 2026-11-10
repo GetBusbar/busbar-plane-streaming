@@ -131,6 +131,9 @@ impl LockedKeys for OpenAiRealtimeCodec {
     fn configure_rule(&self, locked: &SessionConfig) -> Rule {
         let mut set = locked.ga_session();
         set.remove(MAX_OUTPUT_TOKENS);
+        // Model is set on the connection, not on session.update — including it would make every
+        // caller session.update carry a model the provider rejects (same strip as locked_frame).
+        set.remove("model");
         let mut cut = REALTIME_CUT.to_vec();
         cut.push(LEGACY_TRANSCRIPTION);
         for (key, is_locked) in [

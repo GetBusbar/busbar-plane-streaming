@@ -48,6 +48,7 @@ impl AudioFormat {
         match s {
             "pcm16" => Some(AudioFormat::Pcm16),
             "g711_ulaw" => Some(AudioFormat::G711Ulaw),
+            "pcm16_16khz" => Some(AudioFormat::Pcm16At16k),
             _ => None,
         }
     }

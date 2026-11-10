@@ -144,10 +144,14 @@ impl Live {
     ) -> Option<Live> {
         let ceiling = cfg.session_max_secs.map(|s| u64::from(s.get()));
 
-        let locked = with_ceilings(
-            cfg.wire_session(rewritten.unwrap_or_else(|| Self::locked(door, cfg))),
-            cfg,
-        );
+        let mut base = rewritten.unwrap_or_else(|| Self::locked(door, cfg));
+        // Twilio's G.711 µ-law format is physical: the carrier sends and receives it regardless
+        // of what a hook rewrite asks, so the lock re-asserts it after the rewrite.
+        if door == Door::Twilio {
+            base.input_audio_format = Some(AudioFormat::G711Ulaw);
+            base.output_audio_format = Some(AudioFormat::G711Ulaw);
+        }
+        let locked = with_ceilings(cfg.wire_session(base), cfg);
         if door == Door::Gemini && locked.validate_gemini().is_err() {
             return None;
         }

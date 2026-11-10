@@ -447,13 +447,13 @@ impl TwilioBridge {
         // read whole.
         let head = Head::read(frame)?;
         let kind = head.ty.as_deref()?;
+        // Function-call frames are not forwarded: the carrier speaks only media, mark and clear,
+        // and relaying tool names or arguments would leak data to the telephony transport.
         if kind.starts_with(FUNCTION_CALL_ARGUMENTS) {
-            return Some(frame.to_vec());
+            return None;
         }
         if ITEM_EVENTS.contains(&kind) {
-            let top = Lite::read(frame)?;
-            let item_type = top.get("item").map(|item| item.str_at("type"));
-            return (item_type == Some(wire::ITEM_FN_CALL)).then(|| frame.to_vec());
+            return None;
         }
         let sid = self.stream_sid.as_deref()?;
         match kind {
