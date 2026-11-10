@@ -395,6 +395,12 @@ impl TwilioBridge {
                 if base64_len(payload).is_none() {
                     return refused(&TwilioError::BadPayload);
                 }
+                // A JSON-decoded payload may contain literal control characters (a
+                // source \n that base64_len skips as whitespace). Embedding them in
+                // the format! template below produces invalid JSON, so reject them.
+                if payload.bytes().any(|b| b < 0x20) {
+                    return refused(&TwilioError::BadPayload);
+                }
                 if sid.is_empty() || self.stream_sid.as_deref() != Some(sid) {
                     return CallerStep::Nothing;
                 }
