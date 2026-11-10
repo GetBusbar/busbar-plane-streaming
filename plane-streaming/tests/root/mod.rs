@@ -95,3 +95,11 @@ use crate::root::serve::{
     metrics_fixture::metrics_routes,
 };
 include!("session_door.rs");
+
+/// The owner's minimal valid section for composition-root coverage fixtures.
+pub(crate) fn minimal_valid_config() -> (&'static str, serde_json::Value) {
+    (
+        "streams",
+        serde_json::json!({"context_window_tokens": 32768}),
+    )
+}
