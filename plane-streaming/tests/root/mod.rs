@@ -92,6 +92,7 @@ pub(crate) fn secret_source_driven() -> Vec<String> {
 
 use crate::root::serve::{
     door_rig,
-    door_tests::{independent_case_done, independent_cases, metrics_routes},
+    door_tests::{independent_case_done, independent_cases},
+    metrics_fixture::metrics_routes,
 };
 include!("session_door.rs");
