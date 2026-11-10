@@ -3,18 +3,6 @@
 
 //! THE STREAMING PLANE DOOR'S ROOT CELLS, as the composition root's door-cells row reads them: this
 
-
-
-
-
-
-
-
-
-
-
-
-
 /// THIS PLANE'S CAPABILITY-EQUALITY COLUMNS (`qa/capability-equality.json`): the cells its root leg
 pub(crate) const COLUMNS: &[&str] = &["streaming-client", "streaming-server"];
 
@@ -87,7 +75,31 @@ pub(crate) const NOT_APPLICABLE: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// THE SECRET-SOURCE SCAN'S DRIVEN DOOR (the composition root's `secret_source.rs`, which holds
+/// Actual plane composition cases that scan source refusals at the caller boundary.
+#[cfg(linked_section_streams)]
+mod secret_source;
+
 pub(crate) fn secret_source_driven() -> Vec<String> {
-    Vec::new()
+    #[cfg(linked_section_streams)]
+    {
+        session_door::name().into_iter().collect()
+    }
+    #[cfg(not(linked_section_streams))]
+    {
+        Vec::new()
+    }
+}
+
+use crate::root::serve::{
+    door_tests::{independent_case_done, independent_cases},
+    metrics_fixture::metrics_routes,
+};
+include!("session_door.rs");
+
+/// The owner's minimal valid section for composition-root coverage fixtures.
+pub(crate) fn minimal_valid_config() -> (&'static str, serde_json::Value) {
+    (
+        "streams",
+        serde_json::json!({"context_window_tokens": 32768}),
+    )
 }
