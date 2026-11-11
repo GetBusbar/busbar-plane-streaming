@@ -214,7 +214,7 @@ fn two_calls_preserve_media_sid_barge_in_and_one_terminal() {
 }
 
 #[test]
-fn twilio_tool_calls_are_opaque_and_never_answered() {
+fn twilio_tool_calls_are_not_forwarded_or_answered_and_media_continues() {
     let frames = [
         json!({"event_id": "evt_far_10", "type": "response.output_item.added", "response_id": "resp_002", "output_index": 0, "item": {"id": "item_fc_001", "type": "function_call", "status": "in_progress", "call_id": "call_tw_1", "name": "lookup", "arguments": ""}}),
         json!({"event_id": "evt_far_11", "type": "response.function_call_arguments.delta", "response_id": "resp_002", "item_id": "item_fc_001", "output_index": 0, "call_id": "call_tw_1", "delta": "{\"q\":1}"}),
@@ -257,9 +257,36 @@ fn twilio_tool_calls_are_opaque_and_never_answered() {
             ready(&a);
             assert!(!a.to_far);
             assert!(!a.done);
-            assert_eq!(a.emitted, raw);
+            // Twilio accepts only media, mark and clear; tool data never goes to the carrier.
+            // https://www.twilio.com/docs/api/errors/31951
+            assert!(
+                a.emitted.is_empty(),
+                "no tool names or arguments reach Twilio"
+            );
             quiet(piece(&p, &session(52, CLAIM, FROM_KERNEL, 0, &[])));
         }
+        let audio = piece(
+            &p,
+            &session(52, CLAIM, FROM_FAR_END, 0, &bytes(&far_delta("AQID"))),
+        );
+        ready(&audio);
+        assert!(!audio.to_far && !audio.done);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&audio.emitted).unwrap(),
+            json!({"event":"media", "streamSid":sid(), "media":{"payload":"AQID"}})
+        );
+        quiet(piece(&p, &session(52, CLAIM, FROM_KERNEL, 0, &[])));
+        let clear = piece(
+            &p,
+            &session(52, CLAIM, FROM_FAR_END, 0, &bytes(&far_speech_started())),
+        );
+        ready(&clear);
+        assert!(!clear.to_far && !clear.done);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&clear.emitted).unwrap(),
+            json!({"event":"clear", "streamSid":sid()})
+        );
+        quiet(piece(&p, &session(52, CLAIM, FROM_KERNEL, 0, &[])));
         stopped(piece(
             &p,
             &session(

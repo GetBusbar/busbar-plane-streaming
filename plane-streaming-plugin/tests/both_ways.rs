@@ -2260,7 +2260,7 @@ fn every_upstream_facing_model_field_names_the_upstream_model() {
         );
         let initial = b.call(p, &live_push(71, PLAIN_CLAIM, FROM_CALLER, 0, &[]));
         assert!(initial.contains("session.update"), "{initial}");
-        let update = br#"{"type":"session.update","session":{"type":"realtime"}}"#;
+        let update = br#"{"type":"session.update","session":{"type":"realtime","model":"caller-forbidden"}}"#;
         let spliced = b.call(
             p,
             &Push {
@@ -2270,9 +2270,22 @@ fn every_upstream_facing_model_field_names_the_upstream_model() {
         );
         assert!(
             spliced.contains("far=true")
-                && spliced.contains(r#""model":"gpt-realtime-wire""#)
-                && !spliced.contains(r#""model":"m-cap""#),
-            "the caller's session.update reaches the provider with the upstream model: {spliced}"
+                && spliced.contains("target=/v1/realtime?model=gpt-realtime-wire")
+                && !spliced.contains("caller-forbidden"),
+            "the connection keeps its upstream model: {spliced}"
+        );
+        let emitted = spliced
+            .strip_prefix("Ready emitted=")
+            .and_then(|line| line.split_once(" more="))
+            .expect("a ready session update")
+            .0;
+        let update: serde_json::Value = serde_json::from_str(emitted).expect("JSON update");
+        assert_eq!(update["type"], "session.update");
+        assert_eq!(update["session"]["type"], "realtime");
+        assert_eq!(update["session"]["max_output_tokens"], 4096);
+        assert!(
+            update["session"].get("model").is_none(),
+            "the immutable connection model must not appear in session.update"
         );
 
         assert_eq!(

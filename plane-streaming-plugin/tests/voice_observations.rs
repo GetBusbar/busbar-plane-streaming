@@ -186,6 +186,7 @@ fn observation_v4_dialect_downscope() {
         let p = load(&d, "observe-downscope", dropped);
         let _ = open(&p, SESSION, Some(PUBLIC));
         let initial = piece(&p, &session(140, 5, FROM_CALLER, 0, &[]));
+        assert_eq!(initial.target, "/v1/realtime?model=m-cap");
         let update = serde_json::to_vec(&json!({"type":"session.update","session":{"instructions":"x","turn_detection":{"type":"semantic_vad","eagerness":"high"},"input_audio_format":"g711_ulaw","output_audio_format":"g711_ulaw"}})).unwrap();
         let a = piece(&p, &session(140, 5, FROM_CALLER, 0, &update));
         let mut ready =
@@ -206,7 +207,7 @@ fn observation_v4_dialect_downscope() {
             }
         }
         let matched = ready
-            && matches!(frames.as_slice(),[(true,Some(v))] if v["session"]["model"] == "m-cap" && v["session"].get("instructions").is_none() && v["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad" && v["session"].get("turn_detection").is_none());
+            && matches!(frames.as_slice(),[(true,Some(v))] if v["type"] == "session.update" && v["session"]["type"] == "realtime" && v["session"].get("model").is_none() && v["session"].get("instructions").is_none() && v["session"]["audio"]["input"]["turn_detection"]["type"] == "server_vad" && v["session"].get("turn_detection").is_none());
         assert!(
             matched,
             "OBSERVATION V4-dialect-downscope dropped={dropped} matched={matched}: {frames:?}"

@@ -997,9 +997,17 @@ fn unavailable_entitlement_is_a_service_failure_without_a_policy_audit() {
             assert!(mint.done);
             assert_eq!(mint.status, 502);
             assert_eq!(
-                mint.emitted,
-                b"streaming ephemeral-secret mint failed: the host could not check the key's grant"
+                serde_json::from_slice::<Value>(&mint.emitted).expect("JSON service error"),
+                json!({"error": {
+                    "message": "streaming ephemeral-secret mint failed: the host could not check the key's grant",
+                    "type": "server_error",
+                    "param": null,
+                    "code": "mint_failed"
+                }})
             );
+            assert!(mint
+                .fields
+                .contains(&("content-type".into(), "application/json".into())));
             assert!(
                 mint.rows.is_empty(),
                 "service failure is not a policy rejection"
