@@ -2093,6 +2093,15 @@ pub(crate) mod session_door {
         out
     }
 
+    /// A fresh RFC 6455 `Sec-WebSocket-Key`: base64 of 16 random bytes, minted per open (no fixed
+    /// nonce lives in source; the door answers whatever key the caller offered).
+    fn ws_nonce() -> String {
+        use base64::Engine as _;
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).expect("the OS CSPRNG is available");
+        base64::engine::general_purpose::STANDARD.encode(nonce)
+    }
+
     fn ws_accept(key: &str) -> String {
         use base64::Engine as _;
         base64::engine::general_purpose::STANDARD.encode(sha1(
@@ -2264,9 +2273,10 @@ pub(crate) mod session_door {
 
         let route = REALTIME;
         let mut caller = tokio::net::TcpStream::connect(addr).await.expect("a dial");
+        let nonce = ws_nonce();
         let open = format!(
             "GET {route} HTTP/1.1\r\nhost: {addr}\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\
-             sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\
+             sec-websocket-key: {nonce}\r\nsec-websocket-version: 13\r\n\
              authorization: Bearer {plain}\r\n\r\n"
         );
         caller.write_all(open.as_bytes()).await.expect("the open");
@@ -2337,9 +2347,10 @@ pub(crate) mod session_door {
         let router = s.router.clone();
         let serving = tokio::spawn(serve_listener(listener, router, s.framer.clone()));
         let mut caller = tokio::net::TcpStream::connect(address).await.unwrap();
+        let nonce = ws_nonce();
         let open = format!(
             "GET {REALTIME} HTTP/1.1\r\nhost: {address}\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\
-             sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\
+             sec-websocket-key: {nonce}\r\nsec-websocket-version: 13\r\n\
              authorization: Bearer {}\r\n\r\n",
             s.plain,
         );
@@ -2410,9 +2421,10 @@ pub(crate) mod session_door {
 
         let route = REALTIME;
         let mut caller = tokio::net::TcpStream::connect(addr).await.expect("a dial");
+        let nonce = ws_nonce();
         let open = format!(
             "GET {route} HTTP/1.1\r\nhost: {addr}\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\
-             sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\
+             sec-websocket-key: {nonce}\r\nsec-websocket-version: 13\r\n\
              authorization: Bearer {plain}\r\n\r\n"
         );
         caller.write_all(open.as_bytes()).await.expect("the open");
@@ -2472,9 +2484,10 @@ pub(crate) mod session_door {
 
         let route = REALTIME;
         let mut caller = tokio::net::TcpStream::connect(addr).await.expect("a dial");
+        let nonce = ws_nonce();
         let open = format!(
             "GET {route} HTTP/1.1\r\nhost: {addr}\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\
-             sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\
+             sec-websocket-key: {nonce}\r\nsec-websocket-version: 13\r\n\
              authorization: Bearer {plain}\r\n\r\n"
         );
         caller.write_all(open.as_bytes()).await.expect("the open");
@@ -2655,9 +2668,10 @@ pub(crate) mod session_door {
         plain: &str,
     ) -> (tokio::net::TcpStream, Option<String>) {
         let mut caller = tokio::net::TcpStream::connect(addr).await.expect("a dial");
+        let nonce = ws_nonce();
         let open = format!(
             "GET {route} HTTP/1.1\r\nhost: {addr}\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\
-             sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n\
+             sec-websocket-key: {nonce}\r\nsec-websocket-version: 13\r\n\
              authorization: Bearer {plain}\r\n\r\n"
         );
         caller.write_all(open.as_bytes()).await.expect("the open");
